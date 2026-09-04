@@ -21,48 +21,61 @@ from models import JobStore, JobStatus
 
 logger = logging.getLogger("pinterest-agent.core")
 
-COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "")
-COMPOSIO_ENTITY_ID = os.getenv("COMPOSIO_ENTITY_ID", "default")
+COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+COMPOSIO_ENTITY_ID = os.getenv("COMPOSIO_ENTITY_ID", "default").strip() or "default"
 
 # ---------------------------------------------------------------------------
-# Composio helper (dynamic tool execution)
+# Composio helper (v3 API)
 # ---------------------------------------------------------------------------
 async def run_composio_tool(tool_slug: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Execute a Composio tool by slug.
-    Requires COMPOSIO_API_KEY in Railway environment variables.
-    Falls back gracefully if not configured.
+    Execute a Composio tool by slug using the v3.1 API.
+    Requires a valid COMPOSIO_API_KEY (Project API Key with Tool Execution permission).
     """
     if not COMPOSIO_API_KEY:
-        raise RuntimeError("COMPOSIO_API_KEY not set. Configure it in Railway environment variables.")
+        raise RuntimeError(
+            "COMPOSIO_API_KEY is not set. "
+            "In Railway Variables create COMPOSIO_API_KEY and paste a valid Project API Key from https://app.composio.dev"
+        )
 
-    # Use Composio REST API for tool execution from the deployed service
-    url = "https://backend.composio.dev/api/v1/actions/execute"
+    url = f"https://backend.composio.dev/api/v3.1/tools/execute/{tool_slug}"
     headers = {
-        "X-API-Key": COMPOSIO_API_KEY,
+        "x-api-key": COMPOSIO_API_KEY,
         "Content-Type": "application/json",
     }
     payload = {
-        "actionName": tool_slug,
-        "entityId": COMPOSIO_ENTITY_ID,
-        "input": arguments,
+        "user_id": COMPOSIO_ENTITY_ID,
+        "arguments": arguments or {},
+        "version": "latest",
+        "dangerously_skip_version_check": True,
     }
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(url, headers=headers, json=payload)
+        text = resp.text
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"raw": text}
+
         if resp.status_code >= 400:
-            raise RuntimeError(f"Composio tool {tool_slug} failed: {resp.status_code} {resp.text}")
-        data = resp.json()
-        return data.get("data", data)
+            msg = data.get("error", {}).get("message") if isinstance(data.get("error"), dict) else data.get("message") or text
+            raise RuntimeError(f"Composio {tool_slug} failed ({resp.status_code}): {msg}")
+
+        # Normalize common response shapes
+        if isinstance(data, dict):
+            if "data" in data:
+                return data["data"]
+            return data
+        return {"result": data}
 
 # ---------------------------------------------------------------------------
 # Product research
 # ---------------------------------------------------------------------------
 async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[str, Any]:
-    """Extract product information. Prefer Composio browser/scrape tools if available, else lightweight fetch."""
+    """Extract product information. Prefer page meta; never invent data."""
     job_store.update(job_id, progress="Researching product page")
 
-    # Lightweight fallback: fetch page title + meta description
     product = {
         "source_url": url,          # AUTHORITATIVE - never change
         "name": None,
@@ -75,10 +88,12 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; PinterestAgent/1.0)"})
-            html = resp.text[:200000]  # limit size
+            resp = await client.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; PinterestAgent/1.0)"},
+            )
+            html = resp.text[:200000]
 
-        # Simple extraction (no invented data)
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "lxml")
 
@@ -86,7 +101,9 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
         if title:
             product["name"] = title.get_text(strip=True)[:200]
 
-        meta_desc = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", attrs={"property": "og:description"})
+        meta_desc = soup.find("meta", attrs={"name": "description"}) or soup.find(
+            "meta", attrs={"property": "og:description"}
+        )
         if meta_desc and meta_desc.get("content"):
             product["description"] = meta_desc["content"][:500]
 
@@ -94,19 +111,9 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
         if og_image and og_image.get("content"):
             product["images"].append(og_image["content"])
 
-        # Heuristic for multi-product pages (Amazon best sellers, category, search)
         path = urlparse(url).path.lower()
         if any(x in path for x in ["/best-sellers", "/bestsellers", "/s?", "/s/", "/gp/bestsellers", "/category", "/collections"]):
             product["is_multi_product"] = True
-
-        # Attempt richer extraction via Composio if key present
-        if COMPOSIO_API_KEY:
-            try:
-                # Prefer any connected scrape / extract tool if available in the entity
-                # (Firecrawl, browser tool, etc.). Tool names are discovered at runtime.
-                pass  # concrete tool calls added when specific tool slugs are confirmed in entity
-            except Exception as e:
-                logger.warning(f"Composio research fallback used: {e}")
 
     except Exception as e:
         logger.warning(f"Research partial failure: {e}")
@@ -121,7 +128,7 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
 # SEO content generation (5 different angles)
 # ---------------------------------------------------------------------------
 def generate_pin_contents(product: Dict[str, Any], count: int = 5) -> List[Dict[str, str]]:
-    """Generate 5 substantially different titles, descriptions, keyword sets. No invented claims."""
+    """Generate 5 substantially different titles, descriptions, keyword sets."""
     name = product.get("name") or "Product"
     desc = product.get("description") or ""
     base_keywords = [w for w in name.replace("|", " ").split() if len(w) > 2][:8]
@@ -154,41 +161,36 @@ def generate_pin_contents(product: Dict[str, Any], count: int = 5) -> List[Dict[
 # Board selection
 # ---------------------------------------------------------------------------
 async def select_board(job_store: JobStore, job_id: str) -> Optional[str]:
-    """List existing boards via Composio and pick the most relevant. Create only if none exist and allowed."""
+    """List existing boards via Composio and pick the most relevant."""
     job_store.update(job_id, progress="Selecting Pinterest board")
     if not COMPOSIO_API_KEY:
         return None
     try:
         data = await run_composio_tool("PINTEREST_LIST_BOARDS", {})
-        items = data.get("items") or data.get("boards") or []
+        items = data.get("items") or data.get("boards") or data.get("data", {}).get("items") or []
+        if not items and isinstance(data, list):
+            items = data
         if items:
-            # Prefer first board or one with 'product' / 'shop' in name
             for b in items:
                 name = (b.get("name") or "").lower()
                 if any(k in name for k in ["product", "shop", "buy", "deal", "find"]):
                     return b.get("id") or b.get("board_id")
             return items[0].get("id") or items[0].get("board_id")
-        # No boards – return None (caller may create if policy allows)
         return None
     except Exception as e:
         logger.warning(f"Board list failed: {e}")
-        return None
+        # Surface the real error so the job status is useful
+        raise
 
 # ---------------------------------------------------------------------------
 # Image handling
 # ---------------------------------------------------------------------------
 async def obtain_image(product: Dict[str, Any], pin_meta: Dict[str, str], job_store: JobStore, job_id: str) -> Optional[str]:
-    """
-    Prefer product image from page. If image generation tools become available
-    (Gemini / other), call them here with automatic fallback.
-    Returns a publicly reachable image URL or None.
-    """
+    """Prefer product image from page. Image-gen tools can be added when available."""
     job_store.update(job_id, progress=f"Obtaining image for angle: {pin_meta.get('angle')}")
     images = product.get("images") or []
     if images:
         return images[0]
-    # Placeholder: when image-gen tools are enabled in Composio entity,
-    # call them here and return the generated image URL.
     return None
 
 # ---------------------------------------------------------------------------
@@ -210,7 +212,7 @@ async def publish_pin(
     if not COMPOSIO_API_KEY:
         raise RuntimeError("COMPOSIO_API_KEY required for Pinterest publication")
 
-    args = {
+    args: Dict[str, Any] = {
         "title": title[:100],
         "description": description[:500],
         "link": link,  # EXACT original URL - never modified
@@ -219,13 +221,17 @@ async def publish_pin(
         args["board_id"] = board_id
     if image_url:
         args["media_source"] = {"source_type": "image_url", "url": image_url}
-        # Some tool versions use "image_url" or "media"
         args["image_url"] = image_url
 
     data = await run_composio_tool("PINTEREST_CREATE_PIN", args)
-    pin_id = data.get("id") or data.get("pin_id") or (data.get("data") or {}).get("id")
+    pin_id = (
+        data.get("id")
+        or data.get("pin_id")
+        or (data.get("data") or {}).get("id")
+        or (data.get("data") or {}).get("pin_id")
+    )
     if not pin_id:
-        raise RuntimeError(f"Pin creation returned no ID: {json.dumps(data)[:300]}")
+        raise RuntimeError(f"Pin creation returned no ID: {json.dumps(data)[:400]}")
     return {"pin_id": pin_id, "raw": data}
 
 # ---------------------------------------------------------------------------
@@ -246,7 +252,11 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
     product = await research_product(url, job_store, job_id)
     pin_contents = generate_pin_contents(product, count=5)
 
-    board_id = await select_board(job_store, job_id)
+    try:
+        board_id = await select_board(job_store, job_id)
+    except Exception as e:
+        # If board listing fails because of bad API key, fail fast with clear message
+        raise RuntimeError(str(e))
 
     published = []
     errors = []
@@ -254,8 +264,7 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
     for i, meta in enumerate(pin_contents):
         try:
             image_url = await obtain_image(product, meta, job_store, job_id)
-            # Destination link is ALWAYS the exact original URL supplied by user
-            dest_link = url
+            dest_link = url  # ALWAYS the exact original URL
 
             result = await publish_pin(
                 board_id=board_id,
