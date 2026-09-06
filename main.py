@@ -1,6 +1,6 @@
 """
 Autonomous Pinterest Agent - Railway service
-Accepts product/affiliate URL, runs background job, publishes one Pin via Composio.
+Accepts product/affiliate URL, publishes 5 unique Pins via Composio.
 """
 import os
 import uuid
@@ -47,24 +47,21 @@ def extract_url(text: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Pinterest Autonomous Agent starting...")
+    logger.info("Pinterest Autonomous Agent v3 starting...")
     yield
     logger.info("Shutting down...")
 
 
 app = FastAPI(
     title="Pinterest Autonomous Agent",
-    description="Submit a product/affiliate URL. Agent researches, creates SEO content, publishes one Pin, verifies.",
-    version="2.0.0",
+    description="Submit one product URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
 
 class SubmitRequest(BaseModel):
-    url: str = Field(
-        ...,
-        description="Product/affiliate URL. You may also send 'Pinterest https://...'. Exact URL is preserved as Pin destination.",
-    )
+    url: str = Field(..., description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
 
 
 class SubmitResponse(BaseModel):
@@ -88,7 +85,7 @@ async def health():
     return {
         "status": "ok",
         "service": "pinterest-autonomous-agent",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -109,7 +106,7 @@ async def submit(
         job_id=job_id,
         url=url_str,
         status=JobStatus.QUEUED,
-        progress="Job accepted, waiting for background worker",
+        progress="Job accepted — 5-pin workflow queued",
     )
     job_store.save(job)
     background_tasks.add_task(run_job, job_id, url_str)
@@ -117,7 +114,7 @@ async def submit(
     return SubmitResponse(
         job_id=job_id,
         status=JobStatus.QUEUED.value,
-        message="Job accepted. Processing continues even if client disconnects. Poll /status/{job_id}",
+        message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}",
     )
 
 
@@ -141,32 +138,22 @@ async def status(job_id: str, _: bool = Depends(verify_secret)):
 async def root():
     return {
         "service": "Pinterest Autonomous Agent",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "endpoints": {
             "health": "GET /health",
-            "submit": "POST /submit  body: {\"url\": \"<product_or_affiliate_url>\"}",
+            "submit": "POST /submit body: {\"url\": \"<product_url>\"}",
             "status": "GET /status/{job_id}",
         },
-        "usage": "Send only the product/affiliate URL. System handles research, SEO, image, publish, verify.",
+        "usage": "Send one product/affiliate URL. System creates 5 unique Pins automatically.",
     }
 
 
 async def run_job(job_id: str, url: str):
     try:
-        job_store.update(job_id, status=JobStatus.RUNNING, progress="Starting workflow")
+        job_store.update(job_id, status=JobStatus.RUNNING, progress="Starting 5-pin workflow")
         result = await process_pinterest_job(job_id, url, job_store)
-        job_store.update(
-            job_id,
-            status=JobStatus.COMPLETED,
-            progress="Finished",
-            result=result,
-        )
-        logger.info(f"Job {job_id} completed successfully")
+        job_store.update(job_id, status=JobStatus.COMPLETED, progress="Finished", result=result)
+        logger.info(f"Job {job_id} completed: {result.get('summary')}")
     except Exception as e:
         logger.exception(f"Job {job_id} failed")
-        job_store.update(
-            job_id,
-            status=JobStatus.FAILED,
-            progress="Failed",
-            error=str(e),
-        )
+        job_store.update(job_id, status=JobStatus.FAILED, progress="Failed", error=str(e))
