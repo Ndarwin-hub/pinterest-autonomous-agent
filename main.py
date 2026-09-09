@@ -16,6 +16,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import agent as agent_module
+from wire_board_org import apply_agent_wiring
+
+apply_agent_wiring(agent_module)
 from agent import process_pinterest_job
 from models import JobStore, JobStatus, Job
 
@@ -39,7 +43,7 @@ def extract_url(text: str) -> str:
     text = (text or "").strip()
     m = re.search(r"https?://\S+", text)
     if m:
-        return m.group(0).rstrip(").,]'")
+        return m.group(0).rstrip(").,]',\"")
     if text.startswith("http"):
         return text
     raise ValueError("No valid http(s) URL found")
@@ -55,7 +59,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Pinterest Autonomous Agent",
     description="Submit one product URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",
-    version="3.0.0",
+    version="3.1.0",
     lifespan=lifespan,
 )
 
@@ -85,7 +89,7 @@ async def health():
     return {
         "status": "ok",
         "service": "pinterest-autonomous-agent",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -138,7 +142,7 @@ async def status(job_id: str, _: bool = Depends(verify_secret)):
 async def root():
     return {
         "service": "Pinterest Autonomous Agent",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "endpoints": {
             "health": "GET /health",
             "submit": "POST /submit body: {\"url\": \"<product_url>\"}",
