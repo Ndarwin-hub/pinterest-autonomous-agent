@@ -1,236 +1,78 @@
-"""Runtime wiring for board selection, image quality, and call-budget enforcement.
-
-The existing agent workflow remains intact, but this layer enforces a hard
-per-job Composio ceiling and supplies a deterministic, locally validated image
-selector so thin banner assets cannot reach Pinterest.
-"""
+"""Runtime wiring: zero-tolerance image sourcing, AI approval and 22-call cap."""
 from __future__ import annotations
-
-import contextvars
-import logging
+import contextvars, logging, re
 from typing import Any, Dict
-
 from board_org import detect_product_category, preferred_board_name, find_matching_board
-from image_quality import choose_best_image
-
-logger = logging.getLogger("pinterest-agent.wire")
-
-MAX_COMPOSIO_CALLS = 22
-_call_budget: contextvars.ContextVar["CallBudget | None"] = contextvars.ContextVar("pinterest_call_budget", default=None)
-
-
+from image_quality import choose_candidates
+from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_API_KEY, OPENAI_API_KEY
+logger=logging.getLogger("pinterest-agent.wire")
+MAX_COMPOSIO_CALLS=22
+_call_budget=contextvars.ContextVar("pinterest_call_budget",default=None)
 class CallBudget:
-    def __init__(self, maximum: int = MAX_COMPOSIO_CALLS):
-        self.maximum = maximum
-        self.used = 0
-        self.image_search_invocations = 0
-
-    def reserve(self, tool_slug: str) -> None:
-        if self.used >= self.maximum:
-            raise RuntimeError(
-                f"Composio hard job budget exhausted ({self.maximum} calls); stopping safely before another tool call."
-            )
-        self.used += 1
-        logger.info("Composio budget: %s/%s (%s)", self.used, self.maximum, tool_slug)
-
-
-async def _static_capabilities(agent_mod: Any) -> Dict[str, Any]:
-    """Return capability metadata without spending Composio calls on probes."""
-    return {
-        "pexels": {
-            "connected": False,
-            "executable": False,
-            "production_tested": False,
-            "kind": "image_search",
-            "reason": "Runtime probe skipped to protect the 22-call job budget.",
-        },
-        "deepseek": {
-            "connected": False,
-            "executable": False,
-            "production_tested": False,
-            "kind": "text",
-            "reason": "Runtime probe skipped to protect the 22-call job budget.",
-        },
-        "perplexity": {
-            "connected": False,
-            "executable": False,
-            "production_tested": False,
-            "kind": "text",
-            "reason": "Runtime probe skipped to protect the 22-call job budget.",
-        },
-        "composio_search_image": {
-            "connected": bool(getattr(agent_mod, "COMPOSIO_API_KEY", "")),
-            "executable": bool(getattr(agent_mod, "COMPOSIO_API_KEY", "")),
-            "production_tested": False,
-            "kind": "image_search",
-            "reason": "Used directly during image selection; no separate probe call.",
-        },
-        "pinterest": {
-            "connected": True,
-            "executable": True,
-            "production_tested": True,
-            "kind": "publish",
-            "reason": "Existing verified pipeline.",
-        },
-        "openai_images": {
-            "connected": bool(getattr(agent_mod, "OPENAI_API_KEY", "")),
-            "executable": bool(getattr(agent_mod, "OPENAI_API_KEY", "")),
-            "production_tested": False,
-            "kind": "image_generation",
-            "reason": "Environment key presence only; no probe call.",
-        },
-        "pixabay": {
-            "connected": bool(getattr(agent_mod, "PIXABAY_API_KEY", "")),
-            "executable": bool(getattr(agent_mod, "PIXABAY_API_KEY", "")),
-            "kind": "image_search",
-            "reason": "Environment key presence only; no probe call.",
-        },
-        "unsplash": {
-            "connected": bool(getattr(agent_mod, "UNSPLASH_ACCESS_KEY", "")),
-            "executable": bool(getattr(agent_mod, "UNSPLASH_ACCESS_KEY", "")),
-            "kind": "image_search",
-            "reason": "Environment key presence only; no probe call.",
-        },
-        "gemini_image": {
-            "connected": True,
-            "executable": False,
-            "kind": "image_generation",
-            "reason": "Restricted in this environment.",
-        },
-        "pillow": {
-            "connected": True,
-            "executable": True,
-            "kind": "emergency_fallback",
-            "reason": "Last resort only.",
-        },
-    }
-
-
-def apply_agent_wiring(agent_mod: Any) -> None:
-    """Patch agent functions at import time without rewriting the core workflow."""
-    orig_research = agent_mod.research_product
-    orig_run_composio_tool = agent_mod.run_composio_tool
-    orig_process = agent_mod.process_pinterest_job
-    default_board = getattr(agent_mod, "DEFAULT_BOARD_NAME", "Product Pins")
-
-    async def budgeted_run_composio_tool(
-        tool_slug: str, arguments: Dict[str, Any], retries: int = 2
-    ) -> Dict[str, Any]:
-        budget = _call_budget.get()
-        if budget is None:
-            raise RuntimeError("Composio execution attempted outside a managed job budget.")
-
-        # Pexels is optional. Do not spend Composio calls probing/fetching it.
-        if tool_slug == "PEXELS_SEARCH_PHOTOS":
-            return {}
-
-        # The image selector uses exactly two targeted Composio image searches
-        # per Pin. The third legacy search attempt is suppressed. This gives a
-        # worst-case image-search budget of 10 calls for five Pins.
-        if tool_slug == "COMPOSIO_SEARCH_IMAGE":
-            invocation = budget.image_search_invocations
-            budget.image_search_invocations += 1
-            if invocation % 3 == 2:
-                return {}
-
-        # Force one HTTP execution per logical tool invocation. Retries inside
-        # the original function are disabled so the ceiling is real, not opaque.
-        budget.reserve(tool_slug)
-        return await orig_run_composio_tool(tool_slug, arguments or {}, retries=0)
-
-    async def process_pinterest_job(job_id: str, url: str, job_store: Any) -> Dict[str, Any]:
-        token = _call_budget.set(CallBudget(MAX_COMPOSIO_CALLS))
+    def __init__(self,maximum=MAX_COMPOSIO_CALLS): self.maximum=maximum; self.used=0; self.image_search_invocations=0
+    def reserve(self,slug):
+        if self.used>=self.maximum: raise RuntimeError(f"Composio hard job budget exhausted ({self.maximum} calls); stopping safely.")
+        self.used+=1; logger.info("Composio budget %s/%s %s",self.used,self.maximum,slug)
+async def _static_capabilities(agent_mod):
+    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"One targeted search per Pin."},"pexels":{"connected":bool(getattr(agent_mod,"PEXELS_API_KEY","")),"executable":bool(getattr(agent_mod,"PEXELS_API_KEY","")),"production_tested":False,"kind":"image_search","reason":"Direct Pexels API; no Composio budget used."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY),"executable":bool(XAI_API_KEY),"kind":"final_approval","reason":"Grok final approval when XAI key is available."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
+def apply_agent_wiring(agent_mod:Any)->None:
+    orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; default_board=getattr(agent_mod,"DEFAULT_BOARD_NAME","Product Pins")
+    async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
+        b=_call_budget.get()
+        if b is None: raise RuntimeError("Composio execution attempted outside managed job budget.")
+        if slug=="PEXELS_SEARCH_PHOTOS": return {}
+        if slug=="COMPOSIO_SEARCH_IMAGE":
+            if b.image_search_invocations>=5:return {}
+            b.image_search_invocations+=1
+        b.reserve(slug); return await orig_run(slug,args or {},retries=0)
+    async def research(url,job_store,job_id):
+        p=await orig_research(url,job_store,job_id); p["url"]=url; p["category"]=detect_product_category(p); return p
+    async def board(product,job_store,job_id):
+        job_store.update(job_id,progress="Selecting Pinterest board")
+        data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
+        category=(product.get("category") or "general").lower(); preferred=preferred_board_name(category); mid=find_matching_board(items,preferred)
+        if mid:return mid
+        if preferred!=default_board:
+            created=await budgeted_run("PINTEREST_CREATE_BOARD",{"name":preferred,"description":f"{preferred} product discovery","privacy":"PUBLIC"}); bid=created.get("id") or (created.get("data") or {}).get("id")
+            if bid:return str(bid)
+        mid=find_matching_board(items,default_board)
+        if mid:return mid
+        created=await budgeted_run("PINTEREST_CREATE_BOARD",{"name":default_board,"description":"Product pins","privacy":"PUBLIC"}); bid=created.get("id") or (created.get("data") or {}).get("id")
+        if not bid:raise RuntimeError(f"Could not create board: {created}")
+        return str(bid)
+    async def process(job_id,url,job_store):
+        token=_call_budget.set(CallBudget()); b=_call_budget.get()
         try:
-            result = await orig_process(job_id, url, job_store)
-            budget = _call_budget.get()
-            if budget:
-                result["composio_call_budget"] = {
-                    "used": budget.used,
-                    "maximum": budget.maximum,
-                    "remaining": max(0, budget.maximum - budget.used),
-                }
-            return result
-        finally:
-            _call_budget.reset(token)
-
-    async def research_product(url: str, job_store: Any, job_id: str) -> Dict[str, Any]:
-        product = await orig_research(url, job_store, job_id)
-        product["url"] = url
-        product["category"] = detect_product_category(product)
-        return product
-
-    async def quality_first_image(
-        product: Dict[str, Any],
-        strategy: Dict[str, Any],
-        pin_index: int,
-        job_store: Any,
-        job_id: str,
-        used_urls: set,
-    ) -> Dict[str, Any]:
-        selected = await choose_best_image(product, strategy, pin_index, used_urls, agent_mod)
-        if selected:
-            return {
-                "mode": "url",
-                "value": selected["url"],
-                "provider": selected.get("provider"),
-                "id": selected.get("id"),
-                "score": selected.get("score", 0),
-                "license": selected.get("license"),
-                "width": selected.get("width"),
-                "height": selected.get("height"),
-            }
-        # Only use the existing Pillow emergency fallback if no validated real
-        # image survives the hard quality gate.
-        return agent_mod.pillow_card(product, strategy["key"])
-
-    async def select_or_create_board(product: Dict[str, Any], job_store: Any, job_id: str) -> str:
-        """Prefer professional category boards; Product Pins is last-resort only."""
-        job_store.update(job_id, progress="Selecting Pinterest board")
-        data = await budgeted_run_composio_tool("PINTEREST_LIST_BOARDS", {})
-        items = data.get("items") or data.get("boards") or []
-        if isinstance(data, list):
-            items = data
-        category_key = (product.get("category") or "general").lower()
-        preferred = preferred_board_name(category_key)
-        job_store.update(
-            job_id,
-            progress=f"Board selection: category={category_key}, preferred='{preferred}'",
-        )
-        matched_id = find_matching_board(items, preferred)
-        if matched_id:
-            logger.info("Reusing board '%s': %s", preferred, matched_id)
-            return matched_id
-        if preferred != default_board:
-            logger.info("Creating category board: %s", preferred)
-            created = await budgeted_run_composio_tool(
-                "PINTEREST_CREATE_BOARD",
-                {
-                    "name": preferred,
-                    "description": f"{preferred} product discovery",
-                    "privacy": "PUBLIC",
-                },
-            )
-            board_id = created.get("id") or (created.get("data") or {}).get("id")
-            if board_id:
-                return str(board_id)
-            logger.warning("Category board create failed, falling back: %s", created)
-        fallback_id = find_matching_board(items, default_board)
-        if fallback_id:
-            logger.info("Using fallback '%s': %s", default_board, fallback_id)
-            return fallback_id
-        created = await budgeted_run_composio_tool(
-            "PINTEREST_CREATE_BOARD",
-            {"name": default_board, "description": "Product pins", "privacy": "PUBLIC"},
-        )
-        board_id = created.get("id") or (created.get("data") or {}).get("id")
-        if not board_id:
-            raise RuntimeError(f"Could not create board: {created}")
-        return str(board_id)
-
-    agent_mod.run_composio_tool = budgeted_run_composio_tool
-    agent_mod.probe_capabilities = lambda: _static_capabilities(agent_mod)
-    agent_mod.research_product = research_product
-    agent_mod.select_or_create_board = select_or_create_board
-    agent_mod.get_best_pin_image = quality_first_image
-    agent_mod.process_pinterest_job = process_pinterest_job
-    logger.info("board_org wiring + 22-call budget + hard image quality gate applied")
+            url=url.strip(); m=re.search(r"https?://\S+",url)
+            if m:url=m.group(0).rstrip(").,]")
+            if not url.startswith("http"):raise RuntimeError("A valid product/affiliate URL is required.")
+            product=await research(url,job_store,job_id); seo=agent_mod.build_five_seo(product); board_id=await board(product,job_store,job_id)
+            used=set(); pins=[]; resources=set()
+            for i,strategy in enumerate(agent_mod.STRATEGIES,1):
+                candidates=await choose_candidates(product,strategy,i,used,agent_mod)
+                if not candidates:
+                    generated=await generate_image(product,strategy)
+                    if not generated:raise RuntimeError(f"Pin {i}: no genuine high-quality image survived and no AI-generation fallback is configured.")
+                    candidates=[generated]
+                best=candidates[0]
+                if best.get("url"):used.add(best["url"])
+                resources.add(best.get("provider") or "unknown")
+                ref=best.get("url") or (f"data:image/jpeg;base64,{best['value']}" if best.get("value") else "")
+                if not ref:raise RuntimeError(f"Pin {i}: selected image has no usable media.")
+                pins.append({"pin_number":i,"strategy":strategy,"seo":seo[i-1],"image":best,"image_ref":ref,"candidate_count":len(candidates),"candidate_pool":candidates[:8]})
+            review_items=[{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
+            job_store.update(job_id,progress="Gemini visual review, then Grok final approval")
+            review=await review_batch(review_items)
+            if not review.get("approved"):raise RuntimeError("Zero-tolerance AI quality gate blocked publication: "+str(review.get("reason")))
+            published=[]; errors=[]
+            for p in pins:
+                s=p["seo"]; im=p["image"]
+                try:
+                    r=await agent_mod.publish_and_verify(board_id,s["title"],s["description"],s["alt_text"],im.get("mode","url"),im.get("value") or im.get("url"),url,job_store,job_id,p["pin_number"])
+                    published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
+                except Exception as e:errors.append({"pin_number":p["pin_number"],"error":str(e)})
+            if len(published)!=5:raise RuntimeError(f"Zero-tolerance publish failed: {len(published)}/5 Pins published.")
+            return {"product_name":product.get("name"),"source_url":url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used},"summary":"5/5 Pins published only after hard image gates and final AI approval."}
+        finally:_call_budget.reset(token)
+    agent_mod.run_composio_tool=budgeted_run; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
+    logger.info("Zero-tolerance image sourcing + AI approval + 22-call budget wiring applied")
