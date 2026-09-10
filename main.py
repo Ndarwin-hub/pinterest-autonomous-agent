@@ -10,6 +10,7 @@ import os
 import uuid
 import re
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
@@ -35,6 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger("pinterest-agent")
 
 job_store = JobStore()
+_enqueue_lock = asyncio.Lock()
 API_SECRET = os.getenv("API_SECRET", "").strip()
 CHATGPT_BRIDGE_SECRET = os.getenv("CHATGPT_BRIDGE_SECRET", "").strip()
 
@@ -110,31 +112,43 @@ class StatusResponse(BaseModel):
 
 
 async def enqueue_job(url_str: str, background_tasks: BackgroundTasks) -> SubmitResponse:
-    if not quota.reserve_job():
-        snapshot = quota.snapshot()
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "message": "Monthly safe Pinterest capacity reached; job not started.",
-                "quota": snapshot,
-            },
-        )
+    # Serialize admission so two simultaneous identical submissions cannot both
+    # pass the idempotency check before either job is written.
+    async with _enqueue_lock:
+        existing = job_store.find_by_url(url_str)
+        if existing:
+            logger.info("Duplicate URL suppressed: existing job %s", existing.job_id)
+            return SubmitResponse(
+                job_id=existing.job_id,
+                status=existing.status.value,
+                message="Existing job reused; duplicate Pinterest workflow was not started.",
+            )
 
-    job_id = str(uuid.uuid4())
-    job = Job(
-        job_id=job_id,
-        url=url_str,
-        status=JobStatus.QUEUED,
-        progress="Job accepted — 5-pin workflow queued",
-    )
-    job_store.save(job)
-    background_tasks.add_task(run_job, job_id, url_str)
-    logger.info(f"Job {job_id} queued for URL: {url_str}")
-    return SubmitResponse(
-        job_id=job_id,
-        status=JobStatus.QUEUED.value,
-        message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}",
-    )
+        if not quota.reserve_job():
+            snapshot = quota.snapshot()
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "message": "Monthly safe Pinterest capacity reached; job not started.",
+                    "quota": snapshot,
+                },
+            )
+
+        job_id = str(uuid.uuid4())
+        job = Job(
+            job_id=job_id,
+            url=url_str,
+            status=JobStatus.QUEUED,
+            progress="Job accepted — 5-pin workflow queued",
+        )
+        job_store.save(job)
+        background_tasks.add_task(run_job, job_id, url_str)
+        logger.info(f"Job {job_id} queued for URL: {url_str}")
+        return SubmitResponse(
+            job_id=job_id,
+            status=JobStatus.QUEUED.value,
+            message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}",
+        )
 
 
 @app.get("/health")
