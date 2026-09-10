@@ -9,18 +9,20 @@ logger=logging.getLogger("pinterest-agent.wire")
 MAX_COMPOSIO_CALLS=22
 _call_budget=contextvars.ContextVar("pinterest_call_budget",default=None)
 class CallBudget:
-    def __init__(self,maximum=MAX_COMPOSIO_CALLS): self.maximum=maximum; self.used=0; self.image_search_invocations=0
+    def __init__(self,maximum=MAX_COMPOSIO_CALLS): self.maximum=maximum; self.used=0; self.image_search_invocations=0; self.pexels_invocations=0
     def reserve(self,slug):
         if self.used>=self.maximum: raise RuntimeError(f"Composio hard job budget exhausted ({self.maximum} calls); stopping safely.")
         self.used+=1; logger.info("Composio budget %s/%s %s",self.used,self.maximum,slug)
 async def _static_capabilities(agent_mod):
-    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"One targeted search per Pin."},"pexels":{"connected":bool(getattr(agent_mod,"PEXELS_API_KEY","")),"executable":bool(getattr(agent_mod,"PEXELS_API_KEY","")),"production_tested":False,"kind":"image_search","reason":"Direct Pexels API; no Composio budget used."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY),"executable":bool(XAI_API_KEY),"kind":"final_approval","reason":"Grok final approval when XAI key is available."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
+    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"One targeted search per Pin."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio; one call per Pin."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY),"executable":bool(XAI_API_KEY),"kind":"final_approval","reason":"Grok final approval when XAI key is available."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
 def apply_agent_wiring(agent_mod:Any)->None:
     orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; default_board=getattr(agent_mod,"DEFAULT_BOARD_NAME","Product Pins")
     async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
         b=_call_budget.get()
         if b is None: raise RuntimeError("Composio execution attempted outside managed job budget.")
-        if slug=="PEXELS_SEARCH_PHOTOS": return {}
+        if slug=="PEXELS_SEARCH_PHOTOS":
+            if b.pexels_invocations>=5:return {}
+            b.pexels_invocations+=1
         if slug=="COMPOSIO_SEARCH_IMAGE":
             if b.image_search_invocations>=5:return {}
             b.image_search_invocations+=1
