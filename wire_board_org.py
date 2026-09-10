@@ -1,10 +1,8 @@
-"""Runtime wiring for board selection plus production call-budget enforcement.
+"""Runtime wiring for board selection, image quality, and call-budget enforcement.
 
-This module keeps the existing agent workflow intact while enforcing a hard
-per-job Composio ceiling. Capability probes that previously spent live tool
-calls are reported without executing paid/limited tools. Image-search retries
-are collapsed to one real search per Pin; Pexels probing is skipped so the
-mandatory board + 5 publish + 5 verify path remains comfortably below 22.
+The existing agent workflow remains intact, but this layer enforces a hard
+per-job Composio ceiling and supplies a deterministic, locally validated image
+selector so thin banner assets cannot reach Pinterest.
 """
 from __future__ import annotations
 
@@ -13,6 +11,7 @@ import logging
 from typing import Any, Dict
 
 from board_org import detect_product_category, preferred_board_name, find_matching_board
+from image_quality import choose_best_image
 
 logger = logging.getLogger("pinterest-agent.wire")
 
@@ -64,7 +63,7 @@ async def _static_capabilities(agent_mod: Any) -> Dict[str, Any]:
             "executable": bool(getattr(agent_mod, "COMPOSIO_API_KEY", "")),
             "production_tested": False,
             "kind": "image_search",
-            "reason": "Used directly during each Pin when needed; no separate probe call.",
+            "reason": "Used directly during image selection; no separate probe call.",
         },
         "pinterest": {
             "connected": True,
@@ -108,7 +107,7 @@ async def _static_capabilities(agent_mod: Any) -> Dict[str, Any]:
 
 
 def apply_agent_wiring(agent_mod: Any) -> None:
-    """Patch agent module globals used by process_pinterest_job at call time."""
+    """Patch agent functions at import time without rewriting the core workflow."""
     orig_research = agent_mod.research_product
     orig_run_composio_tool = agent_mod.run_composio_tool
     orig_process = agent_mod.process_pinterest_job
@@ -119,26 +118,23 @@ def apply_agent_wiring(agent_mod: Any) -> None:
     ) -> Dict[str, Any]:
         budget = _call_budget.get()
         if budget is None:
-            # Any unexpected direct execution outside a managed job is denied;
-            # this prevents a hidden bypass around the job ceiling.
             raise RuntimeError("Composio execution attempted outside a managed job budget.")
 
-        # Pexels is optional. Do not spend a Composio call probing/fetching it;
-        # the existing product-page/search/Pillow image path remains available.
+        # Pexels is optional. Do not spend Composio calls probing/fetching it.
         if tool_slug == "PEXELS_SEARCH_PHOTOS":
             return {}
 
-        # The existing image function can try up to three search queries per
-        # Pin. Permit only the first real search in each three-call group; the
-        # skipped calls return empty results without touching Composio.
+        # The image selector uses exactly two targeted Composio image searches
+        # per Pin. The third legacy search attempt is suppressed. This gives a
+        # worst-case image-search budget of 10 calls for five Pins.
         if tool_slug == "COMPOSIO_SEARCH_IMAGE":
             invocation = budget.image_search_invocations
             budget.image_search_invocations += 1
-            if invocation % 3 != 0:
+            if invocation % 3 == 2:
                 return {}
 
-        # Force one HTTP execution per logical tool invocation. The original
-        # function's retry loop would otherwise make the call ceiling opaque.
+        # Force one HTTP execution per logical tool invocation. Retries inside
+        # the original function are disabled so the ceiling is real, not opaque.
         budget.reserve(tool_slug)
         return await orig_run_composio_tool(tool_slug, arguments or {}, retries=0)
 
@@ -162,6 +158,30 @@ def apply_agent_wiring(agent_mod: Any) -> None:
         product["url"] = url
         product["category"] = detect_product_category(product)
         return product
+
+    async def quality_first_image(
+        product: Dict[str, Any],
+        strategy: Dict[str, Any],
+        pin_index: int,
+        job_store: Any,
+        job_id: str,
+        used_urls: set,
+    ) -> Dict[str, Any]:
+        selected = await choose_best_image(product, strategy, pin_index, used_urls, agent_mod)
+        if selected:
+            return {
+                "mode": "url",
+                "value": selected["url"],
+                "provider": selected.get("provider"),
+                "id": selected.get("id"),
+                "score": selected.get("score", 0),
+                "license": selected.get("license"),
+                "width": selected.get("width"),
+                "height": selected.get("height"),
+            }
+        # Only use the existing Pillow emergency fallback if no validated real
+        # image survives the hard quality gate.
+        return agent_mod.pillow_card(product, strategy["key"])
 
     async def select_or_create_board(product: Dict[str, Any], job_store: Any, job_id: str) -> str:
         """Prefer professional category boards; Product Pins is last-resort only."""
@@ -211,5 +231,6 @@ def apply_agent_wiring(agent_mod: Any) -> None:
     agent_mod.probe_capabilities = lambda: _static_capabilities(agent_mod)
     agent_mod.research_product = research_product
     agent_mod.select_or_create_board = select_or_create_board
+    agent_mod.get_best_pin_image = quality_first_image
     agent_mod.process_pinterest_job = process_pinterest_job
-    logger.info("board_org wiring + 22-call production budget applied")
+    logger.info("board_org wiring + 22-call budget + hard image quality gate applied")
