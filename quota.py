@@ -18,9 +18,9 @@ from typing import Any, Dict
 DB_PATH = Path(os.getenv("JOB_DB_PATH", "/tmp/pinterest_agent_jobs.db"))
 MONTHLY_LIMIT = int(os.getenv("COMPOSIO_MONTHLY_TOOL_BUDGET", "100000"))
 SAFETY_RESERVE = int(os.getenv("COMPOSIO_SAFETY_RESERVE", "10000"))
-# Conservative logical units per complete 5-pin job. This includes the current
-# workflow's normal board/image/publish/verify activity plus retry headroom.
-JOB_BUDGET = int(os.getenv("COMPOSIO_JOB_BUDGET", "45"))
+# Hard logical budget per complete 5-pin job. The agent also enforces the
+# same ceiling at every actual Composio HTTP execution attempt.
+JOB_BUDGET = int(os.getenv("COMPOSIO_JOB_BUDGET", "22"))
 
 _lock = Lock()
 
@@ -40,15 +40,13 @@ class QuotaGovernor:
     def _init_db(self):
         with _lock:
             conn = self._connect()
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS quota_ledger (
-                    month TEXT PRIMARY KEY,
-                    reserved_units INTEGER NOT NULL DEFAULT 0,
-                    completed_jobs INTEGER NOT NULL DEFAULT 0,
-                    failed_jobs INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                )"""
-            )
+            conn.execute("""CREATE TABLE IF NOT EXISTS quota_ledger (
+                month TEXT PRIMARY KEY,
+                reserved_units INTEGER NOT NULL DEFAULT 0,
+                completed_jobs INTEGER NOT NULL DEFAULT 0,
+                failed_jobs INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )""")
             conn.commit()
             conn.close()
 
