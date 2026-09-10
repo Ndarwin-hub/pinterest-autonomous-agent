@@ -1,12 +1,13 @@
-"""Job models and persistent store (SQLite in /tmp for Railway)."""
+"""Job models and persistent store (SQLite; use JOB_DB_PATH for durable storage)."""
 import os
 import json
 import sqlite3
 from enum import Enum
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 DB_PATH = Path(os.getenv("JOB_DB_PATH", "/tmp/pinterest_agent_jobs.db"))
 
@@ -27,6 +28,21 @@ class Job:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+
+def normalize_url(url: str) -> str:
+    """Normalize only URL representation; never alter the stored destination URL."""
+    raw = (url or "").strip()
+    parts = urlsplit(raw)
+    scheme = parts.scheme.lower()
+    netloc = parts.netloc.lower()
+    path = parts.path or "/"
+    if path != "/":
+        path = path.rstrip("/") or "/"
+    # Query order and values are intentionally preserved because affiliate
+    # parameters can be destination-significant.
+    return urlunsplit((scheme, netloc, path, parts.query, ""))
+
+
 class JobStore:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
@@ -39,19 +55,19 @@ class JobStore:
 
     def _init_db(self):
         try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
             conn = self._connect()
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS jobs (
-                    job_id TEXT PRIMARY KEY,
-                    url TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    progress TEXT,
-                    result TEXT,
-                    error TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-            """)
+            conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
+                job_id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                status TEXT NOT NULL,
+                progress TEXT,
+                result TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_url ON jobs(url)")
             conn.commit()
             conn.close()
         except Exception as e:
@@ -65,16 +81,9 @@ class JobStore:
                 """INSERT OR REPLACE INTO jobs
                    (job_id, url, status, progress, result, error, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    job.job_id,
-                    job.url,
-                    job.status.value,
-                    job.progress,
-                    json.dumps(job.result) if job.result else None,
-                    job.error,
-                    job.created_at,
-                    job.updated_at,
-                ),
+                (job.job_id, job.url, job.status.value, job.progress,
+                 json.dumps(job.result) if job.result else None, job.error,
+                 job.created_at, job.updated_at),
             )
             conn.commit()
             conn.close()
@@ -87,27 +96,49 @@ class JobStore:
         try:
             conn = self._connect()
             row = conn.execute(
-                "SELECT job_id, url, status, progress, result, error, created_at, updated_at FROM jobs WHERE job_id = ?",
+                "SELECT job_id,url,status,progress,result,error,created_at,updated_at FROM jobs WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
             conn.close()
             if not row:
                 return None
             job = Job(
-                job_id=row[0],
-                url=row[1],
-                status=JobStatus(row[2]),
-                progress=row[3],
-                result=json.loads(row[4]) if row[4] else None,
-                error=row[5],
-                created_at=row[6],
-                updated_at=row[7],
+                job_id=row[0], url=row[1], status=JobStatus(row[2]), progress=row[3],
+                result=json.loads(row[4]) if row[4] else None, error=row[5],
+                created_at=row[6], updated_at=row[7],
             )
             self._memory[job_id] = job
             return job
         except Exception as e:
             print(f"JobStore get warning: {e}")
             return self._memory.get(job_id)
+
+    def find_by_url(self, url: str, completed_within_hours: int = 24) -> Optional[Job]:
+        """Return an active duplicate or a recently completed identical job."""
+        key = normalize_url(url)
+        try:
+            conn = self._connect()
+            rows = conn.execute(
+                "SELECT job_id,url,status,progress,result,error,created_at,updated_at FROM jobs ORDER BY updated_at DESC LIMIT 200"
+            ).fetchall()
+            conn.close()
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=completed_within_hours)
+            for row in rows:
+                if normalize_url(row[1]) != key:
+                    continue
+                status = JobStatus(row[2])
+                if status in (JobStatus.QUEUED, JobStatus.RUNNING):
+                    return self.get(row[0])
+                if status == JobStatus.COMPLETED:
+                    try:
+                        updated = datetime.fromisoformat(row[7])
+                        if updated >= cutoff:
+                            return self.get(row[0])
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"JobStore URL lookup warning: {e}")
+        return None
 
     def update(self, job_id: str, **kwargs):
         job = self.get(job_id)
