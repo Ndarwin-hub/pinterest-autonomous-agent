@@ -10,12 +10,12 @@ MAX_COMPOSIO_CALLS=22
 MAX_RECOVERY_ROUNDS=2
 _call_budget=contextvars.ContextVar("pinterest_call_budget",default=None)
 class CallBudget:
-    def __init__(self,maximum=MAX_COMPOSIO_CALLS): self.maximum=maximum; self.used=0; self.image_search_invocations=0; self.pexels_invocations=0
+    def __init__(self,maximum=MAX_COMPOSIO_CALLS): self.maximum=maximum; self.used=0; self.image_search_invocations=0; self.pexels_invocations=0; self.grok_invocations=0
     def reserve(self,slug):
         if self.used>=self.maximum: raise RuntimeError(f"Composio hard job budget exhausted ({self.maximum} calls); stopping safely.")
         self.used+=1; logger.info("Composio budget %s/%s %s",self.used,self.maximum,slug)
 async def _static_capabilities(agent_mod):
-    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"One targeted search per Pin."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio; one call per Pin."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY),"executable":bool(XAI_API_KEY),"kind":"final_approval","reason":"Grok final approval when XAI key is available."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
+    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"One targeted search per Pin."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio; one call per Pin."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
 def apply_agent_wiring(agent_mod:Any)->None:
     orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; default_board=getattr(agent_mod,"DEFAULT_BOARD_NAME","Product Pins")
     async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
@@ -27,6 +27,9 @@ def apply_agent_wiring(agent_mod:Any)->None:
         if slug=="COMPOSIO_SEARCH_IMAGE":
             if b.image_search_invocations>=5:return {}
             b.image_search_invocations+=1
+        if slug=="GROK_CREATE_RESPONSE":
+            if b.grok_invocations>=5:return {}
+            b.grok_invocations+=1
         b.reserve(slug); return await orig_run(slug,args or {},retries=0)
     async def research(url,job_store,job_id):
         p=await orig_research(url,job_store,job_id); p["url"]=url; p["category"]=detect_product_category(p); return p
@@ -46,7 +49,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
     def build_review_items(pins,product):
         return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
     def failed_indexes(review,pin_count):
-        if review.get("final_reviewer")=="grok":
+        if review.get("final_reviewer") in ("grok","grok_composio"):
             results=review.get("grok") or []
             return {i+1 for i,x in enumerate(results[:pin_count]) if not (isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85)}
         if review.get("final_reviewer")=="gemini":
@@ -77,8 +80,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
             review=None; recovery_rounds=0
             while True:
                 review_items=build_review_items(pins,product)
-                job_store.update(job_id,progress="Gemini visual review, then Grok final approval" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
-                review=await review_batch(review_items)
+                job_store.update(job_id,progress="Composio Grok visual review" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
+                review=await review_batch(review_items, composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
                 if review.get("approved"):break
                 failed=failed_indexes(review,len(pins))
                 if not failed:break
