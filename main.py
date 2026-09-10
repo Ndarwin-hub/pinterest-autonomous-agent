@@ -1,6 +1,8 @@
 """
 Autonomous Pinterest Agent - Railway service
 Accepts product/affiliate URL, publishes 5 unique Pins via Composio.
+The existing publisher/image/board workflow remains in agent.py; supervisor.py
+adds centralized AI generation/review around that existing path.
 """
 import os
 import uuid
@@ -20,8 +22,8 @@ import agent as agent_module
 from wire_board_org import apply_agent_wiring
 
 apply_agent_wiring(agent_module)
-from agent import process_pinterest_job
 from models import JobStore, JobStatus, Job
+from supervisor import process_supervised
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -59,7 +61,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Pinterest Autonomous Agent",
     description="Submit one product URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",
-    version="3.1.0",
+    version="3.2.0",
     lifespan=lifespan,
 )
 
@@ -89,7 +91,7 @@ async def health():
     return {
         "status": "ok",
         "service": "pinterest-autonomous-agent",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -118,7 +120,7 @@ async def submit(
     return SubmitResponse(
         job_id=job_id,
         status=JobStatus.QUEUED.value,
-        message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}",
+        message="Job accepted. 5 Pins will be researched, imaged, reviewed, published and verified. Poll /status/{job_id}",
     )
 
 
@@ -142,22 +144,26 @@ async def status(job_id: str, _: bool = Depends(verify_secret)):
 async def root():
     return {
         "service": "Pinterest Autonomous Agent",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "endpoints": {
             "health": "GET /health",
             "submit": "POST /submit body: {\"url\": \"<product_url>\"}",
             "status": "GET /status/{job_id}",
         },
-        "usage": "Send one product/affiliate URL. System creates 5 unique Pins automatically.",
+        "usage": "Send one product/affiliate URL. System creates, reviews, publishes and verifies 5 Pins automatically.",
     }
 
 
 async def run_job(job_id: str, url: str):
     try:
-        job_store.update(job_id, status=JobStatus.RUNNING, progress="Starting 5-pin workflow")
-        result = await process_pinterest_job(job_id, url, job_store)
-        job_store.update(job_id, status=JobStatus.COMPLETED, progress="Finished", result=result)
+        job_store.update(job_id, status=JobStatus.RUNNING, progress="Starting supervised 5-pin workflow")
+        result = await process_supervised(job_id, url, job_store)
+        published = int(result.get("pins_published") or 0)
+        verified = sum(1 for p in result.get("pins", []) if p.get("verified"))
+        if published != 5 or verified != 5:
+            raise RuntimeError(f"Workflow did not meet success criteria: {published}/5 published, {verified}/5 verified")
+        job_store.update(job_id, status=JobStatus.COMPLETED, progress="Finished — 5/5 published and individually verified", result=result)
         logger.info(f"Job {job_id} completed: {result.get('summary')}")
     except Exception as e:
         logger.exception(f"Job {job_id} failed")
-        job_store.update(job_id, status=JobStatus.FAILED, progress="Failed", error=str(e))
+        job_store.update(job_id, status=JobStatus.FAILED, progress="Failed — no unverified success reported", error=str(e))
