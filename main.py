@@ -26,7 +26,7 @@ from quota import quota
 
 apply_agent_wiring(agent_module)
 from agent import process_pinterest_job
-from models import JobStore, JobStatus, Job
+from models import JobStore, JobStatus, Job, normalize_url
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -110,6 +110,17 @@ class StatusResponse(BaseModel):
 
 
 async def enqueue_job(url_str: str, background_tasks: BackgroundTasks) -> SubmitResponse:
+    # Idempotency check happens BEFORE reserving quota, so repeated submissions
+    # cannot consume monthly budget or create duplicate Pins.
+    existing = job_store.find_by_url(url_str)
+    if existing:
+        logger.info("Duplicate URL suppressed: existing job %s", existing.job_id)
+        return SubmitResponse(
+            job_id=existing.job_id,
+            status=existing.status.value,
+            message="Existing job reused; duplicate Pinterest workflow was not started.",
+        )
+
     if not quota.reserve_job():
         snapshot = quota.snapshot()
         raise HTTPException(
