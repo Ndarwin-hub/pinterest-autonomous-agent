@@ -2,9 +2,8 @@
 Autonomous Pinterest Agent - Railway service
 Accepts product/affiliate URL, publishes 5 unique Pins via Composio.
 
-The existing /submit route remains intact. A separate protected bridge endpoint
-allows an external ChatGPT action/app to submit the same URL into the same job
-executor without creating a second Pinterest workflow.
+The /submit route is the single external intake. The former ChatGPT bridge has
+been removed; the same job executor remains unchanged for Grok/Railway use.
 """
 import os
 import uuid
@@ -38,30 +37,11 @@ logger = logging.getLogger("pinterest-agent")
 job_store = JobStore()
 _enqueue_lock = asyncio.Lock()
 API_SECRET = os.getenv("API_SECRET", "").strip()
-CHATGPT_BRIDGE_SECRET = os.getenv("CHATGPT_BRIDGE_SECRET", "").strip()
 
 
 def verify_secret(x_api_secret: Optional[str] = Header(None)):
     if API_SECRET and x_api_secret != API_SECRET:
         raise HTTPException(status_code=401, detail="Invalid or missing API secret")
-    return True
-
-
-def verify_bridge_secret(
-    x_bridge_secret: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
-    # A bridge must never be exposed without an explicit secret. Prefer a
-    # dedicated secret; API_SECRET remains a compatibility fallback.
-    expected = CHATGPT_BRIDGE_SECRET or API_SECRET
-    if not expected:
-        raise HTTPException(status_code=503, detail="ChatGPT bridge is not configured")
-    bearer = ""
-    if authorization and authorization.lower().startswith("bearer "):
-        bearer = authorization[7:].strip()
-    supplied = x_bridge_secret or bearer
-    if supplied != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing bridge secret")
     return True
 
 
@@ -85,7 +65,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pinterest Autonomous Agent",
-    description="Submit one product URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",
+    description="Submit a product/affiliate URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",
     version="3.3.0",
     lifespan=lifespan,
 )
@@ -180,24 +160,6 @@ async def submit(
     return await enqueue_job(url_str, background_tasks)
 
 
-@app.post("/bridge/chatgpt/pin", response_model=SubmitResponse)
-async def chatgpt_pin_bridge(
-    body: SubmitRequest,
-    background_tasks: BackgroundTasks,
-    _: bool = Depends(verify_bridge_secret),
-):
-    """Protected intake for a future ChatGPT action/app.
-
-    It intentionally calls the same enqueue path as /submit, so ChatGPT and
-    Grok cannot drift into separate Pinterest implementations.
-    """
-    try:
-        url_str = extract_url(body.url)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return await enqueue_job(url_str, background_tasks)
-
-
 @app.get("/status/{job_id}", response_model=StatusResponse)
 async def status(job_id: str, _: bool = Depends(verify_secret)):
     job = job_store.get(job_id)
@@ -222,7 +184,6 @@ async def root():
         "endpoints": {
             "health": "GET /health",
             "submit": "POST /submit body: {\"url\": \"<product_url>\"}",
-            "chatgpt_bridge": "POST /bridge/chatgpt/pin body: {\"url\": \"<product_url>\"}",
             "status": "GET /status/{job_id}",
             "quota": "GET /quota",
         },
