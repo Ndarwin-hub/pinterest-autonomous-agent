@@ -1,4 +1,4 @@
-"""Runtime wiring: zero-tolerance image sourcing, AI approval and 22-call cap."""
+"""Runtime wiring: zero-tolerance image sourcing, AI approval, recovery and 22-call cap."""
 from __future__ import annotations
 import contextvars, logging, re
 from typing import Any, Dict
@@ -7,6 +7,7 @@ from image_quality import choose_candidates
 from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_API_KEY, OPENAI_API_KEY
 logger=logging.getLogger("pinterest-agent.wire")
 MAX_COMPOSIO_CALLS=22
+MAX_RECOVERY_ROUNDS=2
 _call_budget=contextvars.ContextVar("pinterest_call_budget",default=None)
 class CallBudget:
     def __init__(self,maximum=MAX_COMPOSIO_CALLS): self.maximum=maximum; self.used=0; self.image_search_invocations=0; self.pexels_invocations=0
@@ -42,11 +43,22 @@ def apply_agent_wiring(agent_mod:Any)->None:
         created=await budgeted_run("PINTEREST_CREATE_BOARD",{"name":default_board,"description":"Product pins","privacy":"PUBLIC"}); bid=created.get("id") or (created.get("data") or {}).get("id")
         if not bid:raise RuntimeError(f"Could not create board: {created}")
         return str(bid)
+    def build_review_items(pins,product):
+        return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
+    def failed_indexes(review,pin_count):
+        if review.get("final_reviewer")=="grok":
+            results=review.get("grok") or []
+            return {i+1 for i,x in enumerate(results[:pin_count]) if not (isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85)}
+        if review.get("final_reviewer")=="gemini":
+            approved={int(x) for x in (review.get("gemini") or {}).get("approved_indexes",[]) if str(x).isdigit()}
+            scores=(review.get("gemini") or {}).get("scores") or {}
+            return {i for i in range(1,pin_count+1) if i not in approved or int(scores.get(str(i),0))<85}
+        return set(range(1,pin_count+1))
     async def process(job_id,url,job_store):
         token=_call_budget.set(CallBudget()); b=_call_budget.get()
         try:
             url=url.strip(); m=re.search(r"https?://\S+",url)
-            if m:url=m.group(0).rstrip(").,]")
+            if m:url=m.group(0).rstrip(".,)]")
             if not url.startswith("http"):raise RuntimeError("A valid product/affiliate URL is required.")
             product=await research(url,job_store,job_id); seo=agent_mod.build_five_seo(product); board_id=await board(product,job_store,job_id)
             used=set(); pins=[]; resources=set()
@@ -61,11 +73,37 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 resources.add(best.get("provider") or "unknown")
                 ref=best.get("url") or (f"data:image/jpeg;base64,{best['value']}" if best.get("value") else "")
                 if not ref:raise RuntimeError(f"Pin {i}: selected image has no usable media.")
-                pins.append({"pin_number":i,"strategy":strategy,"seo":seo[i-1],"image":best,"image_ref":ref,"candidate_count":len(candidates),"candidate_pool":candidates[:8]})
-            review_items=[{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
-            job_store.update(job_id,progress="Gemini visual review, then Grok final approval")
-            review=await review_batch(review_items)
-            if not review.get("approved"):raise RuntimeError("Zero-tolerance AI quality gate blocked publication: "+str(review.get("reason")))
+                pins.append({"pin_number":i,"strategy":strategy,"seo":seo[i-1],"image":best,"image_ref":ref,"candidate_count":len(candidates),"candidate_pool":candidates[:8],"candidate_cursor":0})
+            review=None; recovery_rounds=0
+            while True:
+                review_items=build_review_items(pins,product)
+                job_store.update(job_id,progress="Gemini visual review, then Grok final approval" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
+                review=await review_batch(review_items)
+                if review.get("approved"):break
+                failed=failed_indexes(review,len(pins))
+                if not failed:break
+                if recovery_rounds>=MAX_RECOVERY_ROUNDS:
+                    raise RuntimeError("Zero-tolerance AI quality gate blocked publication after automatic recovery attempts: "+str(review.get("reason")))
+                replaced=0
+                for idx in sorted(failed):
+                    p=pins[idx-1]; pool=p.get("candidate_pool") or []
+                    cursor=int(p.get("candidate_cursor") or 0)
+                    next_candidate=None
+                    while cursor+1<len(pool):
+                        cursor+=1; c=pool[cursor]; u=c.get("url")
+                        if not u or u not in used:
+                            next_candidate=c;break
+                    p["candidate_cursor"]=cursor
+                    if next_candidate:
+                        old=p["image"]; old_url=old.get("url")
+                        if old_url: used.discard(old_url)
+                        p["image"]=next_candidate; p["image_ref"]=next_candidate.get("url") or (f"data:image/jpeg;base64,{next_candidate['value']}" if next_candidate.get("value") else "")
+                        p["candidate_count"]=len(pool)
+                        if next_candidate.get("url"):used.add(next_candidate["url"])
+                        resources.add(next_candidate.get("provider") or "unknown"); replaced+=1
+                if replaced==0:
+                    raise RuntimeError("Zero-tolerance AI quality gate blocked publication: failed Pin(s) had no unused prevalidated replacement candidates, and no additional Composio image calls are permitted.")
+                recovery_rounds+=1
             published=[]; errors=[]
             for p in pins:
                 s=p["seo"]; im=p["image"]
@@ -74,7 +112,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
                 except Exception as e:errors.append({"pin_number":p["pin_number"],"error":str(e)})
             if len(published)!=5:raise RuntimeError(f"Zero-tolerance publish failed: {len(published)}/5 Pins published.")
-            return {"product_name":product.get("name"),"source_url":url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used},"summary":"5/5 Pins published only after hard image gates and final AI approval."}
+            return {"product_name":product.get("name"),"source_url":url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used},"summary":"5/5 Pins published only after hard image gates, automatic failed-Pin recovery, and final AI approval."}
         finally:_call_budget.reset(token)
     agent_mod.run_composio_tool=budgeted_run; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
-    logger.info("Zero-tolerance image sourcing + AI approval + 22-call budget wiring applied")
+    logger.info("Zero-tolerance image sourcing + AI approval + automatic recovery + 22-call budget wiring applied")
