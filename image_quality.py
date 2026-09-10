@@ -1,182 +1,107 @@
-"""Image selection and quality gates for Pinterest product Pins.
+"""Zero-tolerance Pinterest image sourcing and quality selection.
 
-This module performs all image validation locally on Railway. It does not
-consume Composio calls for HTTP image checks or dimension inspection.
+Searches authentic product imagery plus Pexels and Composio image search, validates
+real pixels locally, ranks every candidate, and optionally uses visual AI elsewhere
+for final approval. No placeholder/Pillow image is accepted as a normal fallback.
 """
 from __future__ import annotations
-
-import io
-import logging
+import asyncio, logging, os, re
 from typing import Any, Dict, List, Optional, Tuple
-
 import httpx
 from PIL import ImageFile
 
 logger = logging.getLogger("pinterest-agent.image-quality")
+MIN_DIMENSION=800
+PREFERRED_MIN_DIMENSION=1200
+MAX_ASPECT=2.0
+MIN_SCORE=78
+MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
+PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 
-MIN_DIMENSION = 600
-PREFERRED_MIN_DIMENSION = 1000
-MAX_ASPECT = 2.2
-MAX_IMAGE_BYTES_TO_INSPECT = 3 * 1024 * 1024
-
-
-def _quality_gate(width: int, height: int) -> Tuple[bool, str]:
-    if width < MIN_DIMENSION or height < MIN_DIMENSION:
-        return False, f"too_small:{width}x{height}"
-    ratio = max(width, height) / max(1, min(width, height))
-    if ratio > MAX_ASPECT:
-        return False, f"ultra_wide_or_tall:{width}x{height}"
-    return True, "ok"
-
-
-async def inspect_image_url(url: str) -> Optional[Tuple[int, int]]:
-    """Read enough of a remote image to obtain real dimensions.
-
-    Uses a streaming parser so a large product image does not need to be fully
-    downloaded. This is ordinary HTTP and does not count as a Composio call.
-    """
-    if not url or not str(url).startswith(("http://", "https://")):
-        return None
-    parser = ImageFile.Parser()
-    total = 0
+async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
+    if not url or not str(url).startswith(("http://","https://")): return None
+    parser=ImageFile.Parser(); total=0
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            async with client.stream("GET", url, headers={"User-Agent": "Mozilla/5.0 PinterestAgent/3.4"}) as resp:
-                if resp.status_code >= 400:
-                    return None
-                content_type = (resp.headers.get("content-type") or "").lower()
-                if content_type and "image" not in content_type:
-                    return None
-                async for chunk in resp.aiter_bytes(16384):
-                    total += len(chunk)
-                    if total > MAX_IMAGE_BYTES_TO_INSPECT:
-                        break
+        async with httpx.AsyncClient(timeout=18,follow_redirects=True) as client:
+            async with client.stream("GET",url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"}) as r:
+                if r.status_code>=400: return None
+                ct=(r.headers.get("content-type") or "").lower()
+                if ct and "image" not in ct: return None
+                async for chunk in r.aiter_bytes(16384):
+                    total+=len(chunk)
+                    if total>MAX_IMAGE_BYTES_TO_INSPECT: break
                     parser.feed(chunk)
-                    if parser.image is not None:
-                        return int(parser.image.width), int(parser.image.height)
-    except Exception as exc:
-        logger.debug("Image inspection failed for %s: %s", url, exc)
+                    if parser.image is not None: return int(parser.image.width),int(parser.image.height)
+    except Exception: pass
     return None
 
+def hard_gate(w:int,h:int)->Tuple[bool,str]:
+    if min(w,h)<MIN_DIMENSION: return False,f"too_small:{w}x{h}"
+    ratio=max(w,h)/max(1,min(w,h))
+    if ratio>MAX_ASPECT: return False,f"bad_aspect:{w}x{h}"
+    return True,"ok"
 
-async def validate_candidate(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    url = candidate.get("url")
-    dims = await inspect_image_url(url)
-    if not dims:
-        return None
-    width, height = dims
-    ok, reason = _quality_gate(width, height)
-    if not ok:
-        logger.info("Rejected image %s: %s", url, reason)
-        return None
-    out = dict(candidate)
-    out["width"] = width
-    out["height"] = height
-    out["quality_gate"] = reason
-    return out
+async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
+    d=await inspect_image_url(c.get("url",""))
+    if not d:return None
+    w,h=d; ok,reason=hard_gate(w,h)
+    if not ok:return None
+    x=dict(c); x.update(width=w,height=h,quality_gate=reason); return x
 
+def score(c:Dict[str,Any],product:Dict[str,Any],strategy:str)->int:
+    p=(c.get("provider") or "").lower(); src=(c.get("source") or "").lower()
+    name=(product.get("name") or "").lower(); brand=(product.get("brand") or "").lower()
+    w,h=int(c.get("width") or 0),int(c.get("height") or 0); ratio=w/max(1,h)
+    s=45
+    if p=="product_page": s+=30
+    elif p=="composio_search_image":
+        s+=20
+        if brand and brand in src:s+=12
+        toks=[x for x in re.findall(r"[a-z0-9]+",name) if len(x)>3]
+        s+=min(10,sum(1 for x in toks[:5] if x in src))
+    elif p=="pexels": s+=8
+    if min(w,h)>=PREFERRED_MIN_DIMENSION:s+=12
+    if .60<=ratio<=.80:s+=12
+    elif .80<ratio<=1.05:s+=10
+    elif 1.05<ratio<=1.35:s+=7
+    elif 1.35<ratio<=1.80:s+=3
+    if c.get("original"):s+=2
+    return min(100,s)
 
-def quality_score(candidate: Dict[str, Any], product: Dict[str, Any], strategy_key: str) -> int:
-    """Rank validated images for product authenticity and Pinterest usability."""
-    provider = (candidate.get("provider") or "").lower()
-    source = (candidate.get("source") or "").lower()
-    name = (product.get("name") or "").lower()
-    brand = (product.get("brand") or "").lower()
-    width = int(candidate.get("width") or 0)
-    height = int(candidate.get("height") or 0)
-    ratio = width / max(1, height)
+async def search_pexels(query:str)->List[Dict[str,Any]]:
+    if not PEXELS_API_KEY:return []
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r=await client.get("https://api.pexels.com/v1/search",headers={"Authorization":PEXELS_API_KEY},params={"query":query[:90],"orientation":"portrait","per_page":12})
+            if r.status_code>=400:return []
+            out=[]
+            for p in (r.json().get("photos") or []):
+                src=p.get("src") or {}; u=src.get("original") or src.get("large2x") or src.get("large")
+                if u:out.append({"url":u,"provider":"pexels","id":str(p.get("id") or ""),"source":"pexels","license":"Pexels License","original":True})
+            return out
+    except Exception:return []
 
-    score = 40
-    if provider == "product_page":
-        score += 34
-    elif provider == "composio_search_image":
-        score += 22
-        if brand and brand in source:
-            score += 12
-        name_tokens = [w for w in name.split() if len(w) > 3]
-        if any(w in source for w in name_tokens[:4]):
-            score += 7
-    elif provider in ("pexels", "pixabay", "unsplash"):
-        score += 8
+async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
+    name=product.get("name") or "product"; query=f"{name} {strategy.get('focus') or 'official product photo'}"[:120]
+    raw=[]
+    for u in product.get("images") or []:
+        if u and u not in used_urls:raw.append({"url":u,"provider":"product_page","source":"product page","license":"product_page","original":True})
+    # Exactly one Composio image-search call per Pin. Local HTTP validation is free.
+    try: raw.extend(await agent_mod.search_composio_images(query,num=10))
+    except Exception as e: logger.warning("Composio image search: %s",e)
+    # Pexels is called directly when its API key is present, so it does not consume Composio budget.
+    raw.extend(await search_pexels(query))
+    seen=set(); unique=[]
+    for c in raw:
+        u=c.get("url")
+        if u and u not in seen and u not in used_urls:seen.add(u);unique.append(c)
+    checked=await asyncio.gather(*(validate(c) for c in unique[:40]))
+    valid=[c for c in checked if c]
+    for c in valid:c["score"]=score(c,product,strategy.get("key",""))
+    valid.sort(key=lambda x:x.get("score",0),reverse=True)
+    return [c for c in valid if c.get("score",0)>=MIN_SCORE][:8]
 
-    if min(width, height) >= PREFERRED_MIN_DIMENSION:
-        score += 10
-
-    # Pinterest recommends a vertical 2:3 canvas. Product-source images are
-    # still allowed in square/4:3 form; vertical receives the strongest bonus.
-    if 0.60 <= ratio <= 0.80:
-        score += 12
-    elif 0.80 < ratio <= 1.05:
-        score += 9
-    elif 1.05 < ratio <= 1.35:
-        score += 6
-    elif 1.35 < ratio <= 1.80:
-        score += 2
-
-    # Deterministic tie-breaker without external calls.
-    score += sum(ord(ch) for ch in (strategy_key + (candidate.get("url") or ""))) % 4
-    return min(score, 100)
-
-
-async def choose_best_image(
-    product: Dict[str, Any],
-    strategy: Dict[str, Any],
-    pin_index: int,
-    used_urls: set,
-    agent_mod: Any,
-) -> Optional[Dict[str, Any]]:
-    """Build and validate a small candidate pool, then return its best image.
-
-    At most two COMPOSIO_SEARCH_IMAGE calls are made for a Pin. The caller's
-    hard budget wrapper enforces that limit. All dimension/quality checks are
-    local HTTP work and therefore do not consume Composio usage.
-    """
-    name = product.get("name") or "product"
-    query = f"{name} {strategy.get('focus') or 'official product photo'}"[:120]
-    candidates: List[Dict[str, Any]] = []
-
-    # Authentic product-page images are preferred, but only after real image
-    # dimensions are inspected. This is the permanent fix for banner strips.
-    for url in product.get("images") or []:
-        if url and url not in used_urls:
-            candidates.append({"url": url, "provider": "product_page", "source": "product page", "license": "product_page"})
-
-    # Composio Search is the primary external discovery source. Two targeted
-    # queries give diversity while remaining below the 22-call ceiling.
-    queries = [query, f"{name} official product photo"[:120]]
-    for q in queries:
-        try:
-            found = await agent_mod.search_composio_images(q, num=8)
-        except Exception as exc:
-            logger.warning("Composio image search failed: %s", exc)
-            found = []
-        for item in found:
-            url = item.get("url")
-            if url and url not in used_urls and not any(x.get("url") == url for x in candidates):
-                candidates.append(item)
-
-    if not candidates:
-        return None
-
-    # Validate concurrently; no Composio calls are made here.
-    import asyncio
-    checked = await asyncio.gather(*(validate_candidate(c) for c in candidates[:30]))
-    valid = [c for c in checked if c]
-    if not valid:
-        return None
-
-    for candidate in valid:
-        candidate["score"] = quality_score(candidate, product, strategy.get("key", ""))
-
-    valid.sort(key=lambda c: c.get("score", 0), reverse=True)
-    best = valid[0]
-    used_urls.add(best["url"])
-    logger.info(
-        "Pin %s image selected: provider=%s size=%sx%s score=%s",
-        pin_index,
-        best.get("provider"),
-        best.get("width"),
-        best.get("height"),
-        best.get("score"),
-    )
-    return best
+async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
+    candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
+    if not candidates:return None
+    best=candidates[0]; used_urls.add(best["url"]); return best
