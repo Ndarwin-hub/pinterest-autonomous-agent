@@ -11,6 +11,7 @@ MAX_ASPECT=2.0
 MIN_SCORE=85
 MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
+COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
 async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
     if not url or not str(url).startswith(("http://","https://")): return None
     parser=ImageFile.Parser(); total=0
@@ -79,7 +80,12 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         if u and u not in used_urls:raw.append({"url":u,"provider":"product_page","source":"product page","license":"product_page","original":True})
     try:raw.extend(await agent_mod.search_composio_images(query,num=10))
     except Exception:pass
-    raw.extend(await search_pexels(query,agent_mod))
+    # When the existing Composio connection is also used for five Grok visual
+    # approvals, Pexels is deliberately skipped. This preserves the hard
+    # 22-call job ceiling: 5 image searches + 1 board + 5 Grok reviews + 5
+    # publishes + 5 verifications = 21 calls, with one spare for recovery.
+    if not COMPOSIO_API_KEY:
+        raw.extend(await search_pexels(query,agent_mod))
     seen=set();unique=[]
     for c in raw:
         u=c.get("url")
