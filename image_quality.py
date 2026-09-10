@@ -8,7 +8,7 @@ logger=logging.getLogger("pinterest-agent.image-quality")
 MIN_DIMENSION=800
 PREFERRED_MIN_DIMENSION=1200
 MAX_ASPECT=2.0
-MIN_SCORE=78
+MIN_SCORE=85
 MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
