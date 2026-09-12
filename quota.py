@@ -1,120 +1,33 @@
-"""Quota governor for the Pinterest production workflow.
-
-The governor is deliberately conservative: it budgets workflow tool-call units,
-keeps a monthly safety reserve, and persists its ledger in SQLite. It never
-changes Pinterest content/image selection; it only prevents starting a job when
-there is not enough safe budget left.
-"""
+"""Quota governor for the existing Pinterest workflow."""
 from __future__ import annotations
-
-import json
-import os
-import sqlite3
-from datetime import datetime, timezone
+import os,json,sqlite3
+from datetime import datetime,timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict
-
-DB_PATH = Path(os.getenv("JOB_DB_PATH", "/tmp/pinterest_agent_jobs.db"))
-MONTHLY_LIMIT = int(os.getenv("COMPOSIO_MONTHLY_TOOL_BUDGET", "100000"))
-SAFETY_RESERVE = int(os.getenv("COMPOSIO_SAFETY_RESERVE", "10000"))
-# Hard logical budget per complete 5-pin job. The agent also enforces the
-# same ceiling at every actual Composio HTTP execution attempt.
-JOB_BUDGET = int(os.getenv("COMPOSIO_JOB_BUDGET", "22"))
-
-_lock = Lock()
-
-
-def _month() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m")
-
-
+from typing import Any,Dict
+_DATA_DIR=Path(os.getenv("DATA_DIR","/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("QUOTA_DB_PATH",os.getenv("JOB_DB_PATH",str(_DATA_DIR/"pinterest_agent_jobs.db"))))
+MONTHLY_LIMIT=int(os.getenv("COMPOSIO_MONTHLY_TOOL_BUDGET","100000")); SAFETY_RESERVE=int(os.getenv("COMPOSIO_SAFETY_RESERVE","10000")); JOB_BUDGET=int(os.getenv("COMPOSIO_JOB_BUDGET","22")); _lock=Lock()
+def _month():return datetime.now(timezone.utc).strftime("%Y-%m")
 class QuotaGovernor:
-    def __init__(self, db_path: Path = DB_PATH):
-        self.db_path = db_path
-        self._init_db()
-
-    def _connect(self):
-        return sqlite3.connect(str(self.db_path), check_same_thread=False)
-
-    def _init_db(self):
-        with _lock:
-            conn = self._connect()
-            conn.execute("""CREATE TABLE IF NOT EXISTS quota_ledger (
-                month TEXT PRIMARY KEY,
-                reserved_units INTEGER NOT NULL DEFAULT 0,
-                completed_jobs INTEGER NOT NULL DEFAULT 0,
-                failed_jobs INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL
-            )""")
-            conn.commit()
-            conn.close()
-
-    def _row(self):
-        month = _month()
-        conn = self._connect()
-        row = conn.execute(
-            "SELECT month,reserved_units,completed_jobs,failed_jobs,updated_at FROM quota_ledger WHERE month=?",
-            (month,),
-        ).fetchone()
-        if row is None:
-            now = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                "INSERT INTO quota_ledger(month,reserved_units,completed_jobs,failed_jobs,updated_at) VALUES(?,?,?,?,?)",
-                (month, 0, 0, 0, now),
-            )
-            conn.commit()
-            row = (month, 0, 0, 0, now)
-        conn.close()
-        return row
-
-    def snapshot(self) -> Dict[str, Any]:
-        row = self._row()
-        reserved = int(row[1])
-        safe_capacity = max(0, MONTHLY_LIMIT - SAFETY_RESERVE)
-        remaining = max(0, safe_capacity - reserved)
-        return {
-            "month": row[0],
-            "monthly_limit": MONTHLY_LIMIT,
-            "safety_reserve": SAFETY_RESERVE,
-            "safe_capacity": safe_capacity,
-            "reserved_units": reserved,
-            "remaining_safe_units": remaining,
-            "job_budget_units": JOB_BUDGET,
-            "estimated_complete_jobs_remaining": remaining // max(1, JOB_BUDGET),
-            "completed_jobs": int(row[2]),
-            "failed_jobs": int(row[3]),
-        }
-
-    def can_start_job(self) -> bool:
-        return self.snapshot()["remaining_safe_units"] >= JOB_BUDGET
-
-    def reserve_job(self) -> bool:
-        with _lock:
-            row = self._row()
-            reserved = int(row[1])
-            safe_capacity = max(0, MONTHLY_LIMIT - SAFETY_RESERVE)
-            if reserved + JOB_BUDGET > safe_capacity:
-                return False
-            conn = self._connect()
-            conn.execute(
-                "UPDATE quota_ledger SET reserved_units=?,updated_at=? WHERE month=?",
-                (reserved + JOB_BUDGET, datetime.now(timezone.utc).isoformat(), row[0]),
-            )
-            conn.commit()
-            conn.close()
-            return True
-
-    def record_job(self, success: bool):
-        with _lock:
-            row = self._row()
-            conn = self._connect()
-            conn.execute(
-                "UPDATE quota_ledger SET completed_jobs=completed_jobs+?, failed_jobs=failed_jobs+?, updated_at=? WHERE month=?",
-                (1 if success else 0, 0 if success else 1, datetime.now(timezone.utc).isoformat(), row[0]),
-            )
-            conn.commit()
-            conn.close()
-
-
-quota = QuotaGovernor()
+ def __init__(self,db_path=DB_PATH):self.db_path=Path(db_path);self._init()
+ def _conn(self):self.db_path.parent.mkdir(parents=True,exist_ok=True);return sqlite3.connect(str(self.db_path),check_same_thread=False)
+ def _init(self):
+  with _lock:
+   c=self._conn();c.execute("CREATE TABLE IF NOT EXISTS quota_ledger(month TEXT PRIMARY KEY,reserved_units INTEGER NOT NULL DEFAULT 0,completed_jobs INTEGER NOT NULL DEFAULT 0,failed_jobs INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)");c.commit();c.close()
+ def _row(self):
+  m=_month();c=self._conn();r=c.execute("SELECT month,reserved_units,completed_jobs,failed_jobs,updated_at FROM quota_ledger WHERE month=?",(m,)).fetchone()
+  if not r:
+   now=datetime.now(timezone.utc).isoformat();c.execute("INSERT INTO quota_ledger VALUES(?,?,?,?,?)",(m,0,0,0,now));c.commit();r=(m,0,0,0,now)
+  c.close();return r
+ def snapshot(self)->Dict[str,Any]:
+  r=self._row();safe=max(0,MONTHLY_LIMIT-SAFETY_RESERVE);remaining=max(0,safe-int(r[1]));return {"month":r[0],"monthly_limit":MONTHLY_LIMIT,"safety_reserve":SAFETY_RESERVE,"safe_capacity":safe,"reserved_units":int(r[1]),"remaining_safe_units":remaining,"job_budget_units":JOB_BUDGET,"estimated_complete_jobs_remaining":remaining//max(1,JOB_BUDGET),"completed_jobs":int(r[2]),"failed_jobs":int(r[3])}
+ def can_start_job(self):return self.snapshot()["remaining_safe_units"]>=JOB_BUDGET
+ def reserve_job(self):
+  with _lock:
+   r=self._row();safe=max(0,MONTHLY_LIMIT-SAFETY_RESERVE)
+   if int(r[1])+JOB_BUDGET>safe:return False
+   c=self._conn();c.execute("UPDATE quota_ledger SET reserved_units=?,updated_at=? WHERE month=?",(int(r[1])+JOB_BUDGET,datetime.now(timezone.utc).isoformat(),r[0]));c.commit();c.close();return True
+ def record_job(self,success):
+  with _lock:
+   r=self._row();c=self._conn();c.execute("UPDATE quota_ledger SET completed_jobs=completed_jobs+?,failed_jobs=failed_jobs+?,updated_at=? WHERE month=?",(1 if success else 0,0 if success else 1,datetime.now(timezone.utc).isoformat(),r[0]));c.commit();c.close()
+quota=QuotaGovernor()
