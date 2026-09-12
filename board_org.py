@@ -8,8 +8,8 @@ logger = logging.getLogger("pinterest-agent.board_org")
 
 DEFAULT_BOARD_NAME = "Product Pins"
 
-# Permanent Pinterest category routing. IDs are the existing boards created/verified
-# in the user's account; names are retained here as the human-readable fallback.
+# Permanent Pinterest category routing. These IDs are the existing boards
+# created/verified in the user's Pinterest account.
 CATEGORY_BOARD_MAP = {
     "health": "Health & Fitness",
     "beauty": "Beauty & Personal Care",
@@ -22,10 +22,20 @@ CATEGORY_BOARD_MAP = {
     "general": DEFAULT_BOARD_NAME,
 }
 
+PERMANENT_BOARD_IDS = {
+    "Health & Fitness": "987906936951147682",
+    "Beauty & Personal Care": "987906936951147680",
+    "Smartphones & Tablets": "987906936951147679",
+    "PCs, Laptops & Home Electronics": "987906936951147681",
+    "Home, Kitchen & Dining": "987906936951145744",
+    "Books & Learning": "987906936951145056",
+    "Games, Toys & Sports": "987906936951147684",
+    "Fashion & Lifestyle": "987906936951147683",
+}
+
 # Longer / more specific phrases first. These are deliberately broad enough to
 # route products to one of the eight permanent Pinterest boards.
 CATEGORY_KEYWORDS = [
-    # Books & Learning
     ("self improvement", "books"), ("personal development", "books"),
     ("self-help", "books"), ("self help", "books"), ("personality", "books"),
     ("psychology", "books"), ("paperback", "books"), ("hardcover", "books"),
@@ -33,7 +43,6 @@ CATEGORY_KEYWORDS = [
     ("literature", "books"), ("reading", "books"), ("novel", "books"),
     ("textbook", "books"), ("learning", "books"), ("books", "books"),
     ("book", "books"),
-    # Smartphones & Tablets
     ("screen protector", "smartphones"), ("iphone", "smartphones"),
     ("smartphone", "smartphones"), ("android phone", "smartphones"),
     ("cell phone", "smartphones"), ("mobile phone", "smartphones"),
@@ -42,34 +51,28 @@ CATEGORY_KEYWORDS = [
     ("earbud", "smartphones"), ("smartwatch", "smartphones"),
     ("charger", "smartphones"), ("charging", "smartphones"),
     ("power bank", "smartphones"),
-    # PCs, Laptops & Home Electronics
     ("laptop", "pcs"), ("notebook computer", "pcs"), ("desktop computer", "pcs"),
     ("computer", "pcs"), ("monitor", "pcs"), ("mechanical keyboard", "pcs"),
     ("keyboard", "pcs"), ("mouse", "pcs"), ("webcam", "pcs"),
     ("printer", "pcs"), ("router", "pcs"), ("speaker", "pcs"),
     ("headphones", "pcs"), ("headphone", "pcs"), ("bluetooth speaker", "pcs"),
     ("electronics", "pcs"), ("gadget", "pcs"), ("gadgets", "pcs"),
-    # Home, Kitchen & Dining
     ("household", "home"), ("cookware", "home"), ("appliance", "home"),
     ("storage", "home"), ("kitchen", "home"), ("dining", "home"),
     ("cook", "home"), ("air fryer", "home"), ("coffee maker", "home"),
     ("home", "home"),
-    # Beauty & Personal Care
     ("personal care", "beauty"), ("skin care", "beauty"), ("skincare", "beauty"),
     ("hair care", "beauty"), ("haircare", "beauty"), ("cosmetic", "beauty"),
     ("makeup", "beauty"), ("shampoo", "beauty"), ("moisturizer", "beauty"),
     ("beauty", "beauty"),
-    # Health & Fitness
     ("sports equipment", "health"), ("workout", "health"), ("exercise", "health"),
     ("fitness", "health"), ("yoga", "health"), ("gym", "health"),
     ("running", "health"), ("protein shaker", "health"), ("resistance band", "health"),
     ("dumbbell", "health"), ("health", "health"),
-    # Games, Toys & Sports
     ("video game", "games"), ("gaming", "games"), ("board game", "games"),
     ("toy", "games"), ("toys", "games"), ("puzzle", "games"),
     ("lego", "games"), ("sporting", "games"), ("sports", "games"),
     ("football", "games"), ("basketball", "games"), ("soccer", "games"),
-    # Fashion & Lifestyle
     ("clothing", "fashion"), ("apparel", "fashion"), ("fashion", "fashion"),
     ("shoes", "fashion"), ("sneakers", "fashion"), ("dress", "fashion"),
     ("jacket", "fashion"), ("handbag", "fashion"), ("backpack", "fashion"),
@@ -122,6 +125,14 @@ def find_matching_board(items: List[Any], preferred_name: str) -> Optional[str]:
     alias_norms = {_normalize_board_name(a) for a in aliases}
     alias_norms.add(preferred_norm)
     generic_norms = {_normalize_board_name(DEFAULT_BOARD_NAME), "product pins", "products"}
+
+    # Prefer the exact permanent ID when the board listing confirms it.
+    permanent_id = PERMANENT_BOARD_IDS.get(preferred_name)
+    if permanent_id:
+        for b in items:
+            bid = str(b.get("id") or b.get("board_id") or "")
+            if bid == permanent_id:
+                return permanent_id
 
     for b in items:
         bname = (b.get("name") or "").strip()
