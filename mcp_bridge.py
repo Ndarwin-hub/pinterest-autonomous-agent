@@ -1,16 +1,16 @@
-"""Remote MCP bridge for the Pinterest Railway intake.
+"""Minimal dependency-free MCP/JSON-RPC bridge for Composio Custom MCP.
 
-This is deliberately a very small adapter: AI clients discover one tool,
-PINTEREST_SUBMIT_URL, through a Composio Custom MCP toolkit. The tool sends
-only the exact URL to the existing /submit intake, so the established
-Pinterest workflow remains the execution engine.
+The bridge exposes exactly one tool and forwards the exact URL to the existing
+Railway /submit intake. It intentionally does not duplicate the Pinterest
+workflow.
 """
 import asyncio
 import os
+from typing import Any, Dict
 
 import httpx
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, Response
 
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
 API_SECRET = os.getenv("API_SECRET", "").strip()
@@ -20,38 +20,37 @@ SUBMIT_URL = f"https://{PUBLIC_DOMAIN}/submit"
 MCP_TOOLKIT_SLUG = "PINTEREST_RAILWAY_BRIDGE"
 MCP_PATH = f"/mcp/{BRIDGE_TOKEN}" if BRIDGE_TOKEN else ""
 
-# The current Railway service has two public domains. Include both so either
-# remains valid if Railway selects the other hostname in a proxy request.
-ALLOWED_HOSTS = {
-    PUBLIC_DOMAIN,
-    "web-production-dae68.up.railway.app",
-    "web-production-24057.up.railway.app",
-}
-ALLOWED_HOSTS_WITH_PORTS = sorted(ALLOWED_HOSTS | {f"{h}:*" for h in ALLOWED_HOSTS})
+router = APIRouter()
 
-mcp = FastMCP(
-    "Pinterest Railway Bridge",
-    instructions=(
-        "Use PINTEREST_SUBMIT_URL when the user provides a product or affiliate URL. "
-        "Pass the exact URL unchanged. Do not modify, shorten, or replace it."
+TOOL = {
+    "name": "PINTEREST_SUBMIT_URL",
+    "description": (
+        "Submit one exact product/affiliate URL to the autonomous Pinterest workflow. "
+        "Pass the URL unchanged; do not shorten, rewrite, or replace it."
     ),
-)
+    "inputSchema": {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "Exact http(s) product or affiliate URL."}},
+        "required": ["url"],
+        "additionalProperties": False,
+    },
+}
 
 
-@mcp.tool(name="PINTEREST_SUBMIT_URL")
-async def pinterest_submit_url(url: str) -> str:
-    """Submit one exact product/affiliate URL to the autonomous Pinterest workflow.
+def _result(request_id: Any, result: Dict[str, Any]) -> JSONResponse:
+    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result})
 
-    The tool accepts only the URL. It does not publish Pins itself; Railway's
-    existing queue, board routing, image system, reviewer gate, retries,
-    idempotency, and final verification remain responsible for execution.
-    """
+
+def _error(request_id: Any, code: int, message: str) -> JSONResponse:
+    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})
+
+
+async def _submit_exact_url(url: str) -> str:
     if not API_SECRET:
         raise RuntimeError("Railway API secret is not configured")
     value = (url or "").strip()
     if not value.startswith(("http://", "https://")):
         raise ValueError("url must be an http(s) URL")
-
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
         response = await client.post(
             SUBMIT_URL,
@@ -67,20 +66,61 @@ async def pinterest_submit_url(url: str) -> str:
     )
 
 
-def build_mcp_app():
-    if not MCP_PATH:
-        return None
-    security = TransportSecuritySettings(
-        allowed_hosts=ALLOWED_HOSTS_WITH_PORTS,
-        enable_dns_rebinding_protection=True,
-    )
-    return mcp.streamable_http_app(
-        streamable_http_path="/",
-        json_response=True,
-        stateless_http=True,
-        transport_security=security,
-        host="0.0.0.0",
-    )
+@router.post("/")
+async def mcp_endpoint(request: Request):
+    """Handle the small MCP Streamable-HTTP JSON-RPC surface needed by Composio."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    request_id = body.get("id")
+    method = body.get("method")
+    params = body.get("params") or {}
+
+    # JSON-RPC notifications intentionally receive 202 with no body.
+    if request_id is None:
+        if method in {"notifications/initialized", "notifications/cancelled"}:
+            return Response(status_code=202)
+        if method == "ping":
+            return Response(status_code=202)
+
+    if method == "initialize":
+        requested = params.get("protocolVersion") or "2025-06-18"
+        return _result(
+            request_id,
+            {
+                "protocolVersion": requested,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "Pinterest Railway Bridge", "version": "1.0.0"},
+                "instructions": "Use PINTEREST_SUBMIT_URL for exact product/affiliate URLs.",
+            },
+        )
+
+    if method == "ping":
+        return _result(request_id, {})
+
+    if method == "tools/list":
+        return _result(request_id, {"tools": [TOOL]})
+
+    if method == "tools/call":
+        name = params.get("name")
+        if name != TOOL["name"]:
+            return _error(request_id, -32601, f"Unknown tool: {name}")
+        arguments = params.get("arguments") or {}
+        try:
+            text = await _submit_exact_url(arguments.get("url", ""))
+            return _result(
+                request_id,
+                {"content": [{"type": "text", "text": text}], "isError": False},
+            )
+        except Exception as exc:
+            return _result(
+                request_id,
+                {"content": [{"type": "text", "text": str(exc)}], "isError": True},
+            )
+
+    return _error(request_id, -32601, f"Unsupported MCP method: {method}")
 
 
 async def _register_once() -> bool:
@@ -114,13 +154,12 @@ async def _register_once() -> bool:
 
 
 async def register_custom_mcp_with_retry() -> bool:
-    """Register/sync the bridge without delaying Railway application startup."""
     if not (COMPOSIO_API_KEY and MCP_PATH):
         return False
     for attempt in range(1, 6):
         try:
-            ok = await _register_once()
-            if ok:
+            if await _register_once():
+                print("Composio Custom MCP bridge registered and synced")
                 return True
         except Exception as exc:
             print(f"Composio Custom MCP registration attempt {attempt} failed: {exc}")
