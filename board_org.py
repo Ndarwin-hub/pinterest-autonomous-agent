@@ -6,12 +6,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("pinterest-agent.board_org")
 
-# Permanent last-resort board for products that do not naturally fit one of
-# the specialized categories.
 DEFAULT_BOARD_NAME = "Everything Else"
+LEGACY_BOARD_NAMES = {"General Pins", "Stuff to buy"}
+LEGACY_BOARD_IDS = {"987906936951142945", "987906936951144580"}
 
-# Permanent Pinterest category routing. These IDs are the existing boards
-# created/verified in the user's Pinterest account.
 CATEGORY_BOARD_MAP = {
     "health": "Health & Fitness",
     "beauty": "Beauty & Personal Care",
@@ -38,8 +36,6 @@ PERMANENT_BOARD_IDS = {
     "Everything Else": "987906936951147704",
 }
 
-# Longer / more specific phrases first. These are deliberately broad enough to
-# route products to one of the permanent Pinterest boards.
 CATEGORY_KEYWORDS = [
     ("self improvement", "books"), ("personal development", "books"),
     ("self-help", "books"), ("self help", "books"), ("personality", "books"),
@@ -139,27 +135,35 @@ def find_matching_board(items: List[Any], preferred_name: str) -> Optional[str]:
     alias_norms.add(preferred_norm)
     generic_norms = {_normalize_board_name(DEFAULT_BOARD_NAME), "everything else", "product pins", "products"}
 
-    # Prefer the exact permanent ID when the board listing confirms it.
     permanent_id = PERMANENT_BOARD_IDS.get(preferred_name)
     if permanent_id:
         for b in items:
             bid = str(b.get("id") or b.get("board_id") or "")
+            bname = (b.get("name") or "").strip()
+            if bid in LEGACY_BOARD_IDS or bname in LEGACY_BOARD_NAMES:
+                continue
             if bid == permanent_id:
                 return permanent_id
 
     for b in items:
         bname = (b.get("name") or "").strip()
+        bid = str(b.get("id") or b.get("board_id") or "")
+        if bid in LEGACY_BOARD_IDS or bname in LEGACY_BOARD_NAMES:
+            continue
         if _normalize_board_name(bname) == preferred_norm:
-            return str(b.get("id") or b.get("board_id") or "") or None
+            return bid or None
 
     for b in items:
         bname = (b.get("name") or "").strip()
+        bid = str(b.get("id") or b.get("board_id") or "")
         bn = _normalize_board_name(bname)
+        if bid in LEGACY_BOARD_IDS or bname in LEGACY_BOARD_NAMES:
+            continue
         if bn in generic_norms and preferred_name != DEFAULT_BOARD_NAME:
             continue
         if bn in alias_norms:
-            return str(b.get("id") or b.get("board_id") or "") or None
+            return bid or None
         if preferred_norm in bn or bn in preferred_norm:
             if len(bn) >= 4 and preferred_name != DEFAULT_BOARD_NAME:
-                return str(b.get("id") or b.get("board_id") or "") or None
+                return bid or None
     return None
