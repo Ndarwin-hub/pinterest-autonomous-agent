@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("pinterest-agent.board_org")
 
-DEFAULT_BOARD_NAME = "Product Pins"
+# Permanent last-resort board for products that do not naturally fit one of
+# the eight specialized categories.
+DEFAULT_BOARD_NAME = "Everything Else"
 
 # Permanent Pinterest category routing. These IDs are the existing boards
 # created/verified in the user's Pinterest account.
@@ -31,6 +33,7 @@ PERMANENT_BOARD_IDS = {
     "Books & Learning": "987906936951145056",
     "Games, Toys & Sports": "987906936951147684",
     "Fashion & Lifestyle": "987906936951147683",
+    "Everything Else": "987906936951147704",
 }
 
 # Longer / more specific phrases first. These are deliberately broad enough to
@@ -88,7 +91,7 @@ BOARD_ALIASES = {
     "Books & Learning": ["books & learning", "books and learning", "books & reading", "books and reading", "books", "book", "reading", "learning"],
     "Games, Toys & Sports": ["games, toys & sports", "games toys and sports", "games", "toys", "sports", "gaming"],
     "Fashion & Lifestyle": ["fashion & lifestyle", "fashion and lifestyle", "fashion", "clothing", "lifestyle"],
-    DEFAULT_BOARD_NAME: ["product pins", "products", "product pin"],
+    DEFAULT_BOARD_NAME: ["everything else", "everything", "product pins", "products", "product pin"],
 }
 
 
@@ -124,7 +127,7 @@ def find_matching_board(items: List[Any], preferred_name: str) -> Optional[str]:
     aliases = BOARD_ALIASES.get(preferred_name, [])
     alias_norms = {_normalize_board_name(a) for a in aliases}
     alias_norms.add(preferred_norm)
-    generic_norms = {_normalize_board_name(DEFAULT_BOARD_NAME), "product pins", "products"}
+    generic_norms = {_normalize_board_name(DEFAULT_BOARD_NAME), "everything else", "product pins", "products"}
 
     # Prefer the exact permanent ID when the board listing confirms it.
     permanent_id = PERMANENT_BOARD_IDS.get(preferred_name)
