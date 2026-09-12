@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("pinterest-agent.board_org")
 
 # Permanent last-resort board for products that do not naturally fit one of
-# the eight specialized categories.
+# the specialized categories.
 DEFAULT_BOARD_NAME = "Everything Else"
 
 # Permanent Pinterest category routing. These IDs are the existing boards
@@ -21,6 +21,7 @@ CATEGORY_BOARD_MAP = {
     "books": "Books & Learning",
     "games": "Games, Toys & Sports",
     "fashion": "Fashion & Lifestyle",
+    "travel": "Travel & Camping",
     "general": DEFAULT_BOARD_NAME,
 }
 
@@ -33,11 +34,12 @@ PERMANENT_BOARD_IDS = {
     "Books & Learning": "987906936951145056",
     "Games, Toys & Sports": "987906936951147684",
     "Fashion & Lifestyle": "987906936951147683",
+    "Travel & Camping": "987906936951147708",
     "Everything Else": "987906936951147704",
 }
 
 # Longer / more specific phrases first. These are deliberately broad enough to
-# route products to one of the eight permanent Pinterest boards.
+# route products to one of the permanent Pinterest boards.
 CATEGORY_KEYWORDS = [
     ("self improvement", "books"), ("personal development", "books"),
     ("self-help", "books"), ("self help", "books"), ("personality", "books"),
@@ -76,6 +78,13 @@ CATEGORY_KEYWORDS = [
     ("toy", "games"), ("toys", "games"), ("puzzle", "games"),
     ("lego", "games"), ("sporting", "games"), ("sports", "games"),
     ("football", "games"), ("basketball", "games"), ("soccer", "games"),
+    ("travel backpack", "travel"), ("travel bag", "travel"),
+    ("carry-on backpack", "travel"), ("carry on backpack", "travel"),
+    ("travel luggage", "travel"), ("travel gear", "travel"),
+    ("camping tent", "travel"), ("camping equipment", "travel"),
+    ("camping gear", "travel"), ("outdoor gear", "travel"),
+    ("backpacking tent", "travel"), ("hiking tent", "travel"),
+    ("camping", "travel"), ("hiking", "travel"), ("outdoor", "travel"),
     ("clothing", "fashion"), ("apparel", "fashion"), ("fashion", "fashion"),
     ("shoes", "fashion"), ("sneakers", "fashion"), ("dress", "fashion"),
     ("jacket", "fashion"), ("handbag", "fashion"), ("backpack", "fashion"),
@@ -91,6 +100,7 @@ BOARD_ALIASES = {
     "Books & Learning": ["books & learning", "books and learning", "books & reading", "books and reading", "books", "book", "reading", "learning"],
     "Games, Toys & Sports": ["games, toys & sports", "games toys and sports", "games", "toys", "sports", "gaming"],
     "Fashion & Lifestyle": ["fashion & lifestyle", "fashion and lifestyle", "fashion", "clothing", "lifestyle"],
+    "Travel & Camping": ["travel & camping", "travel and camping", "travel", "camping", "outdoor", "outdoor gear", "travel gear"],
     DEFAULT_BOARD_NAME: ["everything else", "everything", "product pins", "products", "product pin"],
 }
 
