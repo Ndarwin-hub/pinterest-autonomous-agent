@@ -38,19 +38,13 @@ def apply_agent_wiring(agent_mod:Any)->None:
         data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
         category=(product.get("category") or "general").lower(); preferred=preferred_board_name(category); mid=find_matching_board(items,preferred)
         if mid:return mid
-
-        # The eight specialized boards plus Everything Else are permanent.
-        # Never create a new category board at runtime. If a specialized board
-        # is unavailable or an unrecognized product reaches the fallback path,
-        # route to the verified Everything Else board instead.
+        # All Pinterest boards are fixed/permanent. Never create a board at runtime.
+        # If the category board is unavailable, use the verified Everything Else
+        # fallback. If that fallback is also unavailable, stop safely rather than
+        # creating or mutating board structure.
         fallback=find_matching_board(items,DEFAULT_BOARD_NAME)
         if fallback:return fallback
-
-        # Everything Else is the only board this runtime is allowed to create
-        # as a recovery path, using the verified public-board description.
-        created=await budgeted_run("PINTEREST_CREATE_BOARD",{"name":DEFAULT_BOARD_NAME,"description":"Interesting products, useful finds, and practical picks that don't neatly fit the other specialized boards. A home for versatile, everyday items worth discovering.","privacy":"PUBLIC"}); bid=created.get("id") or (created.get("data") or {}).get("id")
-        if not bid:raise RuntimeError(f"Could not locate or create fallback board: {created}")
-        return str(bid)
+        raise RuntimeError("No verified permanent Pinterest board is available for this product; automatic board creation is disabled.")
     def build_review_items(pins,product):
         return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
     def failed_indexes(review,pin_count):
