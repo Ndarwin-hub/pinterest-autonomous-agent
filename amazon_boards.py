@@ -15,6 +15,10 @@ BOARD_SEARCH_PROFILES={
 "Games, Toys & Sports":{"keywords":["board game","puzzle","sports equipment","outdoor toys"],"commission_proxy_pct":3.0},
 "Fashion & Lifestyle":{"keywords":["fashion accessories","travel wallet","sunglasses","everyday bag"],"commission_proxy_pct":4.0},
 "Travel & Camping":{"keywords":["travel backpack","camping gear","packing cubes","hiking accessories"],"commission_proxy_pct":3.0},
+"Pet Supplies":{"keywords":["dog supplies","cat supplies","pet toys","pet grooming"],"commission_proxy_pct":3.0},
+"Baby & Kids":{"keywords":["baby gear","baby supplies","toddler toys","kids essentials"],"commission_proxy_pct":3.0},
+"Automotive & Tools":{"keywords":["car accessories","automotive tools","car care","auto accessories"],"commission_proxy_pct":3.0},
+"Office & Productivity":{"keywords":["office supplies","desk accessories","home office","productivity tools"],"commission_proxy_pct":3.0},
 "Everything Else":{"keywords":["useful gadgets","home office essentials","popular new releases"],"commission_proxy_pct":4.0}}
 
 def classify_live_boards(live_items:List[Dict[str,Any]])->Dict[str,Any]:
