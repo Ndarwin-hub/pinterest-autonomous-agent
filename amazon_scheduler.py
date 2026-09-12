@@ -13,11 +13,11 @@ EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]]; ListBoardsFn=Callable[[],Awa
 class AmazonScheduler:
     def __init__(self): self._task=None; self._stop=asyncio.Event(); self.status={"running":False,"dormant_reason":None,"last_tick":None}
     def gate_status(self,live_boards=None):
-        ready=amazon_credentials_present() and SCHEDULER_ENABLED; info=classify_live_boards(live_boards or []); reasons=[]
+        creds=amazon_credentials_present(); ready=creds and SCHEDULER_ENABLED; info=classify_live_boards(live_boards or []); reasons=[]
         if not SCHEDULER_ENABLED: reasons.append("AMAZON_SCHEDULER_ENABLED is false")
-        if not amazon_credentials_present(): reasons.append("Amazon credentials not configured (dormant)")
+        if not creds: reasons.append("Amazon credentials not configured (dormant)")
         if live_boards is not None and not info["scheduler_ready"]: reasons.append(f"Need {REQUIRED_PRIMARY_SLOTS} approved primary boards; have {info['primary_count']}")
-        return {"credentials_present":amazon_credentials_present(),"scheduler_enabled_flag":SCHEDULER_ENABLED,"board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),"blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
+        return {"credentials_present":creds,"scheduler_enabled_flag":SCHEDULER_ENABLED,"board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),"blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
     async def start(self,*,enqueue,list_boards,wait_job=None):
         if self._task and not self._task.done():return
         self._stop.clear(); self._task=asyncio.create_task(self._loop(enqueue,list_boards,wait_job),name="amazon-scheduler")
@@ -31,15 +31,13 @@ class AmazonScheduler:
     async def _loop(self,enqueue,list_boards,wait_job):
         self.status["running"]=True
         try:
-            first=True
             while not self._stop.is_set():
                 self.status["last_tick"]=datetime.now(timezone.utc).isoformat()
                 try: await self._tick(enqueue,list_boards,wait_job)
                 except asyncio.CancelledError: raise
                 except Exception as e: logger.exception("Amazon scheduler tick error: %s",e)
-                try: await asyncio.wait_for(self._stop.wait(),timeout=0 if first else SLOT_INTERVAL_SEC)
+                try: await asyncio.wait_for(self._stop.wait(),timeout=SLOT_INTERVAL_SEC)
                 except asyncio.TimeoutError: pass
-                first=False
         finally:self.status["running"]=False
     async def _tick(self,enqueue,list_boards,wait_job):
         if is_dormant(): self.status["dormant_reason"]="no_credentials"; return
@@ -55,13 +53,10 @@ class AmazonScheduler:
         n=int(slot["slot"]); attempts=int(slot.get("replacement_attempts") or 0); exclude=set()
         while attempts<MAX_REPLACEMENTS_PER_SLOT:
             candidate=await (discover_global(exclude_asins=exclude) if slot.get("slot_kind")=="global" else discover_for_board(slot.get("target_board_name") or "Everything Else",exclude_asins=exclude))
-            if not candidate:
-                ledger.mark_slot(n,status="exhausted",error="no_candidates",inc_replacement=True); return
-            exclude.add(candidate["asin"]); url=candidate["affiliate_url"]
-            ledger.mark_slot(n,status="processing",selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
+            if not candidate: ledger.mark_slot(n,status="exhausted",error="no_candidates",inc_replacement=True); return
+            exclude.add(candidate["asin"]); url=candidate["affiliate_url"]; ledger.mark_slot(n,status="processing",selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
             try: result=await enqueue(url)
-            except Exception as e:
-                attempts+=1; ledger.mark_slot(n,status="failed_open",error=str(e)[:500]); continue
+            except Exception as e: attempts+=1; ledger.mark_slot(n,status="failed_open",error=str(e)[:500]); continue
             job_id=result.get("job_id")
             if result.get("status")=="completed": ledger.mark_slot(n,status="success",job_id=job_id,pinterest_verified=True,affiliate_url=url); return
             if wait_job and job_id:
