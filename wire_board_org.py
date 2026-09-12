@@ -2,7 +2,7 @@
 from __future__ import annotations
 import contextvars, logging, re
 from typing import Any, Dict
-from board_org import detect_product_category, preferred_board_name, find_matching_board
+from board_org import detect_product_category, preferred_board_name, find_matching_board, DEFAULT_BOARD_NAME
 from image_quality import choose_candidates
 from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_API_KEY, OPENAI_API_KEY
 logger=logging.getLogger("pinterest-agent.wire")
@@ -17,7 +17,7 @@ class CallBudget:
 async def _static_capabilities(agent_mod):
     return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"One targeted search per Pin."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio; one call per Pin."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
 def apply_agent_wiring(agent_mod:Any)->None:
-    orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; default_board=getattr(agent_mod,"DEFAULT_BOARD_NAME","Product Pins")
+    orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool
     async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
         b=_call_budget.get()
         if b is None: raise RuntimeError("Composio execution attempted outside managed job budget.")
@@ -38,13 +38,18 @@ def apply_agent_wiring(agent_mod:Any)->None:
         data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
         category=(product.get("category") or "general").lower(); preferred=preferred_board_name(category); mid=find_matching_board(items,preferred)
         if mid:return mid
-        if preferred!=default_board:
-            created=await budgeted_run("PINTEREST_CREATE_BOARD",{"name":preferred,"description":f"{preferred} product discovery","privacy":"PUBLIC"}); bid=created.get("id") or (created.get("data") or {}).get("id")
-            if bid:return str(bid)
-        mid=find_matching_board(items,default_board)
-        if mid:return mid
-        created=await budgeted_run("PINTEREST_CREATE_BOARD",{"name":default_board,"description":"Product pins","privacy":"PUBLIC"}); bid=created.get("id") or (created.get("data") or {}).get("id")
-        if not bid:raise RuntimeError(f"Could not create board: {created}")
+
+        # The eight specialized boards plus Everything Else are permanent.
+        # Never create a new category board at runtime. If a specialized board
+        # is unavailable or an unrecognized product reaches the fallback path,
+        # route to the verified Everything Else board instead.
+        fallback=find_matching_board(items,DEFAULT_BOARD_NAME)
+        if fallback:return fallback
+
+        # Everything Else is the only board this runtime is allowed to create
+        # as a recovery path, using the verified public-board description.
+        created=await budgeted_run("PINTEREST_CREATE_BOARD",{"name":DEFAULT_BOARD_NAME,"description":"Interesting products, useful finds, and practical picks that don't neatly fit the other specialized boards. A home for versatile, everyday items worth discovering.","privacy":"PUBLIC"}); bid=created.get("id") or (created.get("data") or {}).get("id")
+        if not bid:raise RuntimeError(f"Could not locate or create fallback board: {created}")
         return str(bid)
     def build_review_items(pins,product):
         return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
