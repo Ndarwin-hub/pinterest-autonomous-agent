@@ -2,7 +2,7 @@
 from __future__ import annotations
 import contextvars, logging, re
 from typing import Any, Dict
-from board_org import detect_product_category, preferred_board_name, find_matching_board, DEFAULT_BOARD_NAME
+from board_org import detect_product_category, preferred_board_name, find_matching_board, DEFAULT_BOARD_NAME, LEGACY_BOARD_NAMES, LEGACY_BOARD_IDS
 from image_quality import choose_candidates
 from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_API_KEY, OPENAI_API_KEY
 logger=logging.getLogger("pinterest-agent.wire")
@@ -31,7 +31,6 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 raise RuntimeError(f"Adaptive image-search budget exhausted ({MAX_IMAGE_SEARCH_CALLS} calls).")
             b.image_search_invocations+=1
         if slug=="GROK_CREATE_RESPONSE":
-            # Initial five-Pin review + one full five-Pin recovery review at most.
             if b.grok_invocations>=10:
                 raise RuntimeError("Final Grok visual-review budget exhausted safely.")
             b.grok_invocations+=1
@@ -42,9 +41,19 @@ def apply_agent_wiring(agent_mod:Any)->None:
         job_store.update(job_id,progress="Selecting Pinterest board")
         data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
         category=(product.get("category") or "general").lower(); preferred=preferred_board_name(category); mid=find_matching_board(items,preferred)
-        if mid:return mid
+        if mid:
+            if str(mid) in LEGACY_BOARD_IDS:
+                raise RuntimeError("Legacy board ID selected for a new Pin; refusing publication.")
+            for b in items:
+                bid=str(b.get("id") or b.get("board_id") or "")
+                if bid == str(mid) and (b.get("name") or "").strip() in LEGACY_BOARD_NAMES:
+                    raise RuntimeError("Legacy board name selected for a new Pin; refusing publication.")
+            return mid
         fallback=find_matching_board(items,DEFAULT_BOARD_NAME)
-        if fallback:return fallback
+        if fallback:
+            if str(fallback) in LEGACY_BOARD_IDS:
+                raise RuntimeError("Legacy board ID selected as fallback; refusing publication.")
+            return fallback
         raise RuntimeError("No verified permanent Pinterest board is available for this product; automatic board creation is disabled.")
     def build_review_items(pins,product):
         return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
@@ -96,9 +105,6 @@ def apply_agent_wiring(agent_mod:Any)->None:
                             next_candidate=c;break
                     p["candidate_cursor"]=cursor
                     if not next_candidate and not refreshed and b.image_search_invocations+3<=MAX_IMAGE_SEARCH_CALLS:
-                        # One additional three-angle search is reserved for the failed Pin
-                        # that has exhausted its prevalidated candidates. This keeps the
-                        # complete job under 40 calls even with the five-Pin re-review.
                         extra=await choose_candidates(product,p["strategy"],idx,used,agent_mod)
                         refreshed=True
                         if extra:
