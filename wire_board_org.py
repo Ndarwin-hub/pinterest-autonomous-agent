@@ -19,7 +19,7 @@ class CallBudget:
 async def _static_capabilities(agent_mod):
     return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"Three targeted search angles per Pin, with one adaptive recovery search round available."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio only when the normal Composio image route is unavailable."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
 def apply_agent_wiring(agent_mod:Any)->None:
-    orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool
+    orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; orig_publish=agent_mod.publish_and_verify
     async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
         b=_call_budget.get()
         if b is None: raise RuntimeError("Composio execution attempted outside managed job budget.")
@@ -35,6 +35,20 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 raise RuntimeError("Final Grok visual-review budget exhausted safely.")
             b.grok_invocations+=1
         b.reserve(slug); return await orig_run(slug,args or {},retries=0)
+    async def strict_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index):
+        result=await orig_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index)
+        pin_id=str(result.get("pin_id") or "")
+        if not pin_id:
+            raise RuntimeError(f"Pin {pin_index}: no Pin ID available for independent board verification.")
+        check=await budgeted_run("PINTEREST_GET_PIN",{"pin_id":pin_id},retries=0)
+        actual=str(check.get("board_id") or ((check.get("board") or {}).get("id") if isinstance(check.get("board"),dict) else "") or "")
+        if not actual:
+            raise RuntimeError(f"Pin {pin_index} ({pin_id}): independent Pinterest fetch returned no board_id; refusing to accept unverifiable board membership.")
+        if actual != str(board_id):
+            raise RuntimeError(f"Pin {pin_index} ({pin_id}): board verification mismatch. Intended board {board_id}, actual board {actual}.")
+        result["board_id"] = actual
+        result["board_verified_independently"] = True
+        return result
     async def research(url,job_store,job_id):
         p=await orig_research(url,job_store,job_id); p["url"]=url; p["category"]=detect_product_category(p); return p
     async def board(product,job_store,job_id):
@@ -134,7 +148,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
                 except Exception as e:errors.append({"pin_number":p["pin_number"],"error":str(e)})
             if len(published)!=5:raise RuntimeError(f"Zero-tolerance publish failed: {len(published)}/5 Pins published.")
-            return {"product_name":product.get("name"),"source_url":url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":"5/5 Pins published only after multi-angle image search, hard image gates, global candidate comparison, adaptive recovery and final AI approval."}
+            return {"product_name":product.get("name"),"source_url":url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":"5/5 Pins published only after multi-angle image search, hard image gates, global candidate comparison, adaptive recovery, final AI approval and independent board verification."}
         finally:_call_budget.reset(token)
-    agent_mod.run_composio_tool=budgeted_run; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
-    logger.info("Zero-tolerance image sourcing + multi-angle comparison + adaptive recovery + 40-call budget wiring applied")
+    agent_mod.run_composio_tool=budgeted_run; agent_mod.publish_and_verify=strict_publish; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
+    logger.info("Zero-tolerance image sourcing + multi-angle comparison + adaptive recovery + 40-call budget + strict board routing/verification wiring applied")
