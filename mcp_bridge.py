@@ -7,10 +7,9 @@ Pinterest workflow remains the execution engine.
 """
 import asyncio
 import os
-from typing import Optional
 
 import httpx
-from mcp.server import MCPServer
+from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
@@ -30,7 +29,7 @@ ALLOWED_HOSTS = {
 }
 ALLOWED_HOSTS_WITH_PORTS = sorted(ALLOWED_HOSTS | {f"{h}:*" for h in ALLOWED_HOSTS})
 
-mcp = MCPServer(
+mcp = FastMCP(
     "Pinterest Railway Bridge",
     instructions=(
         "Use PINTEREST_SUBMIT_URL when the user provides a product or affiliate URL. "
@@ -87,7 +86,7 @@ def build_mcp_app():
 async def _register_once() -> bool:
     if not (COMPOSIO_API_KEY and MCP_PATH):
         return False
-    app_url = f"https://{PUBLIC_DOMAIN}{MCP_PATH}"
+    app_url = f"https://{PUBLIC_DOMAIN}{MCP_PATH}/"
     headers = {"x-api-key": COMPOSIO_API_KEY, "Content-Type": "application/json"}
     payload = {
         "slug": MCP_TOOLKIT_SLUG,
