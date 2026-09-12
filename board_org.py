@@ -8,98 +8,84 @@ logger = logging.getLogger("pinterest-agent.board_org")
 
 DEFAULT_BOARD_NAME = "Product Pins"
 
+# Permanent Pinterest category routing. IDs are the existing boards created/verified
+# in the user's account; names are retained here as the human-readable fallback.
 CATEGORY_BOARD_MAP = {
-    "books": "Books & Reading",
-    "electronics": "Electronics & Gadgets",
-    "home": "Home & Kitchen",
+    "health": "Health & Fitness",
     "beauty": "Beauty & Personal Care",
-    "fitness": "Fitness & Wellness",
+    "smartphones": "Smartphones & Tablets",
+    "pcs": "PCs, Laptops & Home Electronics",
+    "home": "Home, Kitchen & Dining",
+    "books": "Books & Learning",
+    "games": "Games, Toys & Sports",
+    "fashion": "Fashion & Lifestyle",
     "general": DEFAULT_BOARD_NAME,
 }
 
-# Longer / more specific phrases first
+# Longer / more specific phrases first. These are deliberately broad enough to
+# route products to one of the eight permanent Pinterest boards.
 CATEGORY_KEYWORDS = [
-    ("self improvement", "books"),
-    ("personal development", "books"),
-    ("self-help", "books"),
-    ("self help", "books"),
-    ("personality", "books"),
-    ("psychology", "books"),
-    ("paperback", "books"),
-    ("hardcover", "books"),
-    ("workbook", "books"),
-    ("biography", "books"),
-    ("memoir", "books"),
-    ("literature", "books"),
-    ("reading", "books"),
-    ("novel", "books"),
-    ("books", "books"),
+    # Books & Learning
+    ("self improvement", "books"), ("personal development", "books"),
+    ("self-help", "books"), ("self help", "books"), ("personality", "books"),
+    ("psychology", "books"), ("paperback", "books"), ("hardcover", "books"),
+    ("workbook", "books"), ("biography", "books"), ("memoir", "books"),
+    ("literature", "books"), ("reading", "books"), ("novel", "books"),
+    ("textbook", "books"), ("learning", "books"), ("books", "books"),
     ("book", "books"),
-    ("screen protector", "electronics"),
-    ("headphones", "electronics"),
-    ("headphone", "electronics"),
-    ("earbuds", "electronics"),
-    ("earbud", "electronics"),
-    ("smartphone", "electronics"),
-    ("bluetooth", "electronics"),
-    ("electronics", "electronics"),
-    ("charging", "electronics"),
-    ("charger", "electronics"),
-    ("speaker", "electronics"),
-    ("iphone", "electronics"),
-    ("android", "electronics"),
-    ("keyboard", "electronics"),
-    ("tablet", "electronics"),
-    ("laptop", "electronics"),
-    ("computer", "electronics"),
-    ("gadget", "electronics"),
-    ("phone", "electronics"),
-    ("mouse", "electronics"),
-    ("household", "home"),
-    ("cookware", "home"),
-    ("appliance", "home"),
-    ("storage", "home"),
-    ("kitchen", "home"),
+    # Smartphones & Tablets
+    ("screen protector", "smartphones"), ("iphone", "smartphones"),
+    ("smartphone", "smartphones"), ("android phone", "smartphones"),
+    ("cell phone", "smartphones"), ("mobile phone", "smartphones"),
+    ("tablet", "smartphones"), ("ipad", "smartphones"), ("phone case", "smartphones"),
+    ("phone accessory", "smartphones"), ("earbuds", "smartphones"),
+    ("earbud", "smartphones"), ("smartwatch", "smartphones"),
+    ("charger", "smartphones"), ("charging", "smartphones"),
+    ("power bank", "smartphones"),
+    # PCs, Laptops & Home Electronics
+    ("laptop", "pcs"), ("notebook computer", "pcs"), ("desktop computer", "pcs"),
+    ("computer", "pcs"), ("monitor", "pcs"), ("mechanical keyboard", "pcs"),
+    ("keyboard", "pcs"), ("mouse", "pcs"), ("webcam", "pcs"),
+    ("printer", "pcs"), ("router", "pcs"), ("speaker", "pcs"),
+    ("headphones", "pcs"), ("headphone", "pcs"), ("bluetooth speaker", "pcs"),
+    ("electronics", "pcs"), ("gadget", "pcs"), ("gadgets", "pcs"),
+    # Home, Kitchen & Dining
+    ("household", "home"), ("cookware", "home"), ("appliance", "home"),
+    ("storage", "home"), ("kitchen", "home"), ("dining", "home"),
+    ("cook", "home"), ("air fryer", "home"), ("coffee maker", "home"),
     ("home", "home"),
-    ("personal care", "beauty"),
-    ("skin care", "beauty"),
-    ("skincare", "beauty"),
-    ("hair care", "beauty"),
-    ("cosmetic", "beauty"),
-    ("makeup", "beauty"),
+    # Beauty & Personal Care
+    ("personal care", "beauty"), ("skin care", "beauty"), ("skincare", "beauty"),
+    ("hair care", "beauty"), ("haircare", "beauty"), ("cosmetic", "beauty"),
+    ("makeup", "beauty"), ("shampoo", "beauty"), ("moisturizer", "beauty"),
     ("beauty", "beauty"),
-    ("sports equipment", "fitness"),
-    ("workout", "fitness"),
-    ("exercise", "fitness"),
-    ("fitness", "fitness"),
-    ("yoga", "fitness"),
-    ("gym", "fitness"),
+    # Health & Fitness
+    ("sports equipment", "health"), ("workout", "health"), ("exercise", "health"),
+    ("fitness", "health"), ("yoga", "health"), ("gym", "health"),
+    ("running", "health"), ("protein shaker", "health"), ("resistance band", "health"),
+    ("dumbbell", "health"), ("health", "health"),
+    # Games, Toys & Sports
+    ("video game", "games"), ("gaming", "games"), ("board game", "games"),
+    ("toy", "games"), ("toys", "games"), ("puzzle", "games"),
+    ("lego", "games"), ("sporting", "games"), ("sports", "games"),
+    ("football", "games"), ("basketball", "games"), ("soccer", "games"),
+    # Fashion & Lifestyle
+    ("clothing", "fashion"), ("apparel", "fashion"), ("fashion", "fashion"),
+    ("shoes", "fashion"), ("sneakers", "fashion"), ("dress", "fashion"),
+    ("jacket", "fashion"), ("handbag", "fashion"), ("backpack", "fashion"),
+    ("wallet", "fashion"), ("jewelry", "fashion"), ("lifestyle", "fashion"),
 ]
 
 BOARD_ALIASES = {
-    "Books & Reading": [
-        "books & reading", "books and reading", "books", "book", "reading",
-        "self-help", "self help", "personal development", "psychology",
-    ],
-    "Electronics & Gadgets": [
-        "electronics & gadgets", "electronics and gadgets", "electronics",
-        "gadgets", "tech", "phone accessories", "iphone accessories",
-        "audio", "headphones",
-    ],
-    "Home & Kitchen": [
-        "home & kitchen", "home and kitchen", "home", "kitchen", "household",
-    ],
-    "Beauty & Personal Care": [
-        "beauty & personal care", "beauty and personal care", "beauty",
-        "personal care", "skincare", "skin care",
-    ],
-    "Fitness & Wellness": [
-        "fitness & wellness", "fitness and wellness", "fitness", "wellness",
-        "workout", "gym",
-    ],
-    DEFAULT_BOARD_NAME: [
-        "product pins", "products", "product pin",
-    ],
+    "Health & Fitness": ["health & fitness", "health and fitness", "fitness & wellness", "fitness", "health", "wellness"],
+    "Beauty & Personal Care": ["beauty & personal care", "beauty and personal care", "beauty", "personal care", "skincare"],
+    "Smartphones & Tablets": ["smartphones & tablets", "smartphones and tablets", "smartphones", "tablets", "phone accessories", "iphone accessories"],
+    "PCs, Laptops & Home Electronics": ["pcs, laptops & home electronics", "pcs laptops and home electronics", "electronics & gadgets", "electronics", "gadgets", "tech", "computers"],
+    "Home, Kitchen & Dining": ["home, kitchen & dining", "home kitchen and dining", "home & kitchen", "home and kitchen", "home", "kitchen", "household"],
+    "Books & Learning": ["books & learning", "books and learning", "books & reading", "books and reading", "books", "book", "reading", "learning"],
+    "Games, Toys & Sports": ["games, toys & sports", "games toys and sports", "games", "toys", "sports", "gaming"],
+    "Fashion & Lifestyle": ["fashion & lifestyle", "fashion and lifestyle", "fashion", "clothing", "lifestyle"],
+    DEFAULT_BOARD_NAME: ["product pins", "products", "product pin"],
 }
 
 
