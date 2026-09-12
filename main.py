@@ -2,8 +2,9 @@
 Autonomous Pinterest Agent - Railway service
 Accepts product/affiliate URL, publishes 5 unique Pins via Composio.
 
-The /submit route is the single external intake. The former ChatGPT bridge has
-been removed; the same job executor remains unchanged for Grok/Railway use.
+The /submit route remains the execution intake. A small remote MCP bridge is
+mounted separately so AI clients can discover PINTEREST_SUBMIT_URL through a
+Composio Custom MCP toolkit; the established job executor remains unchanged.
 """
 import os
 import uuid
@@ -23,6 +24,7 @@ load_dotenv()
 import agent as agent_module
 from wire_board_org import apply_agent_wiring
 from quota import quota
+from mcp_bridge import mcp as mcp_server, build_mcp_app, MCP_PATH, register_custom_mcp_with_retry
 
 apply_agent_wiring(agent_module)
 # Install provider failover after the wiring module has captured its reviewer.
@@ -65,16 +67,36 @@ def extract_url(text: str) -> str:
 async def lifespan(app: FastAPI):
     logger.info("Pinterest Autonomous Agent v3 starting...")
     logger.info("Quota governor: %s", quota.snapshot())
-    yield
+    registration_task = None
+    if MCP_PATH:
+        async with mcp_server.session_manager.run():
+            registration_task = asyncio.create_task(register_custom_mcp_with_retry())
+            yield
+            if registration_task:
+                registration_task.cancel()
+                try:
+                    await registration_task
+                except asyncio.CancelledError:
+                    pass
+    else:
+        logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured")
+        yield
     logger.info("Shutting down...")
 
 
 app = FastAPI(
     title="Pinterest Autonomous Agent",
     description="Submit a product/affiliate URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",
-    version="3.3.0",
+    version="3.4.0",
     lifespan=lifespan,
 )
+
+# The MCP bridge is isolated from the existing HTTP intake. Its tokenized path
+# is stored only in Railway environment variables and is never committed.
+if MCP_PATH:
+    mcp_app = build_mcp_app()
+    if mcp_app is not None:
+        app.mount(MCP_PATH, mcp_app)
 
 
 class SubmitRequest(BaseModel):
@@ -142,7 +164,8 @@ async def health():
     return {
         "status": "ok",
         "service": "pinterest-autonomous-agent",
-        "version": "3.3.0",
+        "version": "3.4.0",
+        "mcp_bridge": bool(MCP_PATH),
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -186,12 +209,13 @@ async def status(job_id: str, _: bool = Depends(verify_secret)):
 async def root():
     return {
         "service": "Pinterest Autonomous Agent",
-        "version": "3.3.0",
+        "version": "3.4.0",
         "endpoints": {
             "health": "GET /health",
             "submit": "POST /submit body: {\"url\": \"<product_url>\"}",
             "status": "GET /status/{job_id}",
             "quota": "GET /quota",
+            "mcp": "Tokenized Composio MCP endpoint is enabled when MCP_BRIDGE_TOKEN is configured.",
         },
         "usage": "Send one product/affiliate URL. System creates 5 unique Pins automatically.",
     }
