@@ -2,9 +2,10 @@
 Autonomous Pinterest Agent - Railway service
 Accepts product/affiliate URL, publishes 5 unique Pins via Composio.
 
-The /submit route remains the execution intake. A small remote MCP bridge is
-mounted separately so AI clients can discover PINTEREST_SUBMIT_URL through a
-Composio Custom MCP toolkit; the established job executor remains unchanged.
+The /submit route remains the execution intake. A small remote MCP JSON-RPC
+bridge is exposed separately so AI clients can discover PINTEREST_SUBMIT_URL
+through a Composio Custom MCP toolkit; the established job executor remains
+unchanged.
 """
 import os
 import uuid
@@ -24,12 +25,9 @@ load_dotenv()
 import agent as agent_module
 from wire_board_org import apply_agent_wiring
 from quota import quota
-from mcp_bridge import mcp as mcp_server, build_mcp_app, MCP_PATH, register_custom_mcp_with_retry
+from mcp_bridge import router as mcp_router, MCP_PATH, register_custom_mcp_with_retry
 
 apply_agent_wiring(agent_module)
-# Install provider failover after the wiring module has captured its reviewer.
-# This is intentionally additive: Pinterest publishing, image selection,
-# board routing, URL preservation and the zero-tolerance gate remain unchanged.
 import provider_failover
 provider_failover.install(__import__("wire_board_org"), __import__("ai_quality_gate"))
 
@@ -69,18 +67,16 @@ async def lifespan(app: FastAPI):
     logger.info("Quota governor: %s", quota.snapshot())
     registration_task = None
     if MCP_PATH:
-        async with mcp_server.session_manager.run():
-            registration_task = asyncio.create_task(register_custom_mcp_with_retry())
-            yield
-            if registration_task:
-                registration_task.cancel()
-                try:
-                    await registration_task
-                except asyncio.CancelledError:
-                    pass
+        registration_task = asyncio.create_task(register_custom_mcp_with_retry())
     else:
         logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured")
-        yield
+    yield
+    if registration_task:
+        registration_task.cancel()
+        try:
+            await registration_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutting down...")
 
 
@@ -91,12 +87,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# The MCP bridge is isolated from the existing HTTP intake. Its tokenized path
-# is stored only in Railway environment variables and is never committed.
+# Tokenized path is held only in Railway environment variables.
 if MCP_PATH:
-    mcp_app = build_mcp_app()
-    if mcp_app is not None:
-        app.mount(MCP_PATH, mcp_app)
+    app.include_router(mcp_router, prefix=MCP_PATH)
 
 
 class SubmitRequest(BaseModel):
@@ -120,8 +113,6 @@ class StatusResponse(BaseModel):
 
 
 async def enqueue_job(url_str: str, background_tasks: BackgroundTasks) -> SubmitResponse:
-    # Serialize admission so two simultaneous identical submissions cannot both
-    # pass the idempotency check before either job is written.
     async with _enqueue_lock:
         existing = job_store.find_by_url(url_str)
         if existing:
@@ -172,7 +163,6 @@ async def health():
 
 @app.get("/quota")
 async def quota_status(_: bool = Depends(verify_secret)):
-    """Non-secret monthly production capacity report."""
     return quota.snapshot()
 
 
