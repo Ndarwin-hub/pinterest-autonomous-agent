@@ -25,6 +25,12 @@ from wire_board_org import apply_agent_wiring
 from quota import quota
 
 apply_agent_wiring(agent_module)
+# Install provider failover after the wiring module has captured its reviewer.
+# This is intentionally additive: Pinterest publishing, image selection,
+# board routing, URL preservation and the zero-tolerance gate remain unchanged.
+import provider_failover
+provider_failover.install(__import__("wire_board_org"), __import__("ai_quality_gate"))
+
 from agent import process_pinterest_job
 from models import JobStore, JobStatus, Job
 
