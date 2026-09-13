@@ -38,17 +38,12 @@ def apply_agent_wiring(agent_mod:Any)->None:
     async def strict_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index):
         result=await orig_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index)
         pin_id=str(result.get("pin_id") or "")
-        if not pin_id:
-            raise RuntimeError(f"Pin {pin_index}: no Pin ID available for independent board verification.")
+        if not pin_id:raise RuntimeError(f"Pin {pin_index}: no Pin ID available for independent board verification.")
         check=await budgeted_run("PINTEREST_GET_PIN",{"pin_id":pin_id},retries=0)
         actual=str(check.get("board_id") or ((check.get("board") or {}).get("id") if isinstance(check.get("board"),dict) else "") or "")
-        if not actual:
-            raise RuntimeError(f"Pin {pin_index} ({pin_id}): independent Pinterest fetch returned no board_id; refusing to accept unverifiable board membership.")
-        if actual != str(board_id):
-            raise RuntimeError(f"Pin {pin_index} ({pin_id}): board verification mismatch. Intended board {board_id}, actual board {actual}.")
-        result["board_id"] = actual
-        result["board_verified_independently"] = True
-        return result
+        if not actual:raise RuntimeError(f"Pin {pin_index} ({pin_id}): independent Pinterest fetch returned no board_id; refusing to accept unverifiable board membership.")
+        if actual!=str(board_id):raise RuntimeError(f"Pin {pin_index} ({pin_id}): board verification mismatch. Intended board {board_id}, actual board {actual}.")
+        result["board_id"]=actual; result["board_verified_independently"]=True; return result
     async def research(url,job_store,job_id):
         p=await orig_research(url,job_store,job_id); p["url"]=url; p["category"]=detect_product_category(p); return p
     async def board(product,job_store,job_id):
@@ -56,29 +51,32 @@ def apply_agent_wiring(agent_mod:Any)->None:
         data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
         category=(product.get("category") or "general").lower(); preferred=preferred_board_name(category); mid=find_matching_board(items,preferred)
         if mid:
-            if str(mid) in LEGACY_BOARD_IDS:
-                raise RuntimeError("Legacy board ID selected for a new Pin; refusing publication.")
+            if str(mid) in LEGACY_BOARD_IDS:raise RuntimeError("Legacy board ID selected for a new Pin; refusing publication.")
             for b in items:
                 bid=str(b.get("id") or b.get("board_id") or "")
-                if bid == str(mid) and (b.get("name") or "").strip() in LEGACY_BOARD_NAMES:
-                    raise RuntimeError("Legacy board name selected for a new Pin; refusing publication.")
+                if bid==str(mid) and (b.get("name") or "").strip() in LEGACY_BOARD_NAMES:raise RuntimeError("Legacy board name selected for a new Pin; refusing publication.")
             return mid
         fallback=find_matching_board(items,DEFAULT_BOARD_NAME)
         if fallback:
-            if str(fallback) in LEGACY_BOARD_IDS:
-                raise RuntimeError("Legacy board ID selected as fallback; refusing publication.")
+            if str(fallback) in LEGACY_BOARD_IDS:raise RuntimeError("Legacy board ID selected as fallback; refusing publication.")
             return fallback
         raise RuntimeError("No verified permanent Pinterest board is available for this product; automatic board creation is disabled.")
     def build_review_items(pins,product):
         return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
     def failed_indexes(review,pin_count):
+        status=review.get("status")
+        # AI outage/deterministic-pass is not a product-quality failure. Do not
+        # trigger recovery or publish-blocking retries for infrastructure errors.
+        if status=="AI_REVIEW_UNAVAILABLE" or status=="AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED":return set()
         if review.get("final_reviewer") in ("grok","grok_composio"):
             results=review.get("grok") or []
             return {i+1 for i,x in enumerate(results[:pin_count]) if not (isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85)}
-        if review.get("final_reviewer")=="gemini":
-            approved={int(x) for x in (review.get("gemini") or {}).get("approved_indexes",[]) if str(x).isdigit()}
-            scores=(review.get("gemini") or {}).get("scores") or {}
+        if review.get("final_reviewer") in ("gemini","gemini_composio"):
+            gem=review.get("gemini") or []
+            if isinstance(gem,list):return {i+1 for i,x in enumerate(gem[:pin_count]) if not (isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85)}
+            approved={int(x) for x in gem.get("approved_indexes",[]) if str(x).isdigit()}; scores=gem.get("scores") or {}
             return {i for i in range(1,pin_count+1) if i not in approved or int(scores.get(str(i),0))<85}
+        if status=="DETERMINISTIC_VALIDATION_FAILED":return set(range(1,pin_count+1))
         return set(range(1,pin_count+1))
     async def process(job_id,url,job_store):
         token=_call_budget.set(CallBudget()); b=_call_budget.get()
@@ -104,41 +102,36 @@ def apply_agent_wiring(agent_mod:Any)->None:
             while True:
                 review_items=build_review_items(pins,product)
                 job_store.update(job_id,progress="Composio Grok visual review" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
-                review=await review_batch(review_items, composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
+                review=await review_batch(review_items,composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
                 if review.get("approved"):break
                 failed=failed_indexes(review,len(pins))
-                if not failed:break
-                if recovery_rounds>=MAX_RECOVERY_ROUNDS:
-                    raise RuntimeError("Zero-tolerance AI quality gate blocked publication after automatic recovery attempts: "+str(review.get("reason")))
+                if not failed:
+                    if review.get("status")=="AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED":break
+                    if review.get("status")=="AI_REVIEW_UNAVAILABLE":
+                        raise RuntimeError("Visual AI reviewer unavailable and no safe deterministic fallback passed; refusing publication.")
+                if recovery_rounds>=MAX_RECOVERY_ROUNDS:raise RuntimeError("Zero-tolerance AI quality gate blocked publication after automatic recovery attempts: "+str(review.get("reason")))
                 replaced=0; refreshed=False
                 for idx in sorted(failed):
                     p=pins[idx-1]; pool=p.get("candidate_pool") or []; cursor=int(p.get("candidate_cursor") or 0); next_candidate=None
                     while cursor+1<len(pool):
                         cursor+=1; c=pool[cursor]; u=c.get("url")
-                        if not u or u not in used:
-                            next_candidate=c;break
+                        if not u or u not in used:next_candidate=c;break
                     p["candidate_cursor"]=cursor
                     if not next_candidate and not refreshed and b.image_search_invocations+3<=MAX_IMAGE_SEARCH_CALLS:
-                        extra=await choose_candidates(product,p["strategy"],idx,used,agent_mod)
-                        refreshed=True
+                        extra=await choose_candidates(product,p["strategy"],idx,used,agent_mod); refreshed=True
                         if extra:
-                            p["candidate_pool"]=(pool or [])+extra
-                            pool=p["candidate_pool"]
-                            cursor=int(p.get("candidate_cursor") or 0)
+                            p["candidate_pool"]=(pool or [])+extra; pool=p["candidate_pool"]; cursor=int(p.get("candidate_cursor") or 0)
                             while cursor+1<len(pool):
                                 cursor+=1; c=pool[cursor]; u=c.get("url")
-                                if not u or u not in used:
-                                    next_candidate=c;break
+                                if not u or u not in used:next_candidate=c;break
                             p["candidate_cursor"]=cursor
                     if next_candidate:
                         old=p["image"]; old_url=old.get("url")
                         if old_url:used.discard(old_url)
-                        p["image"]=next_candidate; p["image_ref"]=next_candidate.get("url") or (f"data:image/jpeg;base64,{next_candidate['value']}" if next_candidate.get("value") else "")
-                        p["candidate_count"]=len(p.get("candidate_pool") or [])
+                        p["image"]=next_candidate; p["image_ref"]=next_candidate.get("url") or (f"data:image/jpeg;base64,{next_candidate['value']}" if next_candidate.get("value") else ""); p["candidate_count"]=len(p.get("candidate_pool") or [])
                         if next_candidate.get("url"):used.add(next_candidate["url"])
                         resources.add(next_candidate.get("provider") or "unknown"); replaced+=1
-                if replaced==0:
-                    raise RuntimeError("Zero-tolerance AI quality gate blocked publication: failed Pin(s) had no unused prevalidated replacement candidates and the adaptive 40-call budget cannot safely buy another recovery round.")
+                if replaced==0:raise RuntimeError("Zero-tolerance AI quality gate blocked publication: failed Pin(s) had no unused prevalidated replacement candidates and the adaptive 40-call budget cannot safely buy another recovery round.")
                 recovery_rounds+=1
             published=[]; errors=[]
             for p in pins:
@@ -148,7 +141,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
                 except Exception as e:errors.append({"pin_number":p["pin_number"],"error":str(e)})
             if len(published)!=5:raise RuntimeError(f"Zero-tolerance publish failed: {len(published)}/5 Pins published.")
-            return {"product_name":product.get("name"),"source_url":url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":"5/5 Pins published only after multi-angle image search, hard image gates, global candidate comparison, adaptive recovery, final AI approval and independent board verification."}
+            return {"product_name":product.get("name"),"source_url":url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":"5/5 Pins published only after multi-angle image search, hard image gates, global candidate comparison, adaptive recovery, final AI approval/failover or deterministic safety validation, and independent board verification."}
         finally:_call_budget.reset(token)
     agent_mod.run_composio_tool=budgeted_run; agent_mod.publish_and_verify=strict_publish; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
     logger.info("Zero-tolerance image sourcing + multi-angle comparison + adaptive recovery + 40-call budget + strict board routing/verification wiring applied")
