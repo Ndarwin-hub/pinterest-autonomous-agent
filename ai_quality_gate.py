@@ -89,24 +89,25 @@ async def _composio_grok_one(item:Dict[str,Any],run_tool:Callable[[str,Dict[str,
     return None
 
 async def review_batch(items:List[Dict[str,Any]], composio_run:Optional[Callable[[str,Dict[str,Any],int],Awaitable[Dict[str,Any]]]]=None)->Dict[str,Any]:
-    # Prefer the already-connected Composio Grok account when available. Each
-    # candidate consumes exactly one managed Composio call, so the caller's
-    # hard job budget remains authoritative.
+    # Prefer the already-connected Composio Grok account when available.
     if composio_run is not None and not XAI_API_KEY:
         grok=await asyncio.gather(*(_composio_grok_one(x,composio_run) for x in items))
         passed=all(isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85 for x in grok)
         if all(x is not None for x in grok):
-            return {"approved":passed,"final_reviewer":"grok_composio","reason":"All Pins passed the connected Composio Grok final approval." if passed else "Composio Grok final approval failed.","grok":grok}
-        # Do not silently publish if the connected reviewer cannot inspect an image.
-        return {"approved":False,"final_reviewer":"grok_composio","reason":"Connected Composio Grok could not return a valid visual review; zero-tolerance policy blocks publication.","grok":grok}
+            return {"approved":passed,"final_reviewer":"grok_composio","status":"AI_REVIEW_PASSED" if passed else "AI_REVIEW_REJECTED","tool_failure":False,"reason":"All Pins passed the connected Composio Grok final approval." if passed else "Composio Grok final approval failed.","grok":grok}
+        # Tool unavailability is not a product-quality rejection. The failover
+        # layer must be allowed to try Gemini or deterministic validation.
+        return {"approved":False,"final_reviewer":"grok_composio","status":"AI_REVIEW_UNAVAILABLE","tool_failure":True,"reason":"Connected Composio Grok did not return a valid visual review for every candidate.","grok":grok}
     gem=await _gemini(items)
     if XAI_API_KEY:
         grok=await asyncio.gather(*(_grok_one(x) for x in items)); passed=all(isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85 for x in grok)
-        return {"approved":passed,"final_reviewer":"grok","reason":"All Pins passed Grok final approval." if passed else "Grok final approval failed.","gemini":gem,"grok":grok}
+        if all(x is not None for x in grok):
+            return {"approved":passed,"final_reviewer":"grok","status":"AI_REVIEW_PASSED" if passed else "AI_REVIEW_REJECTED","tool_failure":False,"reason":"All Pins passed Grok final approval." if passed else "Grok final approval failed.","gemini":gem,"grok":grok}
+        return {"approved":False,"final_reviewer":"grok","status":"AI_REVIEW_UNAVAILABLE","tool_failure":True,"reason":"Direct Grok did not return a valid visual review for every candidate.","gemini":gem,"grok":grok}
     if isinstance(gem,dict):
         approved=gem.get("approved_indexes") or []; scores=gem.get("scores") or {}; passed=len(approved)==len(items) and all(int(scores.get(str(i),0))>=85 for i in range(1,len(items)+1))
-        return {"approved":passed,"final_reviewer":"gemini","reason":"Grok unavailable; Gemini is final reviewer." if passed else "Gemini final review failed.","gemini":gem}
-    return {"approved":False,"final_reviewer":"none","reason":"No visual AI reviewer is available; zero-tolerance policy blocks publication."}
+        return {"approved":passed,"final_reviewer":"gemini","status":"AI_REVIEW_PASSED" if passed else "AI_REVIEW_REJECTED","tool_failure":False,"reason":"Gemini final review passed." if passed else "Gemini final review failed.","gemini":gem}
+    return {"approved":False,"final_reviewer":"none","status":"AI_REVIEW_UNAVAILABLE","tool_failure":True,"reason":"No visual AI reviewer returned a valid review."}
 
 async def _gemini(items:List[Dict[str,Any]])->Optional[Dict[str,Any]]:
     if not GEMINI_API_KEY:return None
