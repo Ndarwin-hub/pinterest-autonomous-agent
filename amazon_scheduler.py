@@ -10,6 +10,9 @@ from daily_ledger import ledger, SLOT_COUNT, BATCH_SIZE
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
 SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60))); SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes"); SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
 EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]]; ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]]; WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
+def pinterest_five_verified(result:Dict[str,Any])->bool:
+    pins=result.get("pins") if isinstance(result,dict) else None
+    return isinstance(pins,list) and len(pins)==5 and all(isinstance(p,dict) and bool(p.get("verified")) for p in pins)
 class AmazonScheduler:
     def __init__(self): self._task=None; self._stop=asyncio.Event(); self.status={"running":False,"dormant_reason":None,"last_tick":None,"mode":SCHEDULER_MODE,"current_batch":None}
     def gate_status(self,live_boards=None):
@@ -57,7 +60,7 @@ class AmazonScheduler:
         live=await list_boards(); gate=self.gate_status(live)
         if not gate["ready"]: self.status["dormant_reason"]="; ".join(gate["blocking_reasons"]); return {"status":"blocked","batch":batch_index,"reasons":gate["blocking_reasons"]}
         specs,_=build_slot_specs(live)
-        if len(specs)<SLOT_COUNT: return {"status":"blocked","batch":batch_index,"reason":"15 daily slots unavailable"}
+        if len(specs)<SLOT_COUNT:return {"status":"blocked","batch":batch_index,"reason":"15 daily slots unavailable"}
         day=ledger.ensure_day(slots_spec=specs); ledger.reclaim_stale_processing(day); owner=f"batch-{batch_index}-{uuid.uuid4().hex}"; claim=ledger.try_begin_batch(day,batch_index,owner); wait_cycles=0
         while not claim["acquired"] and claim.get("status")=="busy" and wait_cycles<160:
             await asyncio.sleep(15); wait_cycles+=1; claim=ledger.try_begin_batch(day,batch_index,owner)
@@ -74,7 +77,7 @@ class AmazonScheduler:
             result={"status":"completed","day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors}; ledger.complete_batch(day,batch_index,owner,result_json=json.dumps(result,separators=(",",":"))); return result
         except Exception as e:
             logger.exception("Amazon batch %s failed",batch_index); ledger.complete_batch(day,batch_index,owner,status="failed",error=str(e)[:500]); raise
-        finally: self.status["current_batch"]=None
+        finally:self.status["current_batch"]=None
     async def _process_slot(self,slot,enqueue,wait_job,day):
         n=int(slot["slot"]); attempts=int(slot.get("replacement_attempts") or 0); exclude=set()
         while attempts<MAX_REPLACEMENTS_PER_SLOT:
@@ -84,11 +87,11 @@ class AmazonScheduler:
             try: result=await enqueue(url)
             except Exception as e: attempts+=1; ledger.mark_slot(n,status="failed_open",day=day,error=str(e)[:500]); continue
             job_id=result.get("job_id")
-            if result.get("status")=="completed": ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url); return True
+            if result.get("status")=="completed" and pinterest_five_verified(result): ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url); return True
             if wait_job and job_id:
                 final=await wait_job(job_id)
-                if final.get("status")=="completed": ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url); return True
-                attempts+=1; ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(final.get("error") or "job_failed")[:500]); continue
+                if final.get("status")=="completed" and pinterest_five_verified(final.get("result") or {}): ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url); return True
+                attempts+=1; ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(final.get("error") or "five_pin_verification_failed")[:500]); continue
             attempts+=1; ledger.mark_slot(n,status="failed_open",day=day,error="job_not_completed"); continue
         ledger.mark_slot(n,status="exhausted",day=day,error="max_replacements"); return False
 amazon_scheduler=AmazonScheduler()
