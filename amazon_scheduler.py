@@ -47,7 +47,7 @@ class AmazonScheduler:
         if not gate["ready"]: self.status["dormant_reason"]="; ".join(gate["blocking_reasons"]); return
         self.status["dormant_reason"]=None; specs,_=build_slot_specs(live)
         if not specs:return
-        day=ledger.ensure_day(slots_spec=specs)
+        day=ledger.ensure_day(slots_spec=specs); ledger.reclaim_stale_processing(day)
         if ledger.is_day_complete(day):return
         slot=ledger.next_pending_slot(day)
         if slot and ledger.claim_slot(day,int(slot["slot"])): await self._process_slot(slot,enqueue,wait_job,day)
@@ -58,14 +58,11 @@ class AmazonScheduler:
         if not gate["ready"]: self.status["dormant_reason"]="; ".join(gate["blocking_reasons"]); return {"status":"blocked","batch":batch_index,"reasons":gate["blocking_reasons"]}
         specs,_=build_slot_specs(live)
         if len(specs)<SLOT_COUNT: return {"status":"blocked","batch":batch_index,"reason":"15 daily slots unavailable"}
-        day=ledger.ensure_day(slots_spec=specs); owner=f"batch-{batch_index}-{uuid.uuid4().hex}"
-        claim=ledger.try_begin_batch(day,batch_index,owner)
-        wait_cycles=0
+        day=ledger.ensure_day(slots_spec=specs); ledger.reclaim_stale_processing(day); owner=f"batch-{batch_index}-{uuid.uuid4().hex}"; claim=ledger.try_begin_batch(day,batch_index,owner); wait_cycles=0
         while not claim["acquired"] and claim.get("status")=="busy" and wait_cycles<160:
             await asyncio.sleep(15); wait_cycles+=1; claim=ledger.try_begin_batch(day,batch_index,owner)
         if not claim["acquired"]: return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json"),"active_batch":claim.get("active_batch")}
-        self.status.update({"current_batch":batch_index,"dormant_reason":None})
-        first=(batch_index-1)*BATCH_SIZE+1; last=first+BATCH_SIZE-1; successes=0; attempted=0; errors=[]
+        self.status.update({"current_batch":batch_index,"dormant_reason":None}); first=(batch_index-1)*BATCH_SIZE+1; last=first+BATCH_SIZE-1; successes=0; attempted=0; errors=[]
         try:
             for slot_no in range(first,last+1):
                 slot=ledger.next_pending_slot(day,slot_no,slot_no)
@@ -74,8 +71,7 @@ class AmazonScheduler:
                 attempted+=1; ok=await self._process_slot(slot,enqueue,wait_job,day)
                 if ok: successes+=1
                 else: errors.append({"slot":slot_no,"status":"failed_or_exhausted"})
-            result={"status":"completed","day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors}
-            ledger.complete_batch(day,batch_index,owner,result_json=json.dumps(result,separators=(",",":"))); return result
+            result={"status":"completed","day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors}; ledger.complete_batch(day,batch_index,owner,result_json=json.dumps(result,separators=(",",":"))); return result
         except Exception as e:
             logger.exception("Amazon batch %s failed",batch_index); ledger.complete_batch(day,batch_index,owner,status="failed",error=str(e)[:500]); raise
         finally: self.status["current_batch"]=None

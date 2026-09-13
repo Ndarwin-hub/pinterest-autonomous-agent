@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, sqlite3, threading, time
 from datetime import datetime, timezone, date
 from pathlib import Path
-DATA=Path(os.getenv("DATA_DIR", "/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("DAILY_LEDGER_DB_PATH",str(DATA/"amazon_daily_ledger.db"))); _lock=threading.Lock(); SLOT_COUNT=15; BATCH_SIZE=5; BATCH_LEASE_SEC=int(os.getenv("AMAZON_BATCH_LEASE_SEC","2700"))
+DATA=Path(os.getenv("DATA_DIR", "/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("DAILY_LEDGER_DB_PATH",str(DATA/"amazon_daily_ledger.db"))); _lock=threading.Lock(); SLOT_COUNT=15; BATCH_SIZE=5; BATCH_LEASE_SEC=int(os.getenv("AMAZON_BATCH_LEASE_SEC","2700")); SLOT_PROCESSING_LEASE_SEC=int(os.getenv("AMAZON_SLOT_PROCESSING_LEASE_SEC","2700"))
 class DailyLedger:
     def __init__(self,db_path=DB_PATH): self.db_path=Path(db_path); self._init()
     def _conn(self):
@@ -19,6 +19,16 @@ class DailyLedger:
             c=self._conn(); c.execute("INSERT OR IGNORE INTO daily_days(day,status,success_count,updated_at) VALUES(?,?,0,?)",(day,"in_progress",now))
             for s in slots_spec or []: c.execute("INSERT OR IGNORE INTO daily_slots(day,slot,target_board_name,target_board_id,slot_kind,status,updated_at) VALUES(?,?,?,?,?,?,?)",(day,int(s["slot"]),s.get("target_board_name"),s.get("target_board_id"),s.get("slot_kind","board"),"pending",now))
             c.commit(); c.close(); return day
+    def reclaim_stale_processing(self,day=None):
+        day=day or self.today_str(); cutoff=time.time()-SLOT_PROCESSING_LEASE_SEC
+        with _lock:
+            c=self._conn(); rows=c.execute("SELECT slot,updated_at FROM daily_slots WHERE day=? AND status='processing'",(day,)).fetchall(); reclaimed=0
+            for slot,updated in rows:
+                try: age=time.time()-datetime.fromisoformat(updated).timestamp()
+                except Exception: age=SLOT_PROCESSING_LEASE_SEC+1
+                if age>=SLOT_PROCESSING_LEASE_SEC:
+                    c.execute("UPDATE daily_slots SET status='failed_open',error='stale_processing_reclaimed',updated_at=? WHERE day=? AND slot=? AND status='processing'",(datetime.now(timezone.utc).isoformat(),day,slot)); reclaimed+=c.rowcount
+            c.commit(); c.close(); return reclaimed
     def get_day_status(self,day=None):
         day=day or self.today_str()
         with _lock:
@@ -29,24 +39,21 @@ class DailyLedger:
     def try_begin_batch(self,day,batch_index,owner):
         now=time.time(); iso=datetime.now(timezone.utc).isoformat()
         with _lock:
-            c=self._conn(); c.execute("BEGIN IMMEDIATE")
-            row=c.execute("SELECT status,owner,started_at,completed_at,result_json,error FROM batch_runs WHERE day=? AND batch_index=?",(day,batch_index)).fetchone()
+            c=self._conn(); c.execute("BEGIN IMMEDIATE"); row=c.execute("SELECT status,owner,started_at,completed_at,result_json,error FROM batch_runs WHERE day=? AND batch_index=?",(day,batch_index)).fetchone()
             if row:
                 status,old_owner,started,completed,result,error=row
                 if status=="completed": c.commit(); c.close(); return {"acquired":False,"status":"completed","result_json":result}
                 if status=="running":
                     try: age=now-datetime.fromisoformat(started).timestamp() if started else 0
                     except Exception: age=BATCH_LEASE_SEC+1
-                    if age < BATCH_LEASE_SEC: c.commit(); c.close(); return {"acquired":False,"status":"running","owner":old_owner}
+                    if age<BATCH_LEASE_SEC: c.commit(); c.close(); return {"acquired":False,"status":"running","owner":old_owner}
             active=c.execute("SELECT batch_index,owner,started_at FROM batch_runs WHERE day=? AND status='running' AND batch_index<>? LIMIT 1",(day,batch_index)).fetchone()
             if active:
                 try: age=now-datetime.fromisoformat(active[2]).timestamp() if active[2] else 0
                 except Exception: age=BATCH_LEASE_SEC+1
-                if age < BATCH_LEASE_SEC: c.commit(); c.close(); return {"acquired":False,"status":"busy","active_batch":active[0]}
-            if row:
-                c.execute("UPDATE batch_runs SET status='running',owner=?,started_at=?,completed_at=NULL,result_json=NULL,error=NULL,updated_at=? WHERE day=? AND batch_index=?",(owner,iso,iso,day,batch_index))
-            else:
-                c.execute("INSERT INTO batch_runs(day,batch_index,status,owner,started_at,updated_at) VALUES(?,?,?,?,?,?)",(day,batch_index,"running",owner,iso,iso))
+                if age<BATCH_LEASE_SEC: c.commit(); c.close(); return {"acquired":False,"status":"busy","active_batch":active[0]}
+            if row: c.execute("UPDATE batch_runs SET status='running',owner=?,started_at=?,completed_at=NULL,result_json=NULL,error=NULL,updated_at=? WHERE day=? AND batch_index=?",(owner,iso,iso,day,batch_index))
+            else: c.execute("INSERT INTO batch_runs(day,batch_index,status,owner,started_at,updated_at) VALUES(?,?,?,?,?,?)",(day,batch_index,"running",owner,iso,iso))
             c.commit(); c.close(); return {"acquired":True,"status":"running"}
     def complete_batch(self,day,batch_index,owner,status="completed",result_json=None,error=None):
         now=datetime.now(timezone.utc).isoformat()
