@@ -29,7 +29,6 @@ jobs:
         id: select
         shell: bash
         run: |
-          set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event.schedule }}" == "0 6 * * *" ]]; then
@@ -44,12 +43,15 @@ jobs:
       - name: Request GitHub OIDC token
         id: oidc
         shell: bash
+        env:
+          OIDC_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          OIDC_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
           set -euo pipefail
           response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -H "Authorization: Bearer $OIDC_REQUEST_TOKEN" \
             -H 'Accept: application/json; api-version=2.0' \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+            "$OIDC_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
           token=$(printf '%s' "$response" | jq -r '.value')
           test -n "$token" && test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"

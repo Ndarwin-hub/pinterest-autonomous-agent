@@ -3,20 +3,14 @@ from __future__ import annotations
 import os, sqlite3, threading, time
 from datetime import datetime, timezone, date
 from pathlib import Path
-DATA=Path(os.getenv("DATA_DIR", "/data" if Path("/data").exists() else "/tmp"))
-DB_PATH=Path(os.getenv("DAILY_LEDGER_DB_PATH",str(DATA/"amazon_daily_ledger.db")))
-_lock=threading.Lock(); SLOT_COUNT=15; BATCH_SIZE=5; BATCH_LEASE_SEC=int(os.getenv("AMAZON_BATCH_LEASE_SEC","5400"))
+DATA=Path(os.getenv("DATA_DIR", "/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("DAILY_LEDGER_DB_PATH",str(DATA/"amazon_daily_ledger.db"))); _lock=threading.Lock(); SLOT_COUNT=15; BATCH_SIZE=5; BATCH_LEASE_SEC=int(os.getenv("AMAZON_BATCH_LEASE_SEC","2700"))
 class DailyLedger:
     def __init__(self,db_path=DB_PATH): self.db_path=Path(db_path); self._init()
     def _conn(self):
         self.db_path.parent.mkdir(parents=True,exist_ok=True); c=sqlite3.connect(str(self.db_path),check_same_thread=False,timeout=30); c.execute("PRAGMA busy_timeout=30000"); return c
     def _init(self):
         with _lock:
-            c=self._conn();
-            c.execute("CREATE TABLE IF NOT EXISTS daily_days(day TEXT PRIMARY KEY,status TEXT NOT NULL,success_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)")
-            c.execute("CREATE TABLE IF NOT EXISTS daily_slots(day TEXT NOT NULL,slot INTEGER NOT NULL,target_board_name TEXT,target_board_id TEXT,slot_kind TEXT NOT NULL,status TEXT NOT NULL,selected_asin TEXT,selected_url TEXT,affiliate_url TEXT,replacement_attempts INTEGER NOT NULL DEFAULT 0,job_id TEXT,pinterest_verified INTEGER DEFAULT 0,error TEXT,completed_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,slot))")
-            c.execute("CREATE TABLE IF NOT EXISTS batch_runs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,started_at TEXT,completed_at TEXT,result_json TEXT,error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,batch_index))")
-            c.commit(); c.close()
+            c=self._conn(); c.execute("CREATE TABLE IF NOT EXISTS daily_days(day TEXT PRIMARY KEY,status TEXT NOT NULL,success_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_slots(day TEXT NOT NULL,slot INTEGER NOT NULL,target_board_name TEXT,target_board_id TEXT,slot_kind TEXT NOT NULL,status TEXT NOT NULL,selected_asin TEXT,selected_url TEXT,affiliate_url TEXT,replacement_attempts INTEGER NOT NULL DEFAULT 0,job_id TEXT,pinterest_verified INTEGER DEFAULT 0,error TEXT,completed_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,slot))"); c.execute("CREATE TABLE IF NOT EXISTS batch_runs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,started_at TEXT,completed_at TEXT,result_json TEXT,error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,batch_index))"); c.commit(); c.close()
     @staticmethod
     def today_str(): return date.today().isoformat()
     def ensure_day(self,day=None,slots_spec=None):
@@ -44,6 +38,12 @@ class DailyLedger:
                     try: age=now-datetime.fromisoformat(started).timestamp() if started else 0
                     except Exception: age=BATCH_LEASE_SEC+1
                     if age < BATCH_LEASE_SEC: c.commit(); c.close(); return {"acquired":False,"status":"running","owner":old_owner}
+            active=c.execute("SELECT batch_index,owner,started_at FROM batch_runs WHERE day=? AND status='running' AND batch_index<>? LIMIT 1",(day,batch_index)).fetchone()
+            if active:
+                try: age=now-datetime.fromisoformat(active[2]).timestamp() if active[2] else 0
+                except Exception: age=BATCH_LEASE_SEC+1
+                if age < BATCH_LEASE_SEC: c.commit(); c.close(); return {"acquired":False,"status":"busy","active_batch":active[0]}
+            if row:
                 c.execute("UPDATE batch_runs SET status='running',owner=?,started_at=?,completed_at=NULL,result_json=NULL,error=NULL,updated_at=? WHERE day=? AND batch_index=?",(owner,iso,iso,day,batch_index))
             else:
                 c.execute("INSERT INTO batch_runs(day,batch_index,status,owner,started_at,updated_at) VALUES(?,?,?,?,?,?)",(day,batch_index,"running",owner,iso,iso))
@@ -59,7 +59,7 @@ class DailyLedger:
             if not row or row[0] not in ("pending","failed_open"): c.commit(); c.close(); return False
             c.execute("UPDATE daily_slots SET status='processing',updated_at=? WHERE day=? AND slot=? AND status IN ('pending','failed_open')",(now,day,slot)); ok=c.rowcount==1; c.commit(); c.close(); return ok
     def next_pending_slot(self,day=None,slot_min=1,slot_max=SLOT_COUNT):
-        day=day or self.today_str();
+        day=day or self.today_str()
         with _lock:
             c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? AND status IN ('pending','failed_open') ORDER BY slot LIMIT 1",(day,slot_min,slot_max)).fetchone(); c.close()
         if not row:return None
@@ -67,8 +67,7 @@ class DailyLedger:
     def mark_slot(self,slot,*,status,day=None,selected_asin=None,selected_url=None,affiliate_url=None,job_id=None,pinterest_verified=False,error=None,inc_replacement=False):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
-            c=self._conn(); row=c.execute("SELECT replacement_attempts,status FROM daily_slots WHERE day=? AND slot=?",(day,slot)).fetchone(); attempts=(int(row[0]) if row else 0)+(1 if inc_replacement else 0)
-            old_status=row[1] if row else None
+            c=self._conn(); row=c.execute("SELECT replacement_attempts,status FROM daily_slots WHERE day=? AND slot=?",(day,slot)).fetchone(); attempts=(int(row[0]) if row else 0)+(1 if inc_replacement else 0); old_status=row[1] if row else None
             c.execute("UPDATE daily_slots SET status=?,selected_asin=COALESCE(?,selected_asin),selected_url=COALESCE(?,selected_url),affiliate_url=COALESCE(?,affiliate_url),replacement_attempts=?,job_id=COALESCE(?,job_id),pinterest_verified=?,error=?,completed_at=CASE WHEN ? IN ('success','exhausted') THEN ? ELSE completed_at END,updated_at=? WHERE day=? AND slot=?",(status,selected_asin,selected_url,affiliate_url,attempts,job_id,1 if pinterest_verified else 0,error,status,now,now,day,slot))
             if status=="success" and old_status!="success": c.execute("UPDATE daily_days SET success_count=success_count+1,updated_at=? WHERE day=?",(now,day))
             c.execute("UPDATE daily_days SET status='complete',updated_at=? WHERE day=? AND success_count>=?",(now,day,SLOT_COUNT)); c.commit(); c.close()

@@ -2,15 +2,13 @@
 from __future__ import annotations
 import asyncio, logging, os, uuid, json
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List
 from amazon_client import amazon_credentials_present
 from amazon_boards import build_slot_specs, REQUIRED_PRIMARY_SLOTS, classify_live_boards
 from amazon_discovery import MAX_REPLACEMENTS_PER_SLOT, discover_for_board, discover_global, is_dormant
 from daily_ledger import ledger, SLOT_COUNT, BATCH_SIZE
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
-SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60)))
-SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes")
-SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
+SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60))); SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes"); SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
 EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]]; ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]]; WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
 class AmazonScheduler:
     def __init__(self): self._task=None; self._stop=asyncio.Event(); self.status={"running":False,"dormant_reason":None,"last_tick":None,"mode":SCHEDULER_MODE,"current_batch":None}
@@ -21,8 +19,7 @@ class AmazonScheduler:
         if live_boards is not None and not info["scheduler_ready"]: reasons.append(f"Need {REQUIRED_PRIMARY_SLOTS} approved primary boards; have {info['primary_count']}")
         return {"credentials_present":creds,"scheduler_enabled_flag":SCHEDULER_ENABLED,"mode":SCHEDULER_MODE,"board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),"blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
     async def start(self,*,enqueue,list_boards,wait_job=None):
-        if SCHEDULER_MODE!="continuous":
-            self.status["mode"]=SCHEDULER_MODE; self.status["running"]=False; self.status["dormant_reason"]="external_mode"; return
+        if SCHEDULER_MODE!="continuous": self.status.update({"mode":SCHEDULER_MODE,"running":False,"dormant_reason":"external_mode"}); return
         if self._task and not self._task.done(): return
         self._stop.clear(); self._task=asyncio.create_task(self._loop(enqueue,list_boards,wait_job),name="amazon-scheduler")
     async def stop(self):
@@ -63,7 +60,10 @@ class AmazonScheduler:
         if len(specs)<SLOT_COUNT: return {"status":"blocked","batch":batch_index,"reason":"15 daily slots unavailable"}
         day=ledger.ensure_day(slots_spec=specs); owner=f"batch-{batch_index}-{uuid.uuid4().hex}"
         claim=ledger.try_begin_batch(day,batch_index,owner)
-        if not claim["acquired"]: return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json")}
+        wait_cycles=0
+        while not claim["acquired"] and claim.get("status")=="busy" and wait_cycles<160:
+            await asyncio.sleep(15); wait_cycles+=1; claim=ledger.try_begin_batch(day,batch_index,owner)
+        if not claim["acquired"]: return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json"),"active_batch":claim.get("active_batch")}
         self.status.update({"current_batch":batch_index,"dormant_reason":None})
         first=(batch_index-1)*BATCH_SIZE+1; last=first+BATCH_SIZE-1; successes=0; attempted=0; errors=[]
         try:
@@ -71,13 +71,11 @@ class AmazonScheduler:
                 slot=ledger.next_pending_slot(day,slot_no,slot_no)
                 if not slot: continue
                 if not ledger.claim_slot(day,slot_no): continue
-                attempted+=1
-                ok=await self._process_slot(slot,enqueue,wait_job,day)
+                attempted+=1; ok=await self._process_slot(slot,enqueue,wait_job,day)
                 if ok: successes+=1
                 else: errors.append({"slot":slot_no,"status":"failed_or_exhausted"})
             result={"status":"completed","day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors}
-            ledger.complete_batch(day,batch_index,owner,result_json=json.dumps(result,separators=(",",":")))
-            return result
+            ledger.complete_batch(day,batch_index,owner,result_json=json.dumps(result,separators=(",",":"))); return result
         except Exception as e:
             logger.exception("Amazon batch %s failed",batch_index); ledger.complete_batch(day,batch_index,owner,status="failed",error=str(e)[:500]); raise
         finally: self.status["current_batch"]=None
