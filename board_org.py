@@ -135,6 +135,9 @@ _FAMILY_RULES = [
         "camping", "hiking", "travel backpack", "packing cube", "packing cubes",
         "suitcase", "luggage", "carry-on", "carry on", "tent", "sleeping bag",
         "camping stove", "hiking poles", "travel adapter", "neck pillow",
+        "air mattress", "air bed", "airbed", "inflatable mattress", "inflatable bed",
+        "camping mattress", "camping air mattress", "dura-beam", "dura beam",
+        "pillow rest", "intex air", "portable inflatable",
     )),
     ("automotive", (
         "car charger", "car mount", "dash cam", "dashcam", "car vacuum", "automotive",
