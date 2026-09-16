@@ -1,0 +1,71 @@
+name: Apply verified partial publish fix
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply narrowly scoped partial-publish changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('wire_board_org.py')
+          s = p.read_text()
+          old = '            if len(published)!=5:raise RuntimeError(f"Zero-tolerance publish failed: {len(published)}/5 Pins published.")\n            return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":5,"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":"5/5 Pins published only after multi-angle image search, hard image gates, global candidate comparison, adaptive recovery, final AI approval/failover or deterministic safety validation, and independent board verification."}'
+          new = '            if not published:raise RuntimeError("No Pins were successfully published and verified.")\n            return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":f"{len(published)}/5 Pins published and independently verified; successful Pins preserved and failed Pins reported."}'
+          if old not in s: raise SystemExit('wire_board_org.py: expected 5/5 gate not found')
+          p.write_text(s.replace(old,new,1))
+
+          p = Path('quality_patch.py')
+          s = p.read_text()
+          old = '        if published < 5:\n            raise RuntimeError(f"Incomplete publish: {published}/5 pins; refusing partial success.")'
+          new = '        if published < 1:\n            raise RuntimeError("No Pins were successfully published; refusing empty success.")'
+          if old not in s: raise SystemExit('quality_patch.py: expected process gate not found')
+          s = s.replace(old,new,1)
+          old = '        if len(set(t.lower() for t in titles if t)) < 4:\n            raise RuntimeError("Pin title diversity too low; five near-duplicate titles refused.")'
+          new = '        required_unique_titles = min(4, published)\n        if len(set(t.lower() for t in titles if t)) < required_unique_titles:\n            raise RuntimeError(f"Pin title diversity too low; {required_unique_titles} unique title(s) required for {published} successful Pin(s).")'
+          if old not in s: raise SystemExit('quality_patch.py: expected title diversity gate not found')
+          p.write_text(s.replace(old,new,1))
+
+          p = Path('models.py')
+          s = p.read_text()
+          old = 'class JobStatus(str,Enum): QUEUED="queued"; RUNNING="running"; COMPLETED="completed"; FAILED="failed"'
+          new = 'class JobStatus(str,Enum): QUEUED="queued"; RUNNING="running"; COMPLETED="completed"; COMPLETED_PARTIAL="completed_partial"; FAILED="failed"'
+          if old not in s: raise SystemExit('models.py: expected JobStatus enum not found')
+          s = s.replace(old,new,1)
+          old = '    if st==JobStatus.COMPLETED:\n'
+          new = '    if st in (JobStatus.COMPLETED,JobStatus.COMPLETED_PARTIAL):\n'
+          if old not in s: raise SystemExit('models.py: expected completed reuse gate not found')
+          p.write_text(s.replace(old,new,1))
+
+          p = Path('main.py')
+          s = p.read_text()
+          old = '            if job.status.value in ("completed","failed"):return {"status":job.status.value,"error":job.error,"result":job.result}'
+          new = '            if job.status.value in ("completed","completed_partial","failed"):return {"status":job.status.value,"error":job.error,"result":job.result}'
+          if old not in s: raise SystemExit('main.py: expected Amazon wait terminal-status gate not found')
+          s = s.replace(old,new,1)
+          old = '        result=await process_pinterest_job(job_id,url,job_store); quota.record_job(True); result["quota"]=quota.snapshot(); job_store.update(job_id,status=JobStatus.COMPLETED,progress="Finished",result=result)'
+          new = '        result=await process_pinterest_job(job_id,url,job_store); quota.record_job(True); result["quota"]=quota.snapshot(); published_count=int(result.get("pins_published") or 0); final_status=JobStatus.COMPLETED_PARTIAL if 0 < published_count < 5 else JobStatus.COMPLETED; job_store.update(job_id,status=final_status,progress="Finished",result=result)'
+          if old not in s: raise SystemExit('main.py: expected run_job completion assignment not found')
+          p.write_text(s.replace(old,new,1))
+
+          print('Scoped partial-publish patch applied.')
+          PY
+
+          python -m compileall -q wire_board_org.py quality_patch.py models.py main.py
+          python -m pytest -q --disable-warnings --maxfail=1
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add wire_board_org.py quality_patch.py models.py main.py
+          git diff --cached --check
+          git commit -m 'fix: allow verified partial Pinterest publish success'
+          git push
