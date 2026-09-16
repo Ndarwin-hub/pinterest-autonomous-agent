@@ -74,7 +74,11 @@ class AmazonScheduler:
                 attempted+=1; ok=await self._process_slot(slot,enqueue,wait_job,day)
                 if ok: successes+=1
                 else: errors.append({"slot":slot_no,"status":"failed_or_exhausted"})
-            result={"status":"completed","day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors}; ledger.complete_batch(day,batch_index,owner,result_json=json.dumps(result,separators=(",",":"))); return result
+            status = "completed" if (attempted > 0 and successes >= attempted and not errors) else ("partial_failure" if successes > 0 else "failed")
+                if attempted > 0 and successes < attempted:
+                    status = "partial_failure" if successes > 0 else "failed"
+                result={"status":status,"day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted}
+                ledger.complete_batch(day,batch_index,owner,status=status,result_json=json.dumps(result,separators=(",",":"))); return result
         except Exception as e:
             logger.exception("Amazon batch %s failed",batch_index); ledger.complete_batch(day,batch_index,owner,status="failed",error=str(e)[:500]); raise
         finally:self.status["current_batch"]=None
@@ -91,7 +95,12 @@ class AmazonScheduler:
             if wait_job and job_id:
                 final=await wait_job(job_id)
                 if final.get("status")=="completed" and pinterest_five_verified(final.get("result") or {}): ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url); return True
-                attempts+=1; ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(final.get("error") or "five_pin_verification_failed")[:500]); continue
+                attempts+=1; ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(final.get("error") or "five_pin_verification_failed")[:500])
+                try:
+                    registry.record_blocked(asin=candidate.get("asin"), product_url=url, affiliate_url=url, job_id=job_id, notes="partial_or_failed_five_pin")
+                except Exception:
+                    pass
+                continue
             attempts+=1; ledger.mark_slot(n,status="failed_open",day=day,error="job_not_completed"); continue
         ledger.mark_slot(n,status="exhausted",day=day,error="max_replacements"); return False
 amazon_scheduler=AmazonScheduler()
