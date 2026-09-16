@@ -12,10 +12,10 @@ import json
 from typing import Any
 
 
-def install(agent_mod: Any) -> None:
+def install(agent_mod: Any) -> str:
     """Install one canonical section-aware, budget-aware publish/verify function."""
     if getattr(agent_mod, "_runtime_publish_hardening_installed", False):
-        return
+        return "already-installed"
 
     async def publish_and_verify(
         board_id: str,
@@ -115,3 +115,4 @@ def install(agent_mod: Any) -> None:
 
     agent_mod.publish_and_verify = publish_and_verify
     agent_mod._runtime_publish_hardening_installed = True
+    return "installed"
