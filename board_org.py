@@ -95,7 +95,8 @@ HEALTH_ROOT_TERMS = (
 GENERAL_RULES = (
     ("book", "books"), ("novel", "books"), ("textbook", "books"),
     ("cookware", "home"), ("kitchen", "home"), ("air fryer", "home"), ("coffee maker", "home"),
-    ("fashion", "fashion"), ("shoes", "fashion"), ("sneakers", "fashion"), ("clothing", "fashion"),
+    ("instant pot", "home"), ("pressure cooker", "home"), ("multicooker", "home"), ("slow cooker", "home"),
+    ("fashion", "fashion"), ("shoes", "fashion"), ("shoe", "fashion"), ("sneakers", "fashion"), ("sneaker", "fashion"), ("clothing", "fashion"),
     ("apparel", "fashion"), ("travel", "travel"), ("camping", "travel"), ("hiking", "travel"),
     ("pet supplies", "pets"), ("dog food", "pets"), ("cat food", "pets"),
     ("automotive", "automotive"), ("car accessories", "automotive"),
