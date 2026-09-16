@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger("pinterest-agent.quality")
-QUALITY_PATCH_VERSION = "identity-gate-v3"
+QUALITY_PATCH_VERSION = "seo-intent-v4"
 _GENERIC = {"amazon","amazon.com","amazon com","amazoncom","product","item","not found","product not found","unknown","unknown product","general","everything else","n/a","none","null",""}
 
 def _clean(value: str) -> str:
@@ -84,61 +84,125 @@ def install_identity(agent_mod) -> str:
         logger.info("QUALITY identity ok name=%r category=%s", product["name"], product["category"])
         return product
 
-    def _angle_copy(category, name, angle):
-        cat = (category or "").lower()
+
+    # --- search-intent SEO (metadata-driven; independent of board rules) ---
+    _PTYPE_MAP = [
+        ("office chair", ("office chair","executive chair","desk chair","ergonomic chair","task chair")),
+        ("running shoes", ("running shoe","sneaker","sneakers","athletic shoe","trainers")),
+        ("wireless earbuds", ("airpods","earbuds","earbud","true wireless")),
+        ("e-reader", ("kindle","paperwhite","e-reader","ereader")),
+        ("acne patches", ("acne patch","pimple patch","mighty patch","hydrocolloid")),
+        ("protein powder", ("whey protein","protein powder")),
+        ("tumbler", ("stanley","quencher","tumbler")),
+        ("ice maker", ("ice maker","ice machine")),
+        ("ice pack", ("ice pack","cold pack","reusable ice")),
+        ("baby wipes", ("baby wipe","baby wipes")),
+        ("cat litter", ("cat litter","litter box")),
+        ("screen protector", ("screen protector","screen guard")),
+        ("laptop charger", ("laptop charger","usb-c charger","usb c charger","charging cable")),
+        ("gaming headset", ("gaming headset","gaming headphones")),
+        ("microphone", ("lavalier","wireless mic","microphone")),
+        ("writing tablet", ("lcd writing","writing tablet","drawing tablet")),
+    ]
+    _PHRASES = {
+        "office chair": ["executive office chair","comfortable desk chair for home office","high-back office chair for work","ergonomic office chair for long hours","home office seating for focused work"],
+        "running shoes": ["cushioned running shoes for daily miles","everyday athletic sneakers for walking","comfortable running shoes for training","supportive sneakers for active days","lightweight running shoes for errands"],
+        "wireless earbuds": ["wireless earbuds for everyday listening","true wireless earbuds for commute","comfortable wireless earbuds for calls","compact earbuds for daily use","wireless audio for music and podcasts"],
+        "e-reader": ["e-reader for comfortable reading","lightweight e-reader for travel","digital reading device for books","paper-like e-reader for long sessions","portable e-reader for daily reading"],
+        "acne patches": ["acne patches for overnight spot care","hydrocolloid pimple patches","discreet acne patches for daily wear","spot treatment patches for blemishes","overnight pimple patches for clear skin"],
+        "protein powder": ["whey protein powder for workouts","protein powder for muscle recovery","everyday protein shake mix","post-workout protein powder","protein powder for fitness goals"],
+        "tumbler": ["insulated tumbler for all-day drinks","travel tumbler for hot and cold","large insulated water tumbler","everyday insulated drinkware","portable tumbler for work and travel"],
+        "ice maker": ["countertop ice maker for home","compact ice machine for kitchen","portable ice maker for parties","fast countertop ice maker","home ice maker for everyday use"],
+        "ice pack": ["reusable ice packs for injuries","cold pack for sports recovery","flexible ice pack for first aid","reusable cold packs for pain relief","ice packs for everyday injuries"],
+        "baby wipes": ["gentle baby wipes for sensitive skin","everyday baby wipes for diaper changes","soft baby wipes for newborns","fragrance-free baby wipes","baby wipes for on-the-go care"],
+        "cat litter": ["clumping cat litter for easy cleanup","low-dust cat litter for home","odor-control cat litter","everyday cat litter for multi-cat homes","cat litter for reliable odor control"],
+        "screen protector": ["screen protector for clear display protection","tempered glass screen protector","phone screen protector for daily use","scratch-resistant screen protector","screen protector for everyday protection"],
+        "laptop charger": ["USB-C laptop charger for travel","compact laptop charging cable","reliable USB-C charger for work","portable laptop charger for desk and bag","USB-C charging cable for everyday use"],
+        "gaming headset": ["gaming headset for clear communication","comfortable gaming headphones for long sessions","headset for multiplayer gaming","gaming headset with microphone","immersive gaming headset for PC and console"],
+        "microphone": ["wireless lavalier microphone for content","clip-on mic for clear audio","portable microphone for video and calls","lavalier mic for creators","wireless mic for everyday recording"],
+        "writing tablet": ["LCD writing tablet for kids","reusable drawing tablet for children","portable writing tablet for doodling","kids drawing tablet for travel","erasable writing tablet for practice"],
+    }
+    _GENERIC_PHRASES = ["practical everyday product for home use","useful option for daily routines","reliable product for home and work","simple choice for everyday needs","everyday product worth considering"]
+
+    def _infer_ptype(name, category):
         nl = name.lower()
-        if cat == "fashion" or any(k in nl for k in ("shoe","sneaker","boot")):
-            lines = {
-                "hero": (name, f"{name} - everyday cushioned footwear. See sizes and details on the product listing."),
-                "problem": (f"Need softer steps? Try {name[:50]}", f"Looking for more underfoot comfort? Explore {name} on the product listing."),
-                "benefit": (f"Why shoppers pick {name[:45]}", f"Cushioning-focused design for all-day wear. Review {name} on the listing."),
-                "usecase": (f"{name[:55]} for daily miles", f"From errands to easy movement - see {name} on the product page."),
-                "discovery": (f"Discover {name[:60]}", f"Discover {name}. Check colors and sizes on the product listing."),
-            }
-            return lines[angle]
-        if cat in {"audio"} or any(k in nl for k in ("airpods","headphone","earbud")):
-            lines = {
-                "hero": (name, f"{name} - wireless audio details on the product listing."),
-                "problem": (f"Upgrading your earbuds? {name[:45]}", f"Considering a wireless audio upgrade? Review {name} on the listing."),
-                "benefit": (f"Key details: {name[:55]}", f"See listed features for {name} on the product page."),
-                "usecase": (f"{name[:50]} for everyday listening", f"Everyday wireless listening - check {name} on the listing."),
-                "discovery": (f"Discover {name[:60]}", f"Discover {name}. Confirm the model on the product listing."),
-            }
-            return lines[angle]
-        if cat in {"home"} or any(k in nl for k in ("instant pot","cooker","kitchen","air fryer")):
-            lines = {
-                "hero": (name, f"{name} - kitchen multi-cooker style appliance. See details on the product listing."),
-                "problem": (f"One pot, fewer dishes: {name[:45]}", f"Want simpler weeknight cooking? Explore {name} on the listing."),
-                "benefit": (f"Why consider {name[:50]}", f"Review listed features for {name} on the product page."),
-                "usecase": (f"{name[:50]} for home cooking", f"Home cooking workflows - check {name} on the listing."),
-                "discovery": (f"Discover {name[:60]}", f"Discover {name}. Confirm the exact model on the listing."),
-            }
-            return lines[angle]
-        lines = {
-            "hero": (name, f"Explore {name} and review current product details on the listing."),
-            "problem": (f"Looking for {name[:50]}?", f"Considering {name}? Review the product listing before you buy."),
-            "benefit": (f"Key details: {name[:55]}", f"See listed details for {name} on the product page."),
-            "usecase": (f"{name[:55]} for everyday use", f"Everyday use for {name} - confirm details on the listing."),
-            "discovery": (f"Discover {name[:60]}", f"Discover {name} and review the current listing information."),
-        }
-        return lines[angle]
+        for ptype, hints in _PTYPE_MAP:
+            if any(h in nl for h in hints):
+                return ptype
+        return "product"
+
+    def _phrases(ptype):
+        ps = list(_PHRASES.get(ptype, _GENERIC_PHRASES))
+        while len(ps) < 5:
+            ps.append(_GENERIC_PHRASES[len(ps) % len(_GENERIC_PHRASES)])
+        return ps[:5]
+
+    def _short_brand(brand, name):
+        b = (brand or "").strip()
+        if not b:
+            return ""
+        if len(b) > 28:
+            b = b[:28].rsplit(" ", 1)[0]
+        if b.lower() in {"lcd","usb","usb-c","reusable","wireless","portable","countertop","original","mens","womens","kids","new","the","for","with"}:
+            return ""
+        return b
+
+    def _title(phrase, brand, name, angle):
+        b = _short_brand(brand, name)
+        title = phrase[0].upper() + phrase[1:] if phrase else name[:60]
+        if b and b.lower() not in title.lower():
+            sep = " | " if angle in ("hero","problem","usecase") else (" · " if angle == "benefit" else " — ")
+            title = f"{title}{sep}{b}"
+        title = re.sub(r"\s+", " ", title).strip()[:100]
+        if title.strip().lower() == name.strip().lower():
+            title = f"{phrase} | product details"[:100]
+        return title
+
+    def _desc(phrase, name, brand, angle):
+        b = _short_brand(brand, name)
+        open_ = {
+            "hero": f"Looking for {phrase}? This option is built for everyday use.",
+            "problem": f"If you need {phrase}, this is worth a closer look.",
+            "benefit": f"{phrase.capitalize()} can make daily routines simpler.",
+            "usecase": f"Whether at home or on the go, {phrase} fits real routines.",
+            "discovery": f"Discover {phrase} designed for practical everyday needs.",
+        }.get(angle, f"Explore {phrase}.")
+        mid = f" From {b}." if b else ""
+        mid += " Review the full product details and current options on the listing."
+        close = " Confirm size, color, and compatibility before you buy."
+        return re.sub(r"\s+", " ", open_ + mid + close).strip()[:500]
 
     def _seo(product):
         name = assert_valid_identity(product.get("name") or "", context="seo")
         category = _category(product)
         product["category"] = category
-        tokens = [x.lower() for x in re.findall(r"[A-Za-z0-9][A-Za-z0-9\'-]+", name)]
-        stop = {"the","and","for","with","from","amazon","com"}
-        keywords = []
-        for token in tokens:
-            if len(token)>=3 and token not in stop and token not in keywords: keywords.append(token)
+        brand = (product.get("brand") or _brand_from_name(name) or "").strip()
+        ptype = _infer_ptype(name, category)
+        phrases = _phrases(ptype)
+        angles = ["hero","problem","benefit","usecase","discovery"]
         out = []
-        for i, angle in enumerate(["hero","problem","benefit","usecase","discovery"]):
-            title, description = _angle_copy(category, name, angle)
+        used = set()
+        for i, angle in enumerate(angles):
+            phrase = phrases[i]
+            title = _title(phrase, brand, name, angle)
+            n = 0
+            while title.lower() in used and n < 3:
+                n += 1
+                title = f"{phrase} · option {n+1}"[:100]
+            used.add(title.lower())
             if _is_asin(title) or re.search(r"\bB0[A-Z0-9]{8}\b", title):
                 raise RuntimeError(f"Title contains ASIN; refused: {title!r}")
-            kw = keywords[max(0,i):max(0,i)+7] or keywords[:7]
-            out.append({"title": title[:100], "description": (description + (f" Keywords: {', '.join(kw)}." if kw else ""))[:500], "keywords": ", ".join(kw), "alt_text": f"{name} - {angle} product view"[:500], "strategy": agent_mod.STRATEGIES[i]["name"], "strategy_key": agent_mod.STRATEGIES[i]["key"]})
+            description = _desc(phrase, name, brand, angle)
+            kw_tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9\-']+", phrase.lower())
+            kw = ", ".join(list(dict.fromkeys(kw_tokens))[:6])
+            out.append({
+                "title": title[:100],
+                "description": description[:800],
+                "keywords": kw,
+                "alt_text": f"{name} - {angle} product view"[:500],
+                "strategy": agent_mod.STRATEGIES[i]["name"],
+                "strategy_key": agent_mod.STRATEGIES[i]["key"],
+            })
         return out
 
     agent_mod.research_product = _research
@@ -170,6 +234,13 @@ def install_process_gate(agent_mod) -> str:
         board_id = str(result.get("board_id") or "")
         if board_id == "987906936951147704" and cat in {"home", "fashion", "electronics", "electronics_root"}:
             raise RuntimeError(f"Wrong board Everything Else for category {cat!r}")
+        titles = [str(p.get("title") or "") for p in (result.get("pins") or [])]
+        if len(set(t.lower() for t in titles if t)) < 4:
+            raise RuntimeError("Pin title diversity too low; five near-duplicate titles refused.")
+        for p in result.get("pins") or []:
+            t = p.get("title") or ""
+            if t.strip().lower() == (pname or "").strip().lower():
+                raise RuntimeError(f"Published pin title is raw product name only; SEO diversity failed: {t!r}")
         result["quality_patch_version"] = QUALITY_PATCH_VERSION
         return result
 
