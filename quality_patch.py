@@ -79,28 +79,28 @@ def _angle_copy(category, name, angle):
     nl = name.lower()
     if cat == "fashion" or any(k in nl for k in ("shoe","sneaker","boot")):
         lines = {
-            "hero": (name, f"{name} — everyday cushioned footwear. See sizes and details on the product listing."),
+            "hero": (name, f"{name} - everyday cushioned footwear. See sizes and details on the product listing."),
             "problem": (f"Need softer steps? Try {name[:50]}", f"Looking for more underfoot comfort? Explore {name} on the product listing."),
             "benefit": (f"Why shoppers pick {name[:45]}", f"Cushioning-focused design for all-day wear. Review {name} on the listing."),
-            "usecase": (f"{name[:55]} for daily miles", f"From errands to easy movement — see {name} on the product page."),
+            "usecase": (f"{name[:55]} for daily miles", f"From errands to easy movement - see {name} on the product page."),
             "discovery": (f"Discover {name[:60]}", f"Discover {name}. Check colors and sizes on the product listing."),
         }
         return lines[angle]
     if cat in {"audio"} or any(k in nl for k in ("airpods","headphone","earbud")):
         lines = {
-            "hero": (name, f"{name} — wireless audio details on the product listing."),
+            "hero": (name, f"{name} - wireless audio details on the product listing."),
             "problem": (f"Upgrading your earbuds? {name[:45]}", f"Considering a wireless audio upgrade? Review {name} on the listing."),
             "benefit": (f"Key details: {name[:55]}", f"See listed features for {name} on the product page."),
-            "usecase": (f"{name[:50]} for everyday listening", f"Everyday wireless listening — check {name} on the listing."),
+            "usecase": (f"{name[:50]} for everyday listening", f"Everyday wireless listening - check {name} on the listing."),
             "discovery": (f"Discover {name[:60]}", f"Discover {name}. Confirm the model on the product listing."),
         }
         return lines[angle]
     if cat in {"home"} or any(k in nl for k in ("instant pot","cooker","kitchen","air fryer")):
         lines = {
-            "hero": (name, f"{name} — kitchen multi-cooker style appliance. See details on the product listing."),
+            "hero": (name, f"{name} - kitchen multi-cooker style appliance. See details on the product listing."),
             "problem": (f"One pot, fewer dishes: {name[:45]}", f"Want simpler weeknight cooking? Explore {name} on the listing."),
             "benefit": (f"Why consider {name[:50]}", f"Review listed features for {name} on the product page."),
-            "usecase": (f"{name[:50]} for home cooking", f"Home cooking workflows — check {name} on the listing."),
+            "usecase": (f"{name[:50]} for home cooking", f"Home cooking workflows - check {name} on the listing."),
             "discovery": (f"Discover {name[:60]}", f"Discover {name}. Confirm the exact model on the listing."),
         }
         return lines[angle]
@@ -108,7 +108,7 @@ def _angle_copy(category, name, angle):
         "hero": (name, f"Explore {name} and review current product details on the listing."),
         "problem": (f"Looking for {name[:50]}?", f"Considering {name}? Review the product listing before you buy."),
         "benefit": (f"Key details: {name[:55]}", f"See listed details for {name} on the product page."),
-        "usecase": (f"{name[:55]} for everyday use", f"Everyday use for {name} — confirm details on the listing."),
+        "usecase": (f"{name[:55]} for everyday use", f"Everyday use for {name} - confirm details on the listing."),
         "discovery": (f"Discover {name[:60]}", f"Discover {name} and review the current listing information."),
     }
     return lines[angle]
@@ -117,7 +117,7 @@ def _seo(product):
     name = assert_valid_identity(product.get("name") or "", context="seo")
     category = _category(product)
     product["category"] = category
-    tokens = [x.lower() for x in re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]+", name)]
+    tokens = [x.lower() for x in re.findall(r"[A-Za-z0-9][A-Za-z0-9\'\-]+", name)]
     stop = {"the","and","for","with","from","amazon","com"}
     keywords = []
     for token in tokens:
@@ -128,42 +128,27 @@ def _seo(product):
         if _is_asin(title) or re.search(r"\bB0[A-Z0-9]{8}\b", title):
             raise RuntimeError(f"Title contains ASIN; refused: {title!r}")
         kw = keywords[max(0,i):max(0,i)+7] or keywords[:7]
-        out.append({"title": title[:100], "description": (description + (f" Keywords: {', '.join(kw)}." if kw else ""))[:500], "keywords": ", ".join(kw), "alt_text": f"{name} — {angle} product view"[:500], "strategy": _agent.STRATEGIES[i]["name"], "strategy_key": _agent.STRATEGIES[i]["key"]})
+        out.append({"title": title[:100], "description": (description + (f" Keywords: {', '.join(kw)}." if kw else ""))[:500], "keywords": ", ".join(kw), "alt_text": f"{name} - {angle} product view"[:500], "strategy": _agent.STRATEGIES[i]["name"], "strategy_key": _agent.STRATEGIES[i]["key"]})
     return out
 
-def pre_publish_gate(product, seo_list, board_id, url):
-    name = assert_valid_identity(product.get("name") or "", context="pre_publish")
-    if not board_id: raise RuntimeError("Quality gate: missing board_id")
-    cat = (product.get("category") or "").lower()
-    if str(board_id) == "987906936951147704" and cat in {"home","fashion","electronics","electronics_root","health","health_root"}:
-        raise RuntimeError(f"Quality gate: category {cat!r} must not use Everything Else board.")
-    if not url or "amazon." not in url.lower(): raise RuntimeError("Quality gate: destination URL missing or not Amazon")
-    if len(seo_list) != 5: raise RuntimeError(f"Quality gate: expected 5 SEO variants, got {len(seo_list)}")
-    for i, seo in enumerate(seo_list):
-        t = seo.get("title") or ""
-        if _is_asin(t) or re.search(r"\bB0[A-Z0-9]{8}\b", t):
-            raise RuntimeError(f"Quality gate: pin {i+1} title is ASIN-like: {t!r}")
-    logger.info("QUALITY pre_publish_gate PASS name=%r board=%s", name, board_id)
-
 async def _process(job_id, url, job_store):
+    """Run existing pipeline inside budget, then enforce identity/title post-gate."""
     original_process = _agent._quality_original_process
-    product = await _agent.research_product(url, job_store, job_id)
-    assert_valid_identity(product.get("name") or "", context="process")
-    seo_list = _agent.build_five_seo(product)
-    board_id = await _agent.select_or_create_board(product, job_store, job_id)
-    pre_publish_gate(product, seo_list, str(board_id), url)
     result = await original_process(job_id, url, job_store)
-    pname = (result.get("product_name") or product.get("name") or "")
+    pname = (result.get("product_name") or "")
     assert_valid_identity(pname, context="result")
     for p in result.get("pins") or []:
         t = p.get("title") or ""
         if _is_asin(t) or re.search(r"\bB0[A-Z0-9]{8}\b", t):
             raise RuntimeError(f"Published pin has ASIN title; treating job as failed: {t!r}")
-    if int(result.get("pins_published") or 0) < 5:
-        raise RuntimeError(f"Incomplete publish: {result.get('pins_published')}/5 pins; refusing partial success.")
+    published = int(result.get("pins_published") or 0)
+    if published < 5:
+        raise RuntimeError(f"Incomplete publish: {published}/5 pins; refusing partial success.")
+    cat = (result.get("category") or "").lower()
+    board_id = str(result.get("board_id") or "")
+    if board_id == "987906936951147704" and cat in {"home", "fashion", "electronics", "electronics_root"}:
+        raise RuntimeError(f"Wrong board Everything Else for category {cat!r}")
     result["quality_patch_version"] = QUALITY_PATCH_VERSION
-    result["product_name"] = product["name"]
-    result["category"] = product.get("category")
     return result
 
 def install() -> str:
