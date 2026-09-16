@@ -219,9 +219,38 @@ def detect_product_category(product: Dict[str, Any]) -> str:
 
 
 
+
+def classify_with_confidence(product: Dict[str, Any]) -> Dict[str, Any]:
+    """Return category plus confidence for gates."""
+    text = _text(product)
+    name = _name_text(product)
+    haystack = f"{name} {text}"
+    for category, terms in _FAMILY_RULES:
+        for term in terms:
+            if _has_term(haystack, term):
+                multi = " " in term or "-" in term
+                in_name = _has_term(name, term)
+                confidence = "HIGH" if (multi and in_name) else "MEDIUM"
+                return {
+                    "category": category,
+                    "confidence": confidence,
+                    "matched_term": term,
+                    "match_in_name": in_name,
+                }
+    if re.search(r"\b(lazboy|la-z-boy|herman\s*miller|steelcase|secretlab)\b", haystack):
+        return {"category": "office", "confidence": "HIGH", "matched_term": "brand_office", "match_in_name": True}
+    if re.search(r"\bexecutive\b", haystack) and re.search(
+        r"\b(chair|seat|seating|furniture|office|desk|traditions|comfort|leather|recliner)\b",
+        haystack,
+    ):
+        return {"category": "office", "confidence": "MEDIUM", "matched_term": "executive+furniture", "match_in_name": True}
+    return {"category": "general", "confidence": "LOW", "matched_term": None, "match_in_name": False}
+
+
 def resolve_pinterest_destination(product: Dict[str, Any]) -> Dict[str, Any]:
     """Canonical destination used by every input path after normalization."""
-    category = detect_product_category(product)
+    info = classify_with_confidence(product)
+    category = info["category"]
     board_name = CATEGORY_BOARD_MAP.get(category, DEFAULT_BOARD_NAME)
     section_id = SECTION_IDS.get(category)
     board_id = PERMANENT_BOARD_IDS.get(board_name)
@@ -237,7 +266,13 @@ def resolve_pinterest_destination(product: Dict[str, Any]) -> Dict[str, Any]:
             "health_beauty_personal": "Beauty & Personal Care",
         }.get(category),
         "is_root": section_id is None,
-        "reason": "explicit section whitelist match" if section_id else "no matching section whitelist; parent-board root",
+        "confidence": info["confidence"],
+        "matched_term": info.get("matched_term"),
+        "reason": (
+            "explicit section whitelist match"
+            if section_id
+            else "no matching section whitelist; parent-board root"
+        ),
     }
 
 
