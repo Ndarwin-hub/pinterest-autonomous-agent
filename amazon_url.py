@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Optional, Tuple
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse
 
 import httpx
 
@@ -85,20 +85,22 @@ def _slug_from_product_url(url: str) -> str:
     return slug[:180]
 
 
-def canonicalize_amazon_product_url(url: str, tag: str = AFFILIATE_TAG) -> str:
+def canonicalize_amazon_product_url(
+    url: str, tag: str = AFFILIATE_TAG, preserve_slug: bool = False
+) -> str:
     asin = extract_asin_from_url(url)
     if not asin:
         raise ValueError(f"Cannot canonicalize: no ASIN in URL: {url!r}")
 
-    # Preserve a verified product slug when the redirect supplied one. This is
-    # important when Amazon's product page is bot/minimal-content on Railway:
-    # quality_patch can still recover a human product identity from the URL
-    # without weakening the identity gate. Normal /dp/ASIN inputs remain the
-    # compact canonical form.
-    slug = _slug_from_product_url(url)
-    if slug:
-        safe_slug = re.sub(r"[^A-Za-z0-9]+", "-", slug).strip("-")[:180]
-        return f"https://www.amazon.com/{safe_slug}/dp/{asin}?tag={tag}"
+    # For ordinary Amazon product URLs keep the existing compact /dp/ASIN
+    # canonical form. For a freshly-resolved short link, preserve the verified
+    # redirect slug so identity extraction can still work when Amazon serves a
+    # minimal/blocked page to Railway.
+    if preserve_slug:
+        slug = _slug_from_product_url(url)
+        if slug:
+            safe_slug = re.sub(r"[^A-Za-z0-9]+", "-", slug).strip("-")[:180]
+            return f"https://www.amazon.com/{safe_slug}/dp/{asin}?tag={tag}"
     return f"https://www.amazon.com/dp/{asin}?tag={tag}"
 
 
@@ -179,7 +181,7 @@ def resolve_amazon_product_url(url: str, tag: str = AFFILIATE_TAG) -> str:
             f"Resolved URL is a non-product Amazon page: {final_url!r}"
         )
 
-    canonical = canonicalize_amazon_product_url(final_url, tag=tag)
+    canonical = canonicalize_amazon_product_url(final_url, tag=tag, preserve_slug=True)
     if not is_amazon_us_product_url(canonical):
         raise RuntimeError(f"Canonicalization produced non-product URL: {canonical!r}")
 
