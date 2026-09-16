@@ -40,14 +40,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
             b.grok_invocations+=1
         b.reserve(slug); return await orig_run(slug,args or {},retries=0)
     async def strict_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index):
-        result=await orig_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index)
-        pin_id=str(result.get("pin_id") or "")
-        if not pin_id:raise RuntimeError(f"Pin {pin_index}: no Pin ID available for independent board verification.")
-        check=await budgeted_run("PINTEREST_GET_PIN",{"pin_id":pin_id},retries=0)
-        actual=str(check.get("board_id") or ((check.get("board") or {}).get("id") if isinstance(check.get("board"),dict) else "") or "")
-        if not actual:raise RuntimeError(f"Pin {pin_index} ({pin_id}): independent Pinterest fetch returned no board_id; refusing to accept unverifiable board membership.")
-        if actual!=str(board_id):raise RuntimeError(f"Pin {pin_index} ({pin_id}): board verification mismatch. Intended board {board_id}, actual board {actual}.")
-        result["board_id"]=actual; result["board_verified_independently"]=True; return result
+        # Pass-through; runtime_hardening owns single create+GET verification.
+        return await orig_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index)
     async def research(url,job_store,job_id):
         p=await orig_research(url,job_store,job_id)
         # Preserve resolved affiliate destination from quality_patch (short-URL canonicalization).
@@ -62,16 +56,30 @@ def apply_agent_wiring(agent_mod:Any)->None:
     async def board(product,job_store,job_id):
         job_store.update(job_id,progress="Selecting Pinterest board")
         data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
-        category=(product.get("category") or "general").lower(); preferred=preferred_board_name(category); mid=find_matching_board(items,preferred)
+        from board_org import classify_with_confidence
+        info=classify_with_confidence(product)
+        category=(info.get("category") or product.get("category") or "general").lower()
+        confidence=(info.get("confidence") or "LOW").upper()
+        preferred=preferred_board_name(category)
+        mid=find_matching_board(items,preferred)
         if mid:
             if str(mid) in LEGACY_BOARD_IDS:raise RuntimeError("Legacy board ID selected for a new Pin; refusing publication.")
             for b in items:
                 bid=str(b.get("id") or b.get("board_id") or "")
                 if bid==str(mid) and (b.get("name") or "").strip() in LEGACY_BOARD_NAMES:raise RuntimeError("Legacy board name selected for a new Pin; refusing publication.")
+            product["category"]=category
+            product["board_confidence"]=confidence
             return mid
+        if category not in ("general",) and confidence in ("HIGH","MEDIUM"):
+            raise RuntimeError(
+                f"Intended board {preferred!r} unavailable for category {category!r} "
+                f"(confidence={confidence}); refusing Everything Else fallback."
+            )
         fallback=find_matching_board(items,DEFAULT_BOARD_NAME)
         if fallback:
             if str(fallback) in LEGACY_BOARD_IDS:raise RuntimeError("Legacy board ID selected as fallback; refusing publication.")
+            product["category"]=category
+            product["board_confidence"]=confidence
             return fallback
         raise RuntimeError("No verified permanent Pinterest board is available for this product; automatic board creation is disabled.")
     def build_review_items(pins,product):
