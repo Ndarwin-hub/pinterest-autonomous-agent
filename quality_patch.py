@@ -15,7 +15,10 @@ _GENERIC = {"amazon","amazon.com","amazon com","amazoncom","product","item","not
 
 def _clean(value: str) -> str:
     value = unquote(str(value or "")).replace("+"," ").replace("_"," ").replace("-"," ")
+    # Strip storefront chrome from either end; do not treat real product titles as generic.
+    value = re.sub(r"^Amazon(?:\.com)?\s*[:|\-]\s*", "", value, flags=re.I)
     value = re.sub(r"\s*[-|:]\s*Amazon(?:\.com)?\s*$", "", value, flags=re.I)
+    value = re.sub(r"\s*[:|\-]\s*Home\s*&\s*Kitchen\s*$", "", value, flags=re.I)
     return re.sub(r"\s+", " ", value).strip(" -|:")[:200]
 
 def _is_asin(value: str) -> bool:
