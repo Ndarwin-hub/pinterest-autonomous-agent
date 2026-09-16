@@ -60,88 +60,144 @@ def current_section_id() -> Optional[str]:
 def _set_section(section_id: Optional[str]) -> None:
     _destination_section.set(section_id)
 
-# Explicit accessory/device exclusions run before device/product whitelists.
-# This prevents a primary device from inheriting an unrelated section.
-ELECTRONICS_ROOT_TERMS = (
-    "screen protector", "screen guard", "phone case", "smartphone case", "cell phone case",
-    "iphone case", "ipad case", "tablet case", "laptop bag", "laptop sleeve", "laptop case",
-    "computer bag", "headphones", "headphone", "earbuds", "earbud", "airpods",
-    "usb cable", "charging cable", "charge cable", "charger", "power bank", "mouse",
-    "keyboard", "webcam", "smartwatch", "smart watch", "camera", "gaming accessory",
-    "phone holder", "phone stand", "tablet stand", "stylus", "screen film",
-    # Dedicated e-readers are consumer electronics, not general products.
-    "kindle", "e-reader", "e reader", "ereader", "e-book reader", "ebook reader",
-)
-BABY_TERMS = (
-    "baby diaper", "baby diapers", "newborn diaper", "newborn diapers", "baby bottle",
-    "baby feeding", "baby stroller", "baby monitor", "baby carrier", "baby food",
-    "infant", "newborn", "toddler", "kids toy", "kids clothing", "children's toy",
-    "children toy", "childrens toy", "kids product",
-)
-BEAUTY_TERMS = (
-    "skincare", "skin care", "face serum", "facial serum", "moisturizer", "moisturiser",
-    "shampoo", "conditioner", "face wash", "cleanser", "sunscreen", "makeup", "cosmetic",
-    "cosmetics", "lipstick", "foundation", "mascara", "concealer", "toner", "body lotion",
-    "personal care", "beauty product", "hair care", "haircare", "perfume", "fragrance",
-)
-HEALTH_ROOT_TERMS = (
-    "yoga", "dumbbell", "dumbbells", "resistance band", "resistance bands", "exercise",
-    "fitness", "workout", "gym", "protein powder", "protein", "vitamin", "vitamins",
-    "supplement", "supplements", "blood pressure", "blood-pressure", "blood pressure monitor",
-    "fitness tracker", "treadmill", "exercise bike", "rowing machine", "weight bench",
-    "health monitor", "thermometer", "pulse oximeter", "first aid", "massage gun",
-)
 
-GENERAL_RULES = (
-    ("book", "books"), ("novel", "books"), ("textbook", "books"),
-    ("cookware", "home"), ("kitchen", "home"), ("air fryer", "home"), ("coffee maker", "home"),
-    ("instant pot", "home"), ("pressure cooker", "home"), ("multicooker", "home"), ("slow cooker", "home"),
-    ("fashion", "fashion"), ("shoes", "fashion"), ("shoe", "fashion"), ("sneakers", "fashion"), ("sneaker", "fashion"), ("clothing", "fashion"),
-    ("apparel", "fashion"), ("travel", "travel"), ("camping", "travel"), ("hiking", "travel"),
-    ("pet supplies", "pets"), ("dog food", "pets"), ("cat food", "pets"),
-    ("automotive", "automotive"), ("car accessories", "automotive"),
-    ("office", "office"), ("planner", "office"), ("desk organizer", "office"),
-)
-
-def _text(product: Dict[str, Any]) -> str:
-    fields = ("name", "title", "description", "product_type", "productType", "category", "subcategory", "brand")
-    return " ".join(str(product.get(k) or "") for k in fields).lower()
-
-def _name_text(product: Dict[str, Any]) -> str:
-    return " ".join(str(product.get(k) or "") for k in ("name", "title", "product_type", "productType")).lower()
+# Product-family rules: ordered most-specific -> broad. First match wins.
+_FAMILY_RULES = [
+    ("office", (
+        "office chair", "executive chair", "desk chair", "computer chair",
+        "ergonomic chair", "task chair", "workstation chair", "office seating",
+        "mesh chair", "swivel chair", "lazboy", "la-z-boy", "la z boy",
+        "herman miller", "steelcase", "secretlab", "traditions executive",
+        "executive office", "desk organizer", "desktop organizer", "file cabinet",
+        "filing cabinet", "desk lamp", "monitor arm", "monitor stand", "laptop stand",
+        "office supplies", "stapler", "whiteboard", "corkboard", "planner",
+        "standing desk", "sit stand desk", "office desk", "computer desk", "desk mat",
+    )),
+    ("health_beauty_personal", (
+        "skincare", "skin care", "face serum", "facial serum", "moisturizer",
+        "moisturiser", "shampoo", "conditioner", "face wash", "cleanser", "sunscreen",
+        "makeup", "cosmetic", "cosmetics", "lipstick", "foundation", "mascara",
+        "concealer", "toner", "body lotion", "personal care", "beauty product",
+        "hair care", "haircare", "perfume", "fragrance", "acne patch", "pimple patch",
+        "mighty patch", "hydrocolloid", "retinol", "niacinamide", "facial mask",
+        "sheet mask", "exfoliant", "body wash", "deodorant",
+    )),
+    ("health_baby_kids", (
+        "baby wipe", "baby wipes", "baby diaper", "baby diapers", "diaper", "diapers",
+        "newborn", "infant", "toddler", "baby bottle", "baby food", "baby stroller",
+        "baby monitor", "baby carrier", "pacifier", "crib", "onesie", "baby formula",
+        "nursing", "breast pump", "changing pad", "kids clothing", "children toy",
+        "childrens toy", "children's toy",
+    )),
+    ("pets", (
+        "cat litter", "litter box", "dog food", "cat food", "pet food", "dog leash",
+        "dog bed", "cat tree", "pet toy", "pet toys", "pet grooming", "pet supply",
+        "pet supplies", "aquarium", "fish tank", "bird cage", "puppy", "kitten",
+        "dog treat", "cat treat",
+    )),
+    ("fashion", (
+        "running shoe", "running shoes", "running sneaker", "running sneakers",
+        "athletic shoe", "athletic shoes", "jogging shoe", "trainers", "sneakers",
+        "sneaker", "shoe", "shoes", "boots", "boot", "sandals", "heels", "loafer",
+        "slip-on", "hoodie", "sweatshirt", "t-shirt", "tshirt", "jeans", "leggings",
+        "dress", "apparel", "clothing", "jacket", "coat", "socks", "handbag", "purse",
+        "wallet", "belt", "sunglasses", "baseball cap", "beanie", "scarf",
+    )),
+    ("games", (
+        "gaming headset", "gaming headphones", "gaming controller", "gaming mouse",
+        "gaming keyboard", "xbox", "playstation", "nintendo", "video game", "videogame",
+        "steam deck", "board game", "card game", "puzzle", "jigsaw",
+        "lcd writing tablet", "drawing tablet kids", "action figure", "lego",
+        "building blocks", "basketball", "soccer ball", "football", "tennis racket",
+        "baseball bat", "golf club", "sports equipment", "sporting goods", "rc car",
+        "stuffed animal", "toy car",
+    )),
+    ("travel", (
+        "camping", "hiking", "travel backpack", "packing cube", "packing cubes",
+        "suitcase", "luggage", "carry-on", "carry on", "tent", "sleeping bag",
+        "camping stove", "hiking poles", "travel adapter", "neck pillow",
+    )),
+    ("automotive", (
+        "car charger", "car mount", "dash cam", "dashcam", "car vacuum", "automotive",
+        "car care", "tire inflator", "jump starter", "car seat cover", "motor oil",
+        "windshield", "car accessory", "car accessories", "obd2",
+    )),
+    ("home", (
+        "instant pot", "air fryer", "coffee maker", "coffee machine", "pressure cooker",
+        "slow cooker", "multicooker", "cookware", "kitchen", "blender", "toaster",
+        "microwave", "dishwasher", "refrigerator", "ice maker", "countertop ice",
+        "ice machine", "stanley quencher", "tumbler", "water bottle", "vacuum cleaner",
+        "robot vacuum", "roomba", "bedding", "comforter", "pillow", "mattress",
+        "sheet set", "knife set", "cutting board", "dinnerware", "frying pan",
+        "saucepan", "air purifier", "humidifier", "dehumidifier", "space heater",
+        "laundry", "detergent", "trash can", "storage bin",
+    )),
+    ("health_root", (
+        "whey protein", "protein powder", "protein", "creatine", "pre-workout",
+        "preworkout", "vitamin", "vitamins", "supplement", "supplements", "yoga mat",
+        "yoga", "dumbbell", "dumbbells", "kettlebell", "resistance band",
+        "resistance bands", "treadmill", "exercise bike", "rowing machine",
+        "weight bench", "fitness", "workout", "gym", "massage gun", "foam roller",
+        "ice pack", "reusable ice", "cold pack", "first aid", "thermometer",
+        "pulse oximeter", "blood pressure", "fitness tracker",
+    )),
+    ("books", (
+        "paperback", "hardcover", "textbook", "novel", "cookbook", "self-help",
+        "self help", "audiobook",
+    )),
+    ("electronics_root", (
+        "airpods", "earbuds", "earbud", "headphones", "headphone", "wireless earbuds",
+        "bluetooth earbuds", "true wireless", "kindle", "e-reader", "e reader",
+        "ereader", "ebook reader", "e-book reader", "paperwhite", "screen protector",
+        "screen guard", "screen film", "phone case", "iphone case", "ipad case",
+        "tablet case", "smartphone case", "cell phone case", "charger", "charging cable",
+        "usb cable", "usb-c", "usb c", "power bank", "wireless charger", "magsafe",
+        "laptop bag", "laptop sleeve", "laptop case", "computer bag", "webcam",
+        "smartwatch", "smart watch", "camera", "action camera", "microphone",
+        "lavalier", "wireless mic", "usb microphone", "bluetooth speaker",
+        "smart speaker", "soundbar", "phone holder", "phone stand", "tablet stand",
+        "stylus", "hdmi", "usb hub",
+    )),
+    ("electronics_smartphones", (
+        "iphone", "ipad", "smartphone", "android phone", "cell phone", "mobile phone",
+        "galaxy tab", "galaxy s", "pixel phone", "tablet",
+    )),
+    ("electronics_pc_home", (
+        "macbook", "laptop", "notebook computer", "desktop pc", "desktop computer",
+        "gaming pc", "personal computer", "television", "monitor", "pc monitor",
+        "computer monitor", "mini pc", "chromebook",
+    )),
+]
 
 def _has_term(text: str, term: str) -> bool:
-    if term in ("tv", "pc"):
+    term = term.lower().strip()
+    if not term:
+        return False
+    if term in {"tv", "pc", "mic", "toy", "bag", "mat", "pad"}:
         return bool(re.search(rf"\b{re.escape(term)}\b", text))
-    return term in text
+    if " " in term or "-" in term:
+        return term in text
+    return bool(re.search(rf"\b{re.escape(term)}\b", text)) or term in text
 
 def detect_product_category(product: Dict[str, Any]) -> str:
-    """Return a routing key; section keys are strict whitelists."""
+    """Return a routing key using ordered product-family rules."""
     text = _text(product)
     name = _name_text(product)
-
-    if any(_has_term(text, t) for t in ELECTRONICS_ROOT_TERMS):
-        return "electronics_root"
-
-    smartphone_terms = ("iphone", "ipad", "smartphone", "android phone", "cell phone", "mobile phone", "galaxy tab", "tablet")
-    if any(_has_term(name, t) for t in smartphone_terms):
-        return "electronics_smartphones"
-
-    pc_terms = ("macbook", "laptop", "notebook computer", "desktop pc", "desktop computer", "gaming pc", "personal computer", "television", " tv ", "monitor")
-    if any(_has_term(name, t) for t in pc_terms):
-        return "electronics_pc_home"
-
-    if any(_has_term(name, t) for t in BABY_TERMS):
-        return "health_baby_kids"
-    if any(_has_term(name, t) for t in BEAUTY_TERMS):
-        return "health_beauty_personal"
-    if any(_has_term(text, t) for t in HEALTH_ROOT_TERMS):
-        return "health_root"
-
-    for term, category in GENERAL_RULES:
-        if _has_term(text, term):
-            return category
+    haystack = f"{name} {text}"
+    for category, terms in _FAMILY_RULES:
+        for term in terms:
+            if _has_term(haystack, term):
+                return category
+    if re.search(r"\b(lazboy|la-z-boy|herman\s*miller|steelcase|secretlab)\b", haystack):
+        return "office"
+    if re.search(r"\bexecutive\b", haystack) and re.search(
+        r"\b(chair|seat|seating|furniture|office|desk|traditions|comfort|leather|recliner)\b",
+        haystack,
+    ):
+        return "office"
     return "general"
+
+
 
 
 def resolve_pinterest_destination(product: Dict[str, Any]) -> Dict[str, Any]:
