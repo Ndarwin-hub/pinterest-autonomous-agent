@@ -17,13 +17,18 @@ PERMANENT_BOARD_IDS = {
     "Electronics & Gadgets": "987906936951145057",
     "Everything Else": "987906936951147704",
     "Fashion & Lifestyle": "987906936951147683",
-    "Games, Toys & Sports": "987906936951147684",
+    "Sports, Games & Toys": "987906936951147684",
     "Health & Fitness": "987906936951147682",
     "Home, Kitchen & Dining": "987906936951145744",
     "Office & Productivity": "987906936951148020",
     "Pet Supplies": "987906936951148021",
     "Travel & Camping": "987906936951147708",
 }
+BOARD_NAME_ALIASES = {
+    "Games, Toys & Sports": "Sports, Games & Toys",
+    "Sports Games & Toys": "Sports, Games & Toys",
+}
+
 SECTION_IDS = {
     "electronics_smartphones": "3856307780748685888",
     "electronics_pc_home": "3856307171131803008",
@@ -45,7 +50,7 @@ CATEGORY_BOARD_MAP = {
     "health": "Health & Fitness",
     "home": "Home, Kitchen & Dining",
     "books": "Books & Learning",
-    "games": "Games, Toys & Sports",
+    "games": "Sports, Games & Toys",
     "fashion": "Fashion & Lifestyle",
     "travel": "Travel & Camping",
     "pets": "Pet Supplies",
@@ -311,8 +316,9 @@ def find_matching_board(items: List[Any], preferred_name: str) -> Optional[str]:
 
 
 def _install_section_publish_patch():
-    """Legacy compatibility patch: inject the current section into Pin creation."""
-    try:
+    """Disabled: runtime_hardening owns the canonical publish path."""
+    return
+    try:  # pragma: no cover
         import agent, json
         original = getattr(agent, "publish_and_verify", None)
         if not original or getattr(original, "_section_aware", False):
@@ -342,4 +348,6 @@ def _install_section_publish_patch():
     except Exception:
         pass
 
-_install_section_publish_patch()
+
+# Legacy section publish patch is intentionally NOT auto-installed.
+# runtime_hardening.install() owns the single canonical publish+verify path.
