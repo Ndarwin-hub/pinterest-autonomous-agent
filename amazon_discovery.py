@@ -2,7 +2,7 @@
 from __future__ import annotations
 import logging
 from typing import Any,Dict,List,Optional
-from amazon_client import AmazonCreatorsClient,amazon_credentials_present,extract_asin_from_item,extract_detail_page_url,extract_title
+from amazon_client import AmazonCreatorsClient,amazon_credentials_present,extract_asin_from_item,extract_detail_page_url,extract_title,is_buyable_offer
 from amazon_boards import BOARD_SEARCH_PROFILES
 from published_registry import registry
 logger=logging.getLogger("pinterest-agent.amazon_discovery"); MAX_REPLACEMENTS_PER_SLOT=5
@@ -35,10 +35,39 @@ def _rank(i):
 def _rate(i):
     blob=_blob(i); hits=[(r,k) for k,r in RATES.items() if k in blob]
     return max(hits) if hits else (4.0,"all other categories planning proxy")
+def _is_amazon_us_detail(url: str) -> bool:
+    if not url or not str(url).startswith("http"):
+        return False
+    try:
+        from amazon_url import is_amazon_us_product_url, extract_asin_from_url, canonicalize_amazon_product_url
+        if is_amazon_us_product_url(url) and extract_asin_from_url(url):
+            return True
+        try:
+            canonicalize_amazon_product_url(url)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        low = url.lower()
+        return "amazon.com" in low and ("/dp/" in low or "/gp/product/" in low)
+
 def _cand(i):
-    asin=extract_asin_from_item(i); url=extract_detail_page_url(i)
-    if not asin or not url or registry.is_published(asin=asin,url=url): return None
-    rate,key=_rate(i); title=extract_title(i); rank=_rank(i); newest=int(any(x in title.lower() for x in ("newest","latest","2026")))
+    asin=extract_asin_from_item(i); url=extract_detail_page_url(i); title=extract_title(i)
+    if not asin or not url or not title or len(title.strip()) < 6:
+        return None
+    if not _is_amazon_us_detail(url):
+        return None
+    if not is_buyable_offer(i):
+        return None
+    if registry.is_published(asin=asin,url=url):
+        return None
+    try:
+        from amazon_url import canonicalize_amazon_product_url, extract_asin_from_url
+        if extract_asin_from_url(url):
+            url = canonicalize_amazon_product_url(url)
+    except Exception:
+        pass
+    rate,key=_rate(i); rank=_rank(i); newest=int(any(x in title.lower() for x in ("newest","latest","2026")))
     return {"asin":asin,"affiliate_url":url,"title":title,"sales_rank":rank,"commission_proxy_pct":rate,"commission_proxy_note":f"planning proxy: {key}; actual rate is determined by Amazon","newest_hint":newest,"raw":i}
 def _rank_board(items,profile):
     out=[]
