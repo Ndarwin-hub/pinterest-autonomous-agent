@@ -21,7 +21,7 @@ class PublishedRegistry:
         with _lock:
             c=self._conn()
             try:
-                if asin and c.execute("SELECT 1 FROM published_products WHERE asin=? AND status='success' LIMIT 1",(asin.upper(),)).fetchone(): return True
+                if asin and c.execute("SELECT 1 FROM published_products WHERE asin=? AND status IN ('success','blocked','partial_failed') LIMIT 1",(asin.upper(),)).fetchone(): return True
                 if url:
                     key=normalize_url_key(url)
                     if c.execute("SELECT 1 FROM published_products WHERE url_key=? AND status='success' LIMIT 1",(key,)).fetchone(): return True
@@ -41,4 +41,20 @@ class PublishedRegistry:
     def count_success(self):
         with _lock:
             c=self._conn(); n=c.execute("SELECT COUNT(*) FROM published_products WHERE status='success'").fetchone()[0]; c.close(); return int(n)
+    def record_blocked(self, *, asin, product_url=None, affiliate_url=None, job_id=None, notes=None, status="partial_failed"):
+        asin = (asin or "").upper() or None
+        if not asin:
+            return False
+        key = normalize_url_key(affiliate_url or product_url or asin)
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c = self._conn()
+            c.execute(
+                "INSERT INTO published_products(asin,product_url,affiliate_url,url_key,board_id,board_name,job_id,source,status,pinterest_verified,pin_ids,completed_at,created_at,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (asin, product_url, affiliate_url or product_url or "", key, None, None, job_id, "manual", status, 0, "", now, now, notes),
+            )
+            c.commit()
+            c.close()
+            return True
+
 registry=PublishedRegistry()
