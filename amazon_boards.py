@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 from board_org import LEGACY_BOARD_IDS, LEGACY_BOARD_NAMES, PERMANENT_BOARD_IDS, DEFAULT_BOARD_NAME
-REQUIRED_PRIMARY_SLOTS=14
+REQUIRED_PRIMARY_SLOTS=10  # matches 10 live primary boards; 14 discovery profiles map via sections
 APPROVED_PRIMARY_BOARD_IDS={bid for name,bid in PERMANENT_BOARD_IDS.items() if name!=DEFAULT_BOARD_NAME}
 BOARD_SEARCH_PROFILES={
 "Health & Fitness":{"keywords":["fitness equipment","resistance bands","yoga mat","workout gear"],"commission_proxy_pct":3.0},
@@ -12,7 +12,7 @@ BOARD_SEARCH_PROFILES={
 "Electronics & Gadgets":{"keywords":["gadgets","tech accessories","wireless earbuds","power bank"],"commission_proxy_pct":2.0},
 "Home, Kitchen & Dining":{"keywords":["kitchen gadgets","cookware","home organizer","air fryer accessories"],"commission_proxy_pct":4.5},
 "Books & Learning":{"keywords":["bestselling paperback","self help book","cookbook","productivity book"],"commission_proxy_pct":4.5},
-"Games, Toys & Sports":{"keywords":["board game","puzzle","sports equipment","outdoor toys"],"commission_proxy_pct":3.0},
+"Sports, Games & Toys":{"keywords":["board game","puzzle","sports equipment","outdoor toys"],"commission_proxy_pct":3.0},
 "Fashion & Lifestyle":{"keywords":["fashion accessories","travel wallet","sunglasses","everyday bag"],"commission_proxy_pct":4.0},
 "Travel & Camping":{"keywords":["travel backpack","camping gear","packing cubes","hiking accessories"],"commission_proxy_pct":3.0},
 "Pet Supplies":{"keywords":["dog supplies","cat supplies","pet toys","pet grooming"],"commission_proxy_pct":3.0},
