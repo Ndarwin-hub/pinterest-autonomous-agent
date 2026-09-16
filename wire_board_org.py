@@ -40,7 +40,12 @@ def apply_agent_wiring(agent_mod:Any)->None:
             b.grok_invocations+=1
         b.reserve(slug); return await orig_run(slug,args or {},retries=0)
     async def strict_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index):
-        # Pass-through; runtime_hardening owns single create+GET verification.
+        # Dynamic lookup: runtime_hardening.install() replaces agent_mod.publish_and_verify
+        # after this wiring. Never call the captured pre-hardening orig_publish (it bypassed
+        # the budgeted runner). If hardening has not run yet, fall back to orig_publish.
+        current = getattr(agent_mod, "publish_and_verify", None)
+        if current is not None and current is not strict_publish and getattr(agent_mod, "_runtime_publish_hardening_installed", False):
+            return await current(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index)
         return await orig_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index)
     async def research(url,job_store,job_id):
         p=await orig_research(url,job_store,job_id)
