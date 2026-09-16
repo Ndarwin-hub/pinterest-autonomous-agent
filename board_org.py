@@ -60,8 +60,8 @@ def current_section_id() -> Optional[str]:
 def _set_section(section_id: Optional[str]) -> None:
     _destination_section.set(section_id)
 
-# Explicit accessory exclusions run before device/product whitelists. This prevents
-# "iPhone case" or "laptop bag" from inheriting the primary device's section.
+# Explicit accessory/device exclusions run before device/product whitelists.
+# This prevents a primary device from inheriting an unrelated section.
 ELECTRONICS_ROOT_TERMS = (
     "screen protector", "screen guard", "phone case", "smartphone case", "cell phone case",
     "iphone case", "ipad case", "tablet case", "laptop bag", "laptop sleeve", "laptop case",
@@ -69,6 +69,8 @@ ELECTRONICS_ROOT_TERMS = (
     "usb cable", "charging cable", "charge cable", "charger", "power bank", "mouse",
     "keyboard", "webcam", "smartwatch", "smart watch", "camera", "gaming accessory",
     "phone holder", "phone stand", "tablet stand", "stylus", "screen film",
+    # Dedicated e-readers are consumer electronics, not general products.
+    "kindle", "e-reader", "e reader", "ereader", "e-book reader", "ebook reader",
 )
 BABY_TERMS = (
     "baby diaper", "baby diapers", "newborn diaper", "newborn diapers", "baby bottle",
@@ -90,8 +92,6 @@ HEALTH_ROOT_TERMS = (
     "health monitor", "thermometer", "pulse oximeter", "first aid", "massage gun",
 )
 
-# General board rules are intentionally conservative. Section routing is handled by
-# explicit whitelists above; unrelated products remain on the parent board/root.
 GENERAL_RULES = (
     ("book", "books"), ("novel", "books"), ("textbook", "books"),
     ("cookware", "home"), ("kitchen", "home"), ("air fryer", "home"), ("coffee maker", "home"),
@@ -120,21 +120,17 @@ def detect_product_category(product: Dict[str, Any]) -> str:
     text = _text(product)
     name = _name_text(product)
 
-    # Accessories must never inherit a compatible primary device's section.
     if any(_has_term(text, t) for t in ELECTRONICS_ROOT_TERMS):
         return "electronics_root"
 
-    # Actual smartphones/tablets only.
     smartphone_terms = ("iphone", "ipad", "smartphone", "android phone", "cell phone", "mobile phone", "galaxy tab", "tablet")
     if any(_has_term(name, t) for t in smartphone_terms):
         return "electronics_smartphones"
 
-    # Actual PC/laptop/TV/home-electronics products in this defined section.
     pc_terms = ("macbook", "laptop", "notebook computer", "desktop pc", "desktop computer", "gaming pc", "personal computer", "television", " tv ", "monitor")
     if any(_has_term(name, t) for t in pc_terms):
         return "electronics_pc_home"
 
-    # Health & Fitness sections are also strict whitelists.
     if any(_has_term(name, t) for t in BABY_TERMS):
         return "health_baby_kids"
     if any(_has_term(name, t) for t in BEAUTY_TERMS):
@@ -171,7 +167,6 @@ def resolve_pinterest_destination(product: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def preferred_board_name(category_key: str) -> str:
-    # Backward-compatible API used by the existing runtime wiring.
     _set_section(SECTION_IDS.get(category_key))
     return CATEGORY_BOARD_MAP.get(category_key, DEFAULT_BOARD_NAME)
 
