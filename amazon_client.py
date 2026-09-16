@@ -61,3 +61,53 @@ def extract_title(item:Dict[str,Any])->str:
         else:
             if isinstance(cur,str): return cur
     return ""
+
+
+def _walk_offers(item):
+    listings = []
+    for key in ("offersV2", "OffersV2", "offers", "Offers"):
+        block = item.get(key)
+        if not isinstance(block, dict):
+            continue
+        for lk in ("listings", "Listings"):
+            raw = block.get(lk)
+            if isinstance(raw, list):
+                listings.extend([x for x in raw if isinstance(x, dict)])
+    return listings
+
+def extract_availability(item):
+    for listing in _walk_offers(item):
+        for ak in ("availability", "Availability"):
+            av = listing.get(ak)
+            if isinstance(av, dict):
+                msg = av.get("message") or av.get("Message") or av.get("type") or av.get("Type") or ""
+                if msg:
+                    return str(msg)
+            elif isinstance(av, str) and av.strip():
+                return av.strip()
+    return ""
+
+_UNAVAILABLE = ("out of stock", "outofstock", "unavailable", "not available", "currently unavailable", "temporarily out", "no longer available", "discontinued")
+
+def is_buyable_offer(item):
+    listings = _walk_offers(item)
+    if not listings:
+        return False
+    av = extract_availability(item).lower()
+    if not av:
+        for listing in listings:
+            price = listing.get("price") or listing.get("Price") or {}
+            if isinstance(price, dict) and (price.get("amount") or price.get("Amount") or price.get("displayAmount")):
+                return True
+            if isinstance(price, (int, float)) and price > 0:
+                return True
+        return False
+    if any(x in av for x in _UNAVAILABLE):
+        return False
+    if any(x in av for x in ("in stock", "instock", "available", "ships", "usually ships")):
+        return True
+    for listing in listings:
+        price = listing.get("price") or listing.get("Price") or {}
+        if isinstance(price, dict) and (price.get("amount") or price.get("Amount") or price.get("displayAmount")):
+            return True
+    return False
