@@ -71,7 +71,7 @@ async def lifespan(app:FastAPI):
         for _ in range(180):
             await asyncio.sleep(10); job=job_store.get(job_id)
             if not job:return {"status":"missing"}
-            if job.status.value in ("completed","failed"):return {"status":job.status.value,"error":job.error,"result":job.result}
+            if job.status.value in ("completed","completed_partial","failed"):return {"status":job.status.value,"error":job.error,"result":job.result}
         return {"status":"timeout"}
     app.state.amazon_enqueue=_enqueue_for_amazon; app.state.amazon_list_boards=_list_boards_for_amazon; app.state.amazon_wait_job=_wait_job
     await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)
@@ -127,7 +127,7 @@ async def root(): return {"service":"Pinterest Autonomous Agent","version":"3.6.
 async def run_job(job_id:str,url:str):
     try:
         job_store.update(job_id,status=JobStatus.RUNNING,progress="Starting 5-pin workflow")
-        result=await process_pinterest_job(job_id,url,job_store); quota.record_job(True); result["quota"]=quota.snapshot(); job_store.update(job_id,status=JobStatus.COMPLETED,progress="Finished",result=result)
+        result=await process_pinterest_job(job_id,url,job_store); quota.record_job(True); result["quota"]=quota.snapshot(); published_count=int(result.get("pins_published") or 0); final_status=JobStatus.COMPLETED_PARTIAL if 0 < published_count < 5 else JobStatus.COMPLETED; job_store.update(job_id,status=final_status,progress="Finished",result=result)
         try:
             pins=result.get("pins") or []; pin_ids=[str(p.get("pin_id")) for p in pins if p.get("pin_id")]; verified=bool(pins) and len(pins)==5 and all(bool(p.get("verified")) for p in pins); dest=next((p.get("destination_url") for p in pins if p.get("destination_url")),None) or url
             registry.record_success(affiliate_url=dest,product_url=url,source="manual",job_id=job_id,board_id=str(result.get("board_id") or "") or None,asin=extract_asin(dest) or extract_asin(url),pinterest_verified=verified,pin_ids=pin_ids)

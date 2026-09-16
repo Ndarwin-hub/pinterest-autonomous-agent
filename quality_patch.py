@@ -257,15 +257,16 @@ def install_process_gate(agent_mod) -> str:
             if _is_asin(t) or re.search(r"\bB0[A-Z0-9]{8}\b", t):
                 raise RuntimeError(f"Published pin has ASIN title; treating job as failed: {t!r}")
         published = int(result.get("pins_published") or 0)
-        if published < 5:
-            raise RuntimeError(f"Incomplete publish: {published}/5 pins; refusing partial success.")
+        if published < 1:
+            raise RuntimeError("No Pins were successfully published; refusing empty success.")
         cat = (result.get("category") or "").lower()
         board_id = str(result.get("board_id") or "")
         if board_id == "987906936951147704" and cat in {"home", "fashion", "electronics", "electronics_root"}:
             raise RuntimeError(f"Wrong board Everything Else for category {cat!r}")
         titles = [str(p.get("title") or "") for p in (result.get("pins") or [])]
-        if len(set(t.lower() for t in titles if t)) < 4:
-            raise RuntimeError("Pin title diversity too low; five near-duplicate titles refused.")
+        required_unique_titles = min(4, published)
+        if len(set(t.lower() for t in titles if t)) < required_unique_titles:
+            raise RuntimeError(f"Pin title diversity too low; {required_unique_titles} unique title(s) required for {published} successful Pin(s).")
         for p in result.get("pins") or []:
             t = p.get("title") or ""
             if t.strip().lower() == (pname or "").strip().lower():

@@ -7,7 +7,7 @@ from dataclasses import dataclass,field
 from pathlib import Path
 from urllib.parse import urlsplit,urlunsplit
 _DATA_DIR=Path(os.getenv("DATA_DIR","/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("JOB_DB_PATH",str(_DATA_DIR/"pinterest_agent_jobs.db")))
-class JobStatus(str,Enum): QUEUED="queued"; RUNNING="running"; COMPLETED="completed"; FAILED="failed"
+class JobStatus(str,Enum): QUEUED="queued"; RUNNING="running"; COMPLETED="completed"; COMPLETED_PARTIAL="completed_partial"; FAILED="failed"
 @dataclass
 class Job:
  job_id:str; url:str; status:JobStatus=JobStatus.QUEUED; progress:Optional[str]=None; result:Optional[Dict[str,Any]]=None; error:Optional[str]=None; created_at:str=field(default_factory=lambda:datetime.now(timezone.utc).isoformat()); updated_at:str=field(default_factory=lambda:datetime.now(timezone.utc).isoformat())
@@ -40,7 +40,7 @@ class JobStore:
     if normalize_url(r[1])!=key:continue
     st=JobStatus(r[2])
     if st in (JobStatus.QUEUED,JobStatus.RUNNING):return self.get(r[0])
-    if st==JobStatus.COMPLETED:
+    if st in (JobStatus.COMPLETED,JobStatus.COMPLETED_PARTIAL):
      try:
       if datetime.fromisoformat(r[7])>=cutoff:return self.get(r[0])
      except Exception:pass
