@@ -19,6 +19,8 @@ from mcp_bridge import router as mcp_router,MCP_PATH,register_custom_mcp_with_re
 apply_agent_wiring(agent_module)
 import provider_failover
 provider_failover.install(__import__("wire_board_org"),__import__("ai_quality_gate"))
+import quality_patch
+QUALITY_PATCH_VERSION = quality_patch.install()
 from agent import process_pinterest_job
 from models import JobStore,JobStatus,Job
 from published_registry import registry,extract_asin
@@ -49,7 +51,7 @@ def extract_url(text:str)->str:
     raise ValueError("No valid http(s) URL found")
 @asynccontextmanager
 async def lifespan(app:FastAPI):
-    logger.info("Pinterest Autonomous Agent v3.6.0 starting..."); logger.info("Quota governor: %s",quota.snapshot()); logger.info("Amazon layer credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
+    logger.info("Pinterest Autonomous Agent v3.6.1 starting... quality_patch=%s", QUALITY_PATCH_VERSION); logger.info("Quota governor: %s",quota.snapshot()); logger.info("Amazon layer credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
     registration_task=None
     if MCP_PATH: registration_task=asyncio.create_task(register_custom_mcp_with_retry())
     else: logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured")
@@ -90,7 +92,7 @@ async def enqueue_job(url_str:str,background_tasks:BackgroundTasks)->SubmitRespo
         if not quota.reserve_job(): raise HTTPException(status_code=429,detail={"message":"Monthly safe Pinterest capacity reached; job not started.","quota":quota.snapshot()})
         job_id=str(uuid.uuid4()); job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress="Job accepted — 5-pin workflow queued"); job_store.save(job); background_tasks.add_task(run_job,job_id,url_str); return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}")
 @app.get("/health")
-async def health(): return {"status":"ok","service":"pinterest-autonomous-agent","version":"3.6.0","mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
+async def health(): return {"status":"ok","service":"pinterest-autonomous-agent","version":"3.6.1","quality_patch_version":QUALITY_PATCH_VERSION,"mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
 @app.get("/quota")
 async def quota_status(_:bool=Depends(verify_secret)): return quota.snapshot()
 @app.post("/submit",response_model=SubmitResponse)
