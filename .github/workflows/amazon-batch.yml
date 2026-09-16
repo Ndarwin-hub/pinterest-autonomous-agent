@@ -60,6 +60,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          response_file=$(mktemp)
+          trap 'rm -f "$response_file"' EXIT
+
           curl --fail --silent --show-error --no-buffer \
             --connect-timeout 20 --max-time 2400 \
             --retry 5 --retry-delay 10 --retry-max-time 120 \
@@ -67,4 +70,19 @@ jobs:
             -H "Authorization: Bearer $ID_TOKEN" \
             -H 'Content-Type: application/json' \
             -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch' \
-            --data "{\"batch\":$BATCH}"
+            --data "{\"batch\":$BATCH}" | tee "$response_file"
+
+          final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
+          case "$final_status" in
+            completed|already_completed|dormant)
+              echo "Amazon batch terminal status: $final_status"
+              ;;
+            partial_failure|failed|blocked|busy)
+              echo "Amazon batch terminal status: $final_status" >&2
+              exit 1
+              ;;
+            *)
+              echo "Unknown or missing Amazon batch terminal status: ${final_status:-<empty>}" >&2
+              exit 1
+              ;;
+          esac
