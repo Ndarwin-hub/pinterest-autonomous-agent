@@ -67,10 +67,38 @@ def is_amazon_short_url(url: str) -> bool:
     return host in SHORT_HOSTS or host.endswith(".amzn.to")
 
 
+def _slug_from_product_url(url: str) -> str:
+    """Return the human-readable Amazon product slug when the redirect exposes it."""
+    try:
+        path = urlparse(url).path or ""
+    except Exception:
+        return ""
+    m = re.search(r"/([^/]+)/dp/[A-Z0-9]{10}(?:[/?]|$)", path, re.I)
+    if not m:
+        m = re.search(r"/([^/]+)/gp/product/[A-Z0-9]{10}(?:[/?]|$)", path, re.I)
+    if not m:
+        return ""
+    slug = re.sub(r"[-_]+", " ", m.group(1))
+    slug = re.sub(r"\s+", " ", slug).strip(" -")
+    if not slug or re.fullmatch(r"B0[A-Z0-9]{8}", slug.replace(" ", ""), re.I):
+        return ""
+    return slug[:180]
+
+
 def canonicalize_amazon_product_url(url: str, tag: str = AFFILIATE_TAG) -> str:
     asin = extract_asin_from_url(url)
     if not asin:
         raise ValueError(f"Cannot canonicalize: no ASIN in URL: {url!r}")
+
+    # Preserve a verified product slug when the redirect supplied one. This is
+    # important when Amazon's product page is bot/minimal-content on Railway:
+    # quality_patch can still recover a human product identity from the URL
+    # without weakening the identity gate. Normal /dp/ASIN inputs remain the
+    # compact canonical form.
+    slug = _slug_from_product_url(url)
+    if slug:
+        safe_slug = re.sub(r"[^A-Za-z0-9]+", "-", slug).strip("-")[:180]
+        return f"https://www.amazon.com/{safe_slug}/dp/{asin}?tag={tag}"
     return f"https://www.amazon.com/dp/{asin}?tag={tag}"
 
 
@@ -141,7 +169,7 @@ def resolve_amazon_product_url(url: str, tag: str = AFFILIATE_TAG) -> str:
         )
 
     host = (urlparse(final_url).netloc or "").lower()
-    if not any(h in host for h in ("amazon.com", "smile.amazon.com")):
+    if host not in AMAZON_US_HOSTS:
         raise RuntimeError(
             f"Resolved URL is not Amazon US: host={host!r} final={final_url!r}"
         )
