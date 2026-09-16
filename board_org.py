@@ -61,6 +61,25 @@ def _set_section(section_id: Optional[str]) -> None:
     _destination_section.set(section_id)
 
 
+def _text(product: Dict[str, Any]) -> str:
+    """Flatten secondary product fields for classification."""
+    parts = []
+    for k in ("description", "title", "product_type", "category", "brand", "bullet_points", "features"):
+        v = product.get(k)
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple)):
+            parts.append(" ".join(str(x) for x in v if x))
+        else:
+            parts.append(str(v))
+    return " ".join(parts).lower()
+
+
+def _name_text(product: Dict[str, Any]) -> str:
+    """Primary product name/title used for classification."""
+    return str(product.get("name") or product.get("title") or "").lower()
+
+
 # Product-family rules: ordered most-specific -> broad. First match wins.
 _FAMILY_RULES = [
     ("office", (
