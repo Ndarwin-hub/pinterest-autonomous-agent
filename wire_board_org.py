@@ -49,7 +49,16 @@ def apply_agent_wiring(agent_mod:Any)->None:
         if actual!=str(board_id):raise RuntimeError(f"Pin {pin_index} ({pin_id}): board verification mismatch. Intended board {board_id}, actual board {actual}.")
         result["board_id"]=actual; result["board_verified_independently"]=True; return result
     async def research(url,job_store,job_id):
-        p=await orig_research(url,job_store,job_id); p["url"]=url; p["category"]=detect_product_category(p); return p
+        p=await orig_research(url,job_store,job_id)
+        # Preserve resolved affiliate destination from quality_patch (short-URL canonicalization).
+        # Only fall back to the inbound job URL when research did not set a better destination.
+        resolved = (p.get("affiliate_url") or p.get("url") or "").strip()
+        if resolved and resolved != url and resolved.startswith("http"):
+            p["url"] = resolved
+            p["affiliate_url"] = resolved
+        else:
+            p["url"] = url
+        p["category"]=detect_product_category(p); return p
     async def board(product,job_store,job_id):
         job_store.update(job_id,progress="Selecting Pinterest board")
         data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
