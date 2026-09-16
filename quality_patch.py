@@ -70,9 +70,32 @@ def install_identity(agent_mod) -> str:
     orig_research = agent_mod.research_product
 
     async def _research(url, job_store, job_id):
-        product = await orig_research(url, job_store, job_id)
+        # Resolve Amazon short URLs (amzn.to etc.) to canonical US /dp/ASIN
+        # BEFORE identity research so slug extraction and page scrape succeed.
+        resolved_url = url
+        try:
+            from amazon_url import resolve_amazon_product_url, is_amazon_short_url, extract_asin_from_url
+            if is_amazon_short_url(url) or (
+                "amazon." in (url or "").lower() and not extract_asin_from_url(url)
+            ):
+                resolved_url = resolve_amazon_product_url(url)
+                logger.info("QUALITY resolved Amazon URL %s -> %s", url, resolved_url)
+            elif extract_asin_from_url(url):
+                # Already has ASIN; still canonicalize tag + clean path
+                resolved_url = resolve_amazon_product_url(url)
+        except Exception as e:
+            # Fail closed only when the input was a short/ambiguous Amazon link
+            from amazon_url import is_amazon_short_url
+            if is_amazon_short_url(url):
+                raise RuntimeError(
+                    f"Amazon short URL could not be resolved to a product page: {url!r} ({e})"
+                ) from e
+            logger.warning("Amazon URL resolve skipped/non-fatal for %s: %s", url, e)
+            resolved_url = url
+
+        product = await orig_research(resolved_url, job_store, job_id)
         current = _clean(product.get("name") or "")
-        slug = _amazon_slug(url)
+        slug = _amazon_slug(resolved_url)
         if slug and (_generic(current) or _is_asin(current) or len(current) < 6):
             current = slug
         current = assert_valid_identity(current, context="research")
@@ -80,8 +103,11 @@ def install_identity(agent_mod) -> str:
         if not product.get("brand"):
             product["brand"] = _brand_from_name(current)
         product["category"] = _category(product)
-        product["url"] = url
-        logger.info("QUALITY identity ok name=%r category=%s", product["name"], product["category"])
+        # Pin destination MUST be the canonical affiliate URL
+        product["url"] = resolved_url
+        product["source_url"] = url
+        product["affiliate_url"] = resolved_url
+        logger.info("QUALITY identity ok name=%r category=%s url=%s", product["name"], product["category"], resolved_url)
         return product
 
 
