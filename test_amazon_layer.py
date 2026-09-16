@@ -18,6 +18,11 @@ class Tests(unittest.TestCase):
  def test_fourteen_slots(self):
   from board_org import PERMANENT_BOARD_IDS
   live=[{"id":v,"name":k} for k,v in PERMANENT_BOARD_IDS.items() if k!="Everything Else"]
-  i=classify_live_boards(live); self.assertLess(i["primary_count"],REQUIRED_PRIMARY_SLOTS)
-  l=DailyLedger(Path(D)/"l.db"); specs=[{"slot":n,"slot_kind":"board","target_board_name":str(n),"target_board_id":str(n)} for n in range(1,15)]+[{"slot":15,"slot_kind":"global"}]; day=l.ensure_day("2099-01-01",specs); self.assertEqual(len(l.get_day_status(day)["slots"]),15)
+  i=classify_live_boards(live)
+  self.assertEqual(i["primary_count"], REQUIRED_PRIMARY_SLOTS)
+  self.assertTrue(i["scheduler_ready"])
+  specs, info = build_slot_specs(live)
+  self.assertIsNotNone(specs)
+  self.assertEqual(len(specs), REQUIRED_PRIMARY_SLOTS + 1)
+  l=DailyLedger(Path(D)/"l.db"); full=[{"slot":n,"slot_kind":"board","target_board_name":str(n),"target_board_id":str(n)} for n in range(1,15)]+[{"slot":15,"slot_kind":"global"}]; day=l.ensure_day("2099-01-01",full); self.assertEqual(len(l.get_day_status(day)["slots"]),15)
 if __name__=="__main__": unittest.main(verbosity=2)
