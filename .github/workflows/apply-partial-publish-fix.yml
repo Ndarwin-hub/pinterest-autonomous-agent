@@ -61,6 +61,7 @@ jobs:
           PY
 
           python -m compileall -q wire_board_org.py quality_patch.py models.py main.py
+          python -m pip install -q pytest
           python -m pytest -q --disable-warnings --maxfail=1
 
           git config user.name 'github-actions[bot]'
