@@ -166,7 +166,8 @@ _FAMILY_RULES = [
         "resistance bands", "treadmill", "exercise bike", "rowing machine",
         "weight bench", "fitness", "workout", "gym", "massage gun", "foam roller",
         "ice pack", "reusable ice", "cold pack", "first aid", "thermometer",
-        "pulse oximeter", "blood pressure", "fitness tracker",
+        "pulse oximeter", "blood pressure", "blood-pressure", "blood pressure monitor",
+        "blood-pressure monitor", "bp monitor", "fitness tracker",
     )),
     ("books", (
         "paperback", "hardcover", "textbook", "novel", "cookbook", "self-help",
@@ -177,7 +178,9 @@ _FAMILY_RULES = [
         "bluetooth earbuds", "true wireless", "kindle", "e-reader", "e reader",
         "ereader", "ebook reader", "e-book reader", "paperwhite", "screen protector",
         "screen guard", "screen film", "phone case", "iphone case", "ipad case",
-        "tablet case", "smartphone case", "cell phone case", "charger", "charging cable",
+        "tablet case", "smartphone case", "cell phone case", "protective case",
+        "phone cover", "phone shell", "case for iphone", "case for galaxy",
+        "charger", "charging cable",
         "usb cable", "usb-c", "usb c", "power bank", "wireless charger", "magsafe",
         "laptop bag", "laptop sleeve", "laptop case", "computer bag", "webcam",
         "smartwatch", "smart watch", "camera", "action camera", "microphone",
@@ -191,8 +194,9 @@ _FAMILY_RULES = [
     )),
     ("electronics_pc_home", (
         "macbook", "laptop", "notebook computer", "desktop pc", "desktop computer",
-        "gaming pc", "personal computer", "television", "monitor", "pc monitor",
-        "computer monitor", "mini pc", "chromebook",
+        "gaming pc", "personal computer", "television", "smart tv", "led tv", "oled tv",
+        "4k tv", "tv", "tvs", "monitor", "pc monitor", "computer monitor", "mini pc",
+        "chromebook",
     )),
 ]
 
@@ -200,7 +204,7 @@ def _has_term(text: str, term: str) -> bool:
     term = term.lower().strip()
     if not term:
         return False
-    if term in {"tv", "pc", "mic", "toy", "bag", "mat", "pad"}:
+    if term in {"tv", "tvs", "pc", "mic", "toy", "bag", "mat", "pad"}:
         return bool(re.search(rf"\b{re.escape(term)}\b", text))
     if " " in term or "-" in term:
         return term in text
