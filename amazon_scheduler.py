@@ -75,10 +75,10 @@ class AmazonScheduler:
                 if ok: successes+=1
                 else: errors.append({"slot":slot_no,"status":"failed_or_exhausted"})
             status = "completed" if (attempted > 0 and successes >= attempted and not errors) else ("partial_failure" if successes > 0 else "failed")
-                if attempted > 0 and successes < attempted:
-                    status = "partial_failure" if successes > 0 else "failed"
-                result={"status":status,"day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted}
-                ledger.complete_batch(day,batch_index,owner,status=status,result_json=json.dumps(result,separators=(",",":"))); return result
+            if attempted > 0 and successes < attempted:
+                status = "partial_failure" if successes > 0 else "failed"
+            result={"status":status,"day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted}
+            ledger.complete_batch(day,batch_index,owner,status=status,result_json=json.dumps(result,separators=(",",":"))); return result
         except Exception as e:
             logger.exception("Amazon batch %s failed",batch_index); ledger.complete_batch(day,batch_index,owner,status="failed",error=str(e)[:500]); raise
         finally:self.status["current_batch"]=None
