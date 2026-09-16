@@ -8,7 +8,11 @@ from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_AP
 logger=logging.getLogger("pinterest-agent.wire")
 MAX_COMPOSIO_CALLS=40
 MAX_RECOVERY_ROUNDS=1
-MAX_IMAGE_SEARCH_CALLS=18
+# Five Pins x four targeted image-search queries = 20 calls. The old value of 18
+# starved the last Pins of the initial candidate pool under concurrent load.
+# Reserve 25 image-search calls so all five Pins receive the full initial search
+# pass and one bounded recovery refresh can still fit inside the 40-call ceiling.
+MAX_IMAGE_SEARCH_CALLS=25
 _call_budget=contextvars.ContextVar("pinterest_call_budget",default=None)
 class CallBudget:
     def __init__(self,maximum=MAX_COMPOSIO_CALLS):
@@ -17,7 +21,7 @@ class CallBudget:
         if self.used>=self.maximum: raise RuntimeError(f"Composio hard job budget exhausted ({self.maximum} calls); stopping safely.")
         self.used+=1; logger.info("Composio budget %s/%s %s",self.used,self.maximum,slug)
 async def _static_capabilities(agent_mod):
-    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"Three targeted search angles per Pin, with one adaptive recovery search round available."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio only when the normal Composio image route is unavailable."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
+    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"Four targeted search angles per Pin, with one adaptive recovery search round available."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio only when the normal Composio image route is unavailable."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
 def apply_agent_wiring(agent_mod:Any)->None:
     orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; orig_publish=agent_mod.publish_and_verify
     async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
@@ -65,8 +69,6 @@ def apply_agent_wiring(agent_mod:Any)->None:
         return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
     def failed_indexes(review,pin_count):
         status=review.get("status")
-        # AI outage/deterministic-pass is not a product-quality failure. Do not
-        # trigger recovery or publish-blocking retries for infrastructure errors.
         if status=="AI_REVIEW_UNAVAILABLE" or status=="AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED":return set()
         if review.get("final_reviewer") in ("grok","grok_composio"):
             results=review.get("grok") or []
