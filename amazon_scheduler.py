@@ -7,6 +7,7 @@ from amazon_client import amazon_credentials_present
 from amazon_boards import build_slot_specs, REQUIRED_PRIMARY_SLOTS, classify_live_boards
 from amazon_discovery import MAX_REPLACEMENTS_PER_SLOT, discover_for_board, discover_global, is_dormant
 from daily_ledger import ledger, SLOT_COUNT, BATCH_SIZE
+from published_registry import registry
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
 SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60))); SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes"); SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
 EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]]; ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]]; WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
