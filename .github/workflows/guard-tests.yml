@@ -1,10 +1,10 @@
 name: Guard tests
-
 on:
   pull_request:
     paths:
       - "publication_guard.py"
       - "image_diversity_guard.py"
+      - "amazon_*.py"
       - "tests/**"
       - "main.py"
       - "requirements.txt"
@@ -13,10 +13,10 @@ on:
     paths:
       - "publication_guard.py"
       - "image_diversity_guard.py"
+      - "amazon_*.py"
       - "tests/**"
       - "main.py"
       - "requirements.txt"
-
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -26,5 +26,5 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt pytest
-      - run: python -m py_compile main.py publication_guard.py image_diversity_guard.py
+      - run: python -m py_compile main.py publication_guard.py image_diversity_guard.py amazon_alerts.py amazon_watchdog.py amazon_composio_discovery.py amazon_discovery.py amazon_scheduler.py amazon_boards.py
       - run: PYTHONPATH=. pytest -q tests/test_publication_guard.py
