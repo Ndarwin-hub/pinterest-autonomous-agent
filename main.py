@@ -128,9 +128,22 @@ async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)
 async def root():return {"service":"Pinterest Autonomous Agent","version":"3.7.0","endpoints":{"health":"GET /health","submit":"POST /submit body: {\"url\": \"<product_url>\"}","status":"GET /status/{job_id}","quota":"GET /quota","amazon_status":"GET /amazon/status","amazon_batch":"POST /amazon/run-batch body: {\"batch\":1|2|3}"},"usage":"Send one product/affiliate URL. System creates 5 unique Pins automatically."}
 async def run_job(job_id:str,url:str):
  try:
-  job_store.update(job_id,status=JobStatus.RUNNING,progress="Starting 5-pin workflow");result=await process_pinterest_job(job_id,url,job_store);quota.record_job(True);result["quota"]=quota.snapshot();published_count=int(result.get("pins_published") or 0);final_status=JobStatus.COMPLETED_PARTIAL if 0<published_count<5 else JobStatus.COMPLETED;job_store.update(job_id,status=final_status,progress="Finished",result=result)
+  job_store.update(job_id,status=JobStatus.RUNNING,progress="Starting 5-pin workflow")
+  result=await process_pinterest_job(job_id,url,job_store)
+  quota.record_job(bool(result.get("pins_published")))
+  result["quota"]=quota.snapshot()
+  supervisor_status=str(result.get("pin_supervisor_status") or "")
+  published_count=int(result.get("pins_published") or 0)
+  verified_count=int(result.get("verified_pins") or sum(1 for p in (result.get("pins") or []) if isinstance(p,dict) and p.get("verified")))
+  if supervisor_status=="completed" or verified_count>=5:
+   final_status=JobStatus.COMPLETED
+  elif supervisor_status=="completed_partial" or verified_count>0 or published_count>0:
+   final_status=JobStatus.COMPLETED_PARTIAL
+  else:
+   final_status=JobStatus.FAILED
+  job_store.update(job_id,status=final_status,progress="Finished",result=result)
   try:
    pins=result.get("pins") or [];pin_ids=[str(p.get("pin_id")) for p in pins if p.get("pin_id")];verified=bool(pins) and len(pins)==5 and all(bool(p.get("verified")) for p in pins);dest=next((p.get("destination_url") for p in pins if p.get("destination_url")),None) or url;registry.record_success(affiliate_url=dest,product_url=url,source="manual",job_id=job_id,board_id=str(result.get("board_id") or "") or None,asin=extract_asin(dest) or extract_asin(url),pinterest_verified=verified,pin_ids=pin_ids)
   except Exception as e:logger.warning("Published registry update skipped: %s",e)
-  logger.info("Job %s completed: %s",job_id,result.get("summary"))
+  logger.info("Job %s completed with status=%s: %s",job_id,final_status.value,result.get("summary"))
  except Exception as e:quota.record_job(False);logger.exception("Job %s failed",job_id);job_store.update(job_id,status=JobStatus.FAILED,progress="Failed",error=str(e))
