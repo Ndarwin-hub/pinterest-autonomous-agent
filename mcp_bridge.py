@@ -1,12 +1,11 @@
 """Minimal dependency-free MCP/JSON-RPC bridge for Composio Custom MCP."""
-import asyncio
-import os
+import asyncio, hashlib, os
 from typing import Any, Dict, Optional
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
-COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip(); COMPOSIO_ENTITY_ID=os.getenv("COMPOSIO_ENTITY_ID","").strip(); API_SECRET=os.getenv("API_SECRET","").strip(); BRIDGE_TOKEN=os.getenv("MCP_BRIDGE_TOKEN","").strip(); PUBLIC_DOMAIN=os.getenv("RAILWAY_PUBLIC_DOMAIN","web-production-dae68.up.railway.app").strip(); SUBMIT_URL=f"https://{PUBLIC_DOMAIN}/submit"; MCP_TOOLKIT_SLUG="PINTEREST_RAILWAY_BRIDGE"; CUSTOM_MCP_TOOLKIT_SLUG="CUSTOM_PINTEREST_RAILWAY_BRIDGE"; COMPOSIO_SEARCH_TOOLKIT_SLUG="composio_search"; COMPOSIO_BASE="https://backend.composio.dev/api/v3.1"; MCP_PATH=f"/mcp/{BRIDGE_TOKEN}" if BRIDGE_TOKEN else ""
+COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip(); COMPOSIO_ENTITY_ID=os.getenv("COMPOSIO_ENTITY_ID","").strip(); API_SECRET=os.getenv("API_SECRET","").strip(); BRIDGE_TOKEN=os.getenv("MCP_BRIDGE_TOKEN","").strip(); PUBLIC_DOMAIN=os.getenv("RAILWAY_PUBLIC_DOMAIN","web-production-dae68.up.railway.app").strip(); SUBMIT_URL=f"https://{PUBLIC_DOMAIN}/submit"; MCP_TOOLKIT_SLUG="PINTEREST_RAILWAY_BRIDGE"; CUSTOM_MCP_TOOLKIT_SLUG="CUSTOM_PINTEREST_RAILWAY_BRIDGE"; COMPOSIO_SEARCH_TOOLKIT_SLUG="composio_search"; COMPOSIO_BASE="https://backend.composio.dev/api/v3.1"; MCP_PATH=f"/mcp/{BRIDGE_TOKEN}" if BRIDGE_TOKEN else ""; SMOKE_TEST_URL=os.getenv("COMPOSIO_BRIDGE_SMOKE_TEST_URL","").strip(); SMOKE_MARKER="/data/composio_bridge_smoke_test.sha256"
 router=APIRouter(); _router_session_id:Optional[str]=None; _router_submit_tool_slug:Optional[str]=None; _router_session_mcp_url:Optional[str]=None
 TOOL={"name":"PINTEREST_SUBMIT_URL","description":"Submit one exact product/affiliate URL to the autonomous Pinterest workflow. Pass the URL unchanged; do not shorten, rewrite, or replace it.","inputSchema":{"type":"object","properties":{"url":{"type":"string","description":"Exact http(s) product or affiliate URL."}},"required":["url"],"additionalProperties":False}}
 
@@ -37,21 +36,15 @@ async def ensure_composio_router_session()->Dict[str,Any]:
   try:
    session=await _composio_request("POST","/tool_router/session",{"user_id":COMPOSIO_ENTITY_ID,"toolkits":{"enable":[COMPOSIO_SEARCH_TOOLKIT_SLUG,CUSTOM_MCP_TOOLKIT_SLUG]}});sid=str(session.get("session_id") or "")
    if not sid:raise RuntimeError("Composio created a session without a session_id")
-   # Search inside this exact Railway-owned session. This is authoritative for
-   # what the session can actually execute and avoids guessing custom slugs.
    search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute the Pinterest Railway bridge tool PINTEREST_SUBMIT_URL to submit one exact product affiliate URL"}],"search_strategy":"tool_search"})
    submit_slug=None
    for result in search.get("results") or []:
     for slug in (result.get("primary_tool_slugs") or [])+(result.get("related_tool_slugs") or []):
-     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL"):
-      submit_slug=str(slug);break
+     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL"):submit_slug=str(slug);break
     if submit_slug:break
    if not submit_slug:
-    # Also inspect returned schemas, which may contain the custom tool even when
-    # it is not selected as a primary recommendation.
     for slug,schema in (search.get("tool_schemas") or {}).items():
-     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL") or str(schema.get("description","")).find("exact product/affiliate URL")>=0:
-      submit_slug=str(slug);break
+     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL") or "exact product/affiliate URL" in str(schema.get("description","")):submit_slug=str(slug);break
    if not submit_slug:raise RuntimeError("Composio session search did not expose PINTEREST_SUBMIT_URL")
    _router_session_id=sid;_router_submit_tool_slug=submit_slug;_router_session_mcp_url=(session.get("mcp") or {}).get("url")
    print(f"Composio Railway Tool Router session ready; Pinterest bridge tool discovered as {_router_submit_tool_slug}")
@@ -66,6 +59,20 @@ async def composio_router_submit_exact_url(url:str)->Dict[str,Any]:
  value=(url or "").strip()
  if not value.startswith(("http://","https://")):raise ValueError("url must be an http(s) URL")
  return await _composio_request("POST",f"/tool_router/session/{_router_session_id}/execute",{"tool_slug":_router_submit_tool_slug,"arguments":{"url":value}})
+
+async def run_one_shot_smoke_test()->None:
+ if not SMOKE_TEST_URL:return
+ marker=hashlib.sha256(SMOKE_TEST_URL.encode()).hexdigest()
+ try:
+  if os.path.exists(SMOKE_MARKER) and open(SMOKE_MARKER).read().strip()==marker:
+   print("Composio bridge smoke test already completed for configured URL")
+   return
+  result=await composio_router_submit_exact_url(SMOKE_TEST_URL)
+  print(f"Composio bridge smoke test executed successfully: {result}")
+  os.makedirs(os.path.dirname(SMOKE_MARKER),exist_ok=True)
+  with open(SMOKE_MARKER,"w") as f:f.write(marker)
+ except Exception as exc:
+  print(f"Composio bridge smoke test failed: {type(exc).__name__}: {str(exc)[:500]}")
 
 @router.post("/")
 async def mcp_endpoint(request:Request):
@@ -95,7 +102,12 @@ async def register_custom_mcp_with_retry()->bool:
  for attempt in range(1,6):
   try:
    if await _register_once():
-    print("Composio Custom MCP bridge registered and synced");session=await ensure_composio_router_session();print("Composio Railway Tool Router session ready with Pinterest bridge" if session.get("ready") else f"Composio Railway Tool Router session dormant: {session.get('reason')}");return True
+    print("Composio Custom MCP bridge registered and synced");session=await ensure_composio_router_session()
+    if session.get("ready"):
+     print("Composio Railway Tool Router session ready with Pinterest bridge")
+     await run_one_shot_smoke_test()
+    else:print(f"Composio Railway Tool Router session dormant: {session.get('reason')}")
+    return True
   except Exception as exc:print(f"Composio Custom MCP registration attempt {attempt} failed: {type(exc).__name__}")
   await asyncio.sleep(min(2**attempt,15))
  return False
