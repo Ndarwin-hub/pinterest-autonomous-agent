@@ -4,7 +4,7 @@ import asyncio,logging,os,uuid,json
 from datetime import datetime,timezone
 from typing import Any,Awaitable,Callable,Dict,List
 from amazon_client import amazon_credentials_present
-from amazon_boards import build_slot_specs,REQUIRED_PRIMARY_SLOTS,classify_live_boards
+from amazon_boards import build_slot_specs,REQUIRED_PRIMARY_SLOTS,classify_live_boards,CATEGORY_SLOTS
 from amazon_discovery import MAX_REPLACEMENTS_PER_SLOT,discover_for_board,discover_global,is_dormant
 from amazon_composio_discovery import discover_category
 from daily_ledger import ledger,SLOT_COUNT,BATCH_SIZE
@@ -93,8 +93,8 @@ class AmazonScheduler:
  async def _process_slot(self,slot,enqueue,wait_job,day):
   n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0);exclude=set()
   while attempts<MAX_REPLACEMENTS_PER_SLOT:
-   if slot.get("amazon_category") and slot.get("slot_kind")=="category":candidate=await discover_category(slot["amazon_category"],exclude_asins=exclude)
-   else:candidate=await (discover_global(exclude_asins=exclude) if slot.get("slot_kind")=="global" else discover_for_board(slot.get("target_board_name") or "Everything Else",exclude_asins=exclude))
+   if 1<=n<=len(CATEGORY_SLOTS): candidate=await discover_category(CATEGORY_SLOTS[n-1][0],exclude_asins=exclude)
+   else:candidate=await discover_global(exclude_asins=exclude)
    if not candidate:ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
    exclude.add(candidate["asin"]);url=candidate["affiliate_url"];ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
    try:result=await enqueue(url)
