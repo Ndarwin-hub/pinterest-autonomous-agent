@@ -46,9 +46,6 @@ def inspect_result(result: Dict[str, Any], requested_url: str) -> Dict[str, Any]
         if not pin.get("pin_id"):
             failures.append(f"Pin {index}: missing Pinterest Pin ID")
 
-    # The existing pipeline may expose a partial/completed status. This
-    # supervisor deliberately treats anything short of five verified Pins as
-    # non-success, matching the Pin command rather than hiding partial work.
     success = not failures and len(pins) == 5
     out = dict(result)
     out["pin_supervisor"] = {
@@ -76,3 +73,25 @@ def capability_contract() -> Dict[str, Any]:
         "idempotency_bypass": False,
         "image_diversity_bypass": False,
     }
+
+
+def install_runtime(agent_module: Any) -> None:
+    """Install a final-result supervisor before main imports the job function."""
+    if getattr(agent_module, "_pin_supervisor_installed", False):
+        return
+    original = agent_module.process_pinterest_job
+
+    async def supervised(job_id: str, url: str, job_store: Any):
+        result = await original(job_id, url, job_store)
+        checked = inspect_result(result, url)
+        if checked["pin_supervisor_status"] != "SUCCESS":
+            # Preserve the underlying result for callers that can inspect the
+            # exception, but fail closed: a partial/unverified job is not success.
+            raise RuntimeError(
+                "Pin supervisor rejected final job state: "
+                + "; ".join(checked["pin_supervisor"]["failures"])
+            )
+        return checked
+
+    agent_module.process_pinterest_job = supervised
+    agent_module._pin_supervisor_installed = True
