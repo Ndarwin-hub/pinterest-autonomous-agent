@@ -1,10 +1,21 @@
-"""High-resolution image supervisor for the Pinterest pipeline.
+"""Image priority supervisor for Pinterest.
 
-Policy: prefer genuine native 8K/4K product imagery first; then the best
-available high-resolution web/product source; then configured AI generation;
-then high-quality 4K upscaling as a last quality-preserving step; and only
-finally the existing Pillow emergency card. No unavailable provider is claimed
-as executable.
+Priority contract:
+1. Composio Image Search native 8K+ imagery.
+2. Composio Image Search native 4K+ imagery.
+3. Other executable genuine image providers (for example Pexels or configured
+   Pixabay/Unsplash), ranked by verified resolution.
+4. Existing executable AI image generation/editing path, when the agent exposes
+   one; never claim it is available when it is not.
+5. Verified 4K local upscale/derivative of the best genuine external image.
+6. Native product-page imagery, only when priorities 1-5 cannot satisfy the
+   resolution requirements.
+7. Existing Pillow emergency fallback, unchanged as the final last resort.
+
+Composio Image Search is called directly from Railway using the configured
+Composio project key, so the first two priorities do not depend on a separate
+per-provider entity connection. Image dimensions are always verified by
+actually fetching the image; URL metadata alone is never trusted.
 """
 from __future__ import annotations
 
@@ -15,10 +26,12 @@ from typing import Any, Dict, List, Set
 
 import httpx
 
-TARGET_W, TARGET_H = 2160, 3840  # 4K portrait canvas for Pinterest
+TARGET_W, TARGET_H = 2160, 3840
 NATIVE_8K_MIN = 6000
 NATIVE_4K_MIN = 3500
 MAX_DOWNLOAD = 18 * 1024 * 1024
+COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+COMPOSIO_ENTITY_ID = os.getenv("COMPOSIO_ENTITY_ID", "default").strip() or "default"
 
 
 def _pixels(c: Dict[str, Any]) -> int:
@@ -38,15 +51,16 @@ def _native_tier(c: Dict[str, Any]) -> int:
     return 0
 
 
-def _rank(c: Dict[str, Any]) -> tuple:
-    provider = c.get("provider") or ""
-    authenticity = 5 if provider == "product_page" else 4 if provider == "composio_search_image" else 3
-    if provider in {"pexels", "pixabay", "unsplash"}:
-        authenticity = 2
-    if provider == "openai_image":
-        authenticity = 1
-    # Resolution is the primary criterion; authenticity breaks ties.
-    return (_native_tier(c), _pixels(c), authenticity)
+def _provider_rank(provider: str) -> int:
+    # Priority is encoded by stage in get_best_pin_image; this is only a
+    # deterministic tie-break inside a stage.
+    return {
+        "composio_search_image": 5,
+        "pexels": 4,
+        "pixabay": 3,
+        "unsplash": 3,
+        "product_page": 1,
+    }.get(provider or "", 0)
 
 
 async def _probe_dimensions(url: str) -> tuple[int, int, bytes | None]:
@@ -63,31 +77,54 @@ async def _probe_dimensions(url: str) -> tuple[int, int, bytes | None]:
         return 0, 0, None
 
 
-def _to_4k(data: bytes) -> str | None:
+async def _composio_image_search(query: str, num: int = 20) -> List[Dict[str, Any]]:
+    """Execute Composio's auth-free Google Images-backed image search."""
+    if not COMPOSIO_API_KEY:
+        return []
+    endpoint = "https://backend.composio.dev/api/v3.1/tools/execute/COMPOSIO_SEARCH_IMAGE"
+    payload = {
+        "user_id": COMPOSIO_ENTITY_ID,
+        "arguments": {"query": query, "num": min(max(int(num), 1), 100)},
+        "version": "latest",
+        "dangerously_skip_version_check": True,
+    }
     try:
-        from PIL import Image
-        im = Image.open(io.BytesIO(data)).convert("RGB")
-        # Fit without distorting or cropping the product; place on a 2:3 4K canvas.
-        scale = min(TARGET_W / im.width, TARGET_H / im.height)
-        nw = max(1, int(im.width * scale))
-        nh = max(1, int(im.height * scale))
-        im = im.resize((nw, nh), Image.Resampling.LANCZOS)
-        canvas = Image.new("RGB", (TARGET_W, TARGET_H), (255, 255, 255))
-        canvas.paste(im, ((TARGET_W - nw) // 2, (TARGET_H - nh) // 2))
-        out = io.BytesIO()
-        im_quality = 96
-        canvas.save(out, format="JPEG", quality=im_quality, subsampling=0, optimize=True)
-        return base64.b64encode(out.getvalue()).decode("ascii")
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(
+                endpoint,
+                headers={"x-api-key": COMPOSIO_API_KEY, "Content-Type": "application/json"},
+                json=payload,
+            )
+            if r.status_code >= 400:
+                return []
+            data = r.json() or {}
+            if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                data = data["data"]
+            rows = data.get("images_results") if isinstance(data, dict) else None
+            if not isinstance(rows, list):
+                return []
+            out: List[Dict[str, Any]] = []
+            for x in rows:
+                if not isinstance(x, dict):
+                    continue
+                url = x.get("original") or x.get("original_url") or x.get("link")
+                if not url or not str(url).startswith("http"):
+                    continue
+                out.append({
+                    "url": str(url),
+                    "provider": "composio_search_image",
+                    "id": str(x.get("position") or x.get("thumbnail") or ""),
+                    "source": x.get("source") or x.get("title"),
+                    "license": x.get("license") or "verify_before_commercial_use",
+                })
+            return out
     except Exception:
-        return None
+        return []
 
 
-async def _configured_stock(agent: Any, query: str) -> List[Dict[str, Any]]:
+async def _configured_stock(query: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
-    keys = [
-        ("PIXABAY_API_KEY", "pixabay"),
-        ("UNSPLASH_ACCESS_KEY", "unsplash"),
-    ]
+    keys = [("PIXABAY_API_KEY", "pixabay"), ("UNSPLASH_ACCESS_KEY", "unsplash")]
     async with httpx.AsyncClient(timeout=20.0) as client:
         for env, provider in keys:
             key = os.getenv(env, "").strip()
@@ -95,84 +132,150 @@ async def _configured_stock(agent: Any, query: str) -> List[Dict[str, Any]]:
                 continue
             try:
                 if provider == "pixabay":
-                    r = await client.get("https://pixabay.com/api/", params={"key": key, "q": query, "image_type": "photo", "orientation": "vertical", "per_page": 12})
+                    r = await client.get(
+                        "https://pixabay.com/api/",
+                        params={"key": key, "q": query, "image_type": "photo", "orientation": "vertical", "per_page": 12},
+                    )
                     rows = (r.json() or {}).get("hits", []) if r.status_code < 400 else []
                     for x in rows:
-                        out.append({"url": x.get("largeImageURL") or x.get("webformatURL"), "provider": provider, "id": str(x.get("id") or ""), "width": x.get("imageWidth") or 0, "height": x.get("imageHeight") or 0, "license": "Pixabay License"})
+                        out.append({"url": x.get("largeImageURL") or x.get("webformatURL"), "provider": provider, "id": str(x.get("id") or ""), "license": "Pixabay License"})
                 else:
-                    r = await client.get("https://api.unsplash.com/search/photos", params={"client_id": key, "query": query, "orientation": "portrait", "per_page": 12})
+                    r = await client.get(
+                        "https://api.unsplash.com/search/photos",
+                        params={"client_id": key, "query": query, "orientation": "portrait", "per_page": 12},
+                    )
                     rows = (r.json() or {}).get("results", []) if r.status_code < 400 else []
                     for x in rows:
                         u = (x.get("urls") or {}).get("full") or (x.get("urls") or {}).get("raw")
-                        out.append({"url": u, "provider": provider, "id": str(x.get("id") or ""), "width": (x.get("width") or 0), "height": (x.get("height") or 0), "license": "Unsplash License"})
+                        out.append({"url": u, "provider": provider, "id": str(x.get("id") or ""), "license": "Unsplash License"})
             except Exception:
                 continue
     return [x for x in out if x.get("url")]
 
 
-async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], pin_index: int, job_store: Any, job_id: str, used_urls: Set[str], agent: Any) -> Dict[str, Any]:
-    job_store.update(job_id, progress=f"Pin {pin_index}/5: 8K/4K image selection ({strategy['name']})")
-    name = product.get("name") or "product"
-    query = f"{name} {strategy['focus']}"[:120]
-    candidates: List[Dict[str, Any]] = []
+async def _verify_candidates(candidates: List[Dict[str, Any]], used_urls: Set[str]) -> List[Dict[str, Any]]:
+    verified: List[Dict[str, Any]] = []
+    seen = set(used_urls)
+    for c in candidates:
+        url = c.get("url")
+        if not url or url in seen:
+            continue
+        w, h, data = await _probe_dimensions(url)
+        if not w or not h:
+            continue
+        item = dict(c)
+        item["width"], item["height"], item["_data"] = w, h, data
+        verified.append(item)
+        seen.add(url)
+    return verified
 
-    # 1. Genuine product-page imagery, ranked by native resolution.
+
+def _best(items: List[Dict[str, Any]], minimum_tier: int = 0) -> Dict[str, Any] | None:
+    eligible = [x for x in items if _native_tier(x) >= minimum_tier]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda x: (_pixels(x), _provider_rank(x.get("provider", ""))))
+
+
+def _to_4k(data: bytes) -> str | None:
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+        scale = min(TARGET_W / im.width, TARGET_H / im.height)
+        nw = max(1, int(im.width * scale))
+        nh = max(1, int(im.height * scale))
+        im = im.resize((nw, nh), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (TARGET_W, TARGET_H), (255, 255, 255))
+        canvas.paste(im, ((TARGET_W - nw) // 2, (TARGET_H - nh) // 2))
+        out = io.BytesIO()
+        canvas.save(out, format="JPEG", quality=96, subsampling=0, optimize=True)
+        return base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
+async def _try_existing_ai(agent: Any, product: Dict[str, Any], strategy: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Use an existing executable AI image hook only when the agent exposes one."""
+    for name in ("generate_pin_image", "generate_ai_image", "openai_generate_image"):
+        fn = getattr(agent, name, None)
+        if not callable(fn):
+            continue
+        try:
+            result = await fn(product, strategy)
+            if isinstance(result, dict) and result.get("value"):
+                return result
+        except Exception:
+            continue
+    return None
+
+
+async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], pin_index: int, job_store: Any, job_id: str, used_urls: Set[str], agent: Any) -> Dict[str, Any]:
+    job_store.update(job_id, progress=f"Pin {pin_index}/5: Composio 8K/4K image priority ({strategy['name']})")
+    name = product.get("name") or "product"
+    query = f"{name} {strategy['focus']}"[:160]
+
+    # PRIORITY 1 + 2: Composio Image Search, with real downloaded dimensions.
+    composio: List[Dict[str, Any]] = []
+    for q in (name, f"{name} product", query):
+        composio.extend(await _composio_image_search(q, num=20))
+        if any(_native_tier(x) >= 4 for x in await _verify_candidates(composio, used_urls)):
+            break
+    composio_verified = await _verify_candidates(composio, used_urls)
+    best_8k = _best(composio_verified, 4)
+    if best_8k:
+        used_urls.add(best_8k["url"])
+        return {"mode": "url", "value": best_8k["url"], "provider": "composio_search_image", "id": best_8k.get("id"), "score": 100, "license": best_8k.get("license"), "resolution_tier": "8K+"}
+    best_4k = _best(composio_verified, 3)
+    if best_4k:
+        used_urls.add(best_4k["url"])
+        return {"mode": "url", "value": best_4k["url"], "provider": "composio_search_image", "id": best_4k.get("id"), "score": 98, "license": best_4k.get("license"), "resolution_tier": "4K+"}
+
+    # PRIORITY 3: other genuinely executable external image providers.
+    other: List[Dict[str, Any]] = []
+    try:
+        for f in await agent.search_pexels(query):
+            if f.get("url"):
+                other.append(f)
+    except Exception:
+        pass
+    other.extend(await _configured_stock(query))
+    other_verified = await _verify_candidates(other, used_urls)
+    best_other = _best(other_verified, 3) or _best(other_verified, 2)
+    if best_other:
+        used_urls.add(best_other["url"])
+        return {"mode": "url", "value": best_other["url"], "provider": best_other.get("provider"), "id": best_other.get("id"), "score": 94 if _native_tier(best_other) >= 3 else 88, "license": best_other.get("license"), "resolution_tier": "4K+" if _native_tier(best_other) >= 3 else "high-res"}
+
+    # PRIORITY 4: executable AI image path, if actually present.
+    ai = await _try_existing_ai(agent, product, strategy)
+    if ai:
+        return ai
+
+    # PRIORITY 5: 4K derivative of the best genuine external source, if one exists.
+    external_any = composio_verified + other_verified
+    if external_any:
+        source = max(external_any, key=lambda x: (_pixels(x), _provider_rank(x.get("provider", ""))))
+        data = source.get("_data")
+        if data:
+            b64 = _to_4k(data)
+            if b64:
+                used_urls.add(source["url"])
+                return {"mode": "base64", "value": b64, "provider": f"{source.get('provider')}_4k_upscale", "id": source.get("id"), "score": 86, "license": source.get("license"), "resolution_tier": "4K_upscaled"}
+
+    # PRIORITY 6: native product-page imagery, only after priorities 1-5 fail.
+    native = []
     for url in product.get("images") or []:
         if url in used_urls:
             continue
-        w, h, _ = await _probe_dimensions(url)
+        w, h, data = await _probe_dimensions(url)
         if w and h:
-            candidates.append({"url": url, "provider": "product_page", "width": w, "height": h, "license": "product_page"})
+            native.append({"url": url, "provider": "product_page", "width": w, "height": h, "_data": data, "license": "product_page"})
+    native_best = _best(native, 0)
+    if native_best:
+        used_urls.add(native_best["url"])
+        tier = _native_tier(native_best)
+        return {"mode": "url", "value": native_best["url"], "provider": "product_page", "score": 80, "license": "product_page", "resolution_tier": "native" if tier < 3 else ("8K+" if tier == 4 else "4K+")}
 
-    # 2. Real web image search through the connected integration.
-    for q in (name, query, f"{name} product"):
-        try:
-            found = await agent.search_composio_images(q, num=12)
-            for f in found:
-                if f.get("url") and f["url"] not in used_urls:
-                    w, h, _ = await _probe_dimensions(f["url"])
-                    if w and h:
-                        f = dict(f); f["width"], f["height"] = w, h
-                        candidates.append(f)
-        except Exception:
-            pass
-        if any(_native_tier(c) >= 3 for c in candidates):
-            break
-
-    # 3. Configured Pexels + Pixabay + Unsplash sources.
-    try:
-        for f in await agent.search_pexels(query):
-            if f.get("url") and f["url"] not in used_urls:
-                w, h, _ = await _probe_dimensions(f["url"])
-                if w and h:
-                    f = dict(f); f["width"], f["height"] = w, h
-                    candidates.append(f)
-    except Exception:
-        pass
-    candidates.extend(await _configured_stock(agent, query))
-
-    # 4. Select native 8K/4K first, irrespective of provider; never fake a
-    # high-resolution source by simply trusting a URL's metadata.
-    candidates = [c for c in candidates if c.get("url") and c["url"] not in used_urls]
-    candidates.sort(key=_rank, reverse=True)
-    if candidates:
-        best = candidates[0]
-        if _native_tier(best) >= 3 and await agent._url_ok(best["url"]):
-            used_urls.add(best["url"])
-            return {"mode": "url", "value": best["url"], "provider": best.get("provider"), "id": best.get("id"), "score": 100 if _native_tier(best) == 4 else 95, "license": best.get("license"), "resolution_tier": "8K+" if _native_tier(best) == 4 else "4K+"}
-
-    # 5. If no native 8K/4K source exists, use the best real source and make a
-    # 4K portrait derivative locally. This is quality degradation only after
-    # all native high-resolution sources have been exhausted.
-    for c in candidates:
-        w, h, data = await _probe_dimensions(c["url"])
-        if data and w >= 900 and h >= 900:
-            b64 = _to_4k(data)
-            if b64:
-                used_urls.add(c["url"])
-                return {"mode": "base64", "value": b64, "provider": f"{c.get('provider')}_4k_upscale", "id": c.get("id"), "score": 90, "license": c.get("license"), "resolution_tier": "4K_upscaled"}
-
-    # 6. Preserve the existing final emergency fallback exactly as last resort.
+    # PRIORITY 7: existing emergency fallback, unchanged.
     return agent.pillow_card(product, strategy["key"])
 
 
@@ -180,10 +283,12 @@ def install(agent: Any) -> None:
     if getattr(agent, "_image_priority_installed", False):
         return
     original = agent.get_best_pin_image
+
     async def wrapped(product: Dict[str, Any], strategy: Dict[str, Any], pin_index: int, job_store: Any, job_id: str, used_urls: Set[str]):
         try:
             return await get_best_pin_image(product, strategy, pin_index, job_store, job_id, used_urls, agent)
         except Exception:
             return await original(product, strategy, pin_index, job_store, job_id, used_urls)
+
     agent.get_best_pin_image = wrapped
     agent._image_priority_installed = True
