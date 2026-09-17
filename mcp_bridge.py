@@ -13,10 +13,10 @@ def _result(request_id:Any,result:Dict[str,Any])->JSONResponse:return JSONRespon
 def _error(request_id:Any,code:int,message:str)->JSONResponse:return JSONResponse({"jsonrpc":"2.0","id":request_id,"error":{"code":code,"message":message}})
 
 async def _submit_exact_url(url:str)->str:
- if not API_SECRET:raise RuntimeError("Railway API secret is not configured")
  value=(url or "").strip()
  if not value.startswith(("http://","https://")):raise ValueError("url must be an http(s) URL")
- async with httpx.AsyncClient(timeout=30.0,follow_redirects=False) as client:response=await client.post(SUBMIT_URL,headers={"X-API-Secret":API_SECRET},json={"url":value})
+ headers={"X-API-Secret":API_SECRET} if API_SECRET else {}
+ async with httpx.AsyncClient(timeout=30.0,follow_redirects=False) as client:response=await client.post(SUBMIT_URL,headers=headers,json={"url":value})
  if response.status_code>=400:raise RuntimeError(f"Railway /submit returned HTTP {response.status_code}: {response.text[:500]}")
  data=response.json();return f"Railway accepted the exact URL. job_id={data.get('job_id')}; status={data.get('status')}; message={data.get('message')}"
 
@@ -65,14 +65,13 @@ async def run_one_shot_smoke_test()->None:
  marker=hashlib.sha256(SMOKE_TEST_URL.encode()).hexdigest()
  try:
   if os.path.exists(SMOKE_MARKER) and open(SMOKE_MARKER).read().strip()==marker:
-   print("Composio bridge smoke test already completed for configured URL")
-   return
+   print("Composio bridge smoke test already completed for configured URL");return
   result=await composio_router_submit_exact_url(SMOKE_TEST_URL)
+  if result.get("error"):raise RuntimeError(str(result.get("error")))
   print(f"Composio bridge smoke test executed successfully: {result}")
   os.makedirs(os.path.dirname(SMOKE_MARKER),exist_ok=True)
   with open(SMOKE_MARKER,"w") as f:f.write(marker)
- except Exception as exc:
-  print(f"Composio bridge smoke test failed: {type(exc).__name__}: {str(exc)[:500]}")
+ except Exception as exc:print(f"Composio bridge smoke test failed: {type(exc).__name__}: {str(exc)[:500]}")
 
 @router.post("/")
 async def mcp_endpoint(request:Request):
@@ -104,8 +103,7 @@ async def register_custom_mcp_with_retry()->bool:
    if await _register_once():
     print("Composio Custom MCP bridge registered and synced");session=await ensure_composio_router_session()
     if session.get("ready"):
-     print("Composio Railway Tool Router session ready with Pinterest bridge")
-     await run_one_shot_smoke_test()
+     print("Composio Railway Tool Router session ready with Pinterest bridge");await run_one_shot_smoke_test()
     else:print(f"Composio Railway Tool Router session dormant: {session.get('reason')}")
     return True
   except Exception as exc:print(f"Composio Custom MCP registration attempt {attempt} failed: {type(exc).__name__}")
