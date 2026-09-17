@@ -6,12 +6,13 @@ from typing import Any,Awaitable,Callable,Dict,List
 from amazon_client import amazon_credentials_present
 from amazon_boards import build_slot_specs,REQUIRED_PRIMARY_SLOTS,classify_live_boards
 from amazon_discovery import MAX_REPLACEMENTS_PER_SLOT,discover_for_board,discover_global,is_dormant
+from amazon_composio_discovery import discover_category
 from daily_ledger import ledger,SLOT_COUNT,BATCH_SIZE
 from published_registry import registry
 from amazon_alerts import send_failure_alert
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
-SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60))); SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes"); SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
-EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]]; ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]]; WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
+SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60)));SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes");SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
+EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]];ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]];WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
 def pinterest_five_verified(result:Dict[str,Any])->bool:
  pins=result.get("pins") if isinstance(result,dict) else None
  return isinstance(pins,list) and len(pins)==5 and all(isinstance(p,dict) and bool(p.get("verified")) for p in pins)
@@ -64,12 +65,14 @@ class AmazonScheduler:
   if not gate["ready"]:
    self.status["dormant_reason"]="; ".join(gate["blocking_reasons"]);await send_failure_alert(batch=batch_index,reason="scheduler gate blocked",details="; ".join(gate["blocking_reasons"]));return {"status":"blocked","batch":batch_index,"reasons":gate["blocking_reasons"]}
   specs,_=build_slot_specs(live)
-  if len(specs)<SLOT_COUNT:
-   await send_failure_alert(batch=batch_index,reason="15 daily slots unavailable");return {"status":"blocked","batch":batch_index,"reason":"15 daily slots unavailable"}
+  if not specs:
+   await send_failure_alert(batch=batch_index,reason="15 category slots unavailable");return {"status":"blocked","batch":batch_index,"reason":"15 category slots unavailable"}
   day=ledger.ensure_day(slots_spec=specs);ledger.reclaim_stale_processing(day);owner=f"batch-{batch_index}-{uuid.uuid4().hex}";claim=ledger.try_begin_batch(day,batch_index,owner);wait_cycles=0
   while not claim["acquired"] and claim.get("status")=="busy" and wait_cycles<160:
    await asyncio.sleep(15);wait_cycles+=1;claim=ledger.try_begin_batch(day,batch_index,owner)
-  if not claim["acquired"]:return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json"),"active_batch":claim.get("active_batch")}
+  if not claim["acquired"]:
+   if claim.get("status") not in ("completed","running"):await send_failure_alert(batch=batch_index,reason=str(claim.get("status")),details=str(claim))
+   return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json"),"active_batch":claim.get("active_batch")}
   self.status.update({"current_batch":batch_index,"dormant_reason":None});first=(batch_index-1)*BATCH_SIZE+1;last=first+BATCH_SIZE-1;successes=0;attempted=0;errors=[]
   try:
    for slot_no in range(first,last+1):
@@ -90,7 +93,8 @@ class AmazonScheduler:
  async def _process_slot(self,slot,enqueue,wait_job,day):
   n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0);exclude=set()
   while attempts<MAX_REPLACEMENTS_PER_SLOT:
-   candidate=await (discover_global(exclude_asins=exclude) if slot.get("slot_kind")=="global" else discover_for_board(slot.get("target_board_name") or "Everything Else",exclude_asins=exclude))
+   if slot.get("amazon_category") and slot.get("slot_kind")=="category":candidate=await discover_category(slot["amazon_category"],exclude_asins=exclude)
+   else:candidate=await (discover_global(exclude_asins=exclude) if slot.get("slot_kind")=="global" else discover_for_board(slot.get("target_board_name") or "Everything Else",exclude_asins=exclude))
    if not candidate:ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
    exclude.add(candidate["asin"]);url=candidate["affiliate_url"];ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
    try:result=await enqueue(url)
