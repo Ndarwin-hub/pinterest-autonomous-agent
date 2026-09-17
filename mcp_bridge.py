@@ -6,21 +6,28 @@ workflow.
 """
 import asyncio
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+COMPOSIO_ENTITY_ID = os.getenv("COMPOSIO_ENTITY_ID", "").strip()
 API_SECRET = os.getenv("API_SECRET", "").strip()
 BRIDGE_TOKEN = os.getenv("MCP_BRIDGE_TOKEN", "").strip()
 PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "web-production-dae68.up.railway.app").strip()
 SUBMIT_URL = f"https://{PUBLIC_DOMAIN}/submit"
 MCP_TOOLKIT_SLUG = "PINTEREST_RAILWAY_BRIDGE"
+CUSTOM_MCP_TOOLKIT_SLUG = "CUSTOM_PINTEREST_RAILWAY_BRIDGE"
+COMPOSIO_SEARCH_TOOLKIT_SLUG = "composio_search"
+COMPOSIO_BASE = "https://backend.composio.dev/api/v3.1"
 MCP_PATH = f"/mcp/{BRIDGE_TOKEN}" if BRIDGE_TOKEN else ""
 
 router = APIRouter()
+_router_session_id: Optional[str] = None
+_router_submit_tool_slug: Optional[str] = None
+_router_session_mcp_url: Optional[str] = None
 
 TOOL = {
     "name": "PINTEREST_SUBMIT_URL",
@@ -66,6 +73,79 @@ async def _submit_exact_url(url: str) -> str:
     )
 
 
+async def _composio_request(method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not COMPOSIO_API_KEY:
+        raise RuntimeError("Composio API key is not configured")
+    headers = {"x-api-key": COMPOSIO_API_KEY, "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.request(method, f"{COMPOSIO_BASE}{path}", headers=headers, json=body)
+    response.raise_for_status()
+    return response.json()
+
+
+async def ensure_composio_router_session() -> Dict[str, Any]:
+    """Create a Railway-owned Tool Router session containing the bridge.
+
+    This removes the production dependency on whichever transient ChatGPT
+    session happens to be connected to Composio. The custom toolkit is still
+    registered/synced first, then explicitly placed in the Railway session.
+    """
+    global _router_session_id, _router_submit_tool_slug, _router_session_mcp_url
+    if not (COMPOSIO_API_KEY and COMPOSIO_ENTITY_ID):
+        return {"ready": False, "reason": "Composio credentials are not configured"}
+    if _router_session_id and _router_submit_tool_slug:
+        return {
+            "ready": True,
+            "session_id": _router_session_id,
+            "tool_slug": _router_submit_tool_slug,
+            "mcp_url": _router_session_mcp_url,
+        }
+    payload = {
+        "user_id": COMPOSIO_ENTITY_ID,
+        "toolkits": {"enabled": [COMPOSIO_SEARCH_TOOLKIT_SLUG, CUSTOM_MCP_TOOLKIT_SLUG]},
+        "search": {"enable": True},
+        "execute": {"enable_multi_execute": True},
+        "workbench": {"enable": True, "enable_proxy_execution": True},
+    }
+    session = await _composio_request("POST", "/tool_router/session", payload)
+    custom_toolkits = ((session.get("experimental") or {}).get("custom_toolkits") or [])
+    submit_slug = None
+    for toolkit in custom_toolkits:
+        for tool in toolkit.get("tools") or []:
+            if tool.get("original_slug") == TOOL["name"] or tool.get("name") == TOOL["name"]:
+                submit_slug = tool.get("slug")
+                break
+        if submit_slug:
+            break
+    if not submit_slug:
+        raise RuntimeError("Composio session was created but PINTEREST_SUBMIT_URL was not exposed")
+    _router_session_id = str(session.get("session_id") or "")
+    _router_submit_tool_slug = str(submit_slug)
+    _router_session_mcp_url = ((session.get("mcp") or {}).get("url"))
+    return {
+        "ready": bool(_router_session_id),
+        "session_id": _router_session_id,
+        "tool_slug": _router_submit_tool_slug,
+        "mcp_url": _router_session_mcp_url,
+        "toolkits": [str(x.get("slug")) for x in custom_toolkits],
+    }
+
+
+async def composio_router_submit_exact_url(url: str) -> Dict[str, Any]:
+    session = await ensure_composio_router_session()
+    if not session.get("ready"):
+        raise RuntimeError(str(session.get("reason") or "Composio Tool Router session is not ready"))
+    value = (url or "").strip()
+    if not value.startswith(("http://", "https://")):
+        raise ValueError("url must be an http(s) URL")
+    result = await _composio_request(
+        "POST",
+        f"/tool_router/session/{_router_session_id}/execute",
+        {"tool_slug": _router_submit_tool_slug, "arguments": {"url": value}},
+    )
+    return result
+
+
 @router.post("/")
 async def mcp_endpoint(request: Request):
     """Handle the small MCP Streamable-HTTP JSON-RPC surface needed by Composio."""
@@ -78,7 +158,6 @@ async def mcp_endpoint(request: Request):
     method = body.get("method")
     params = body.get("params") or {}
 
-    # JSON-RPC notifications intentionally receive 202 with no body.
     if request_id is None:
         if method in {"notifications/initialized", "notifications/cancelled"}:
             return Response(status_code=202)
@@ -92,7 +171,7 @@ async def mcp_endpoint(request: Request):
             {
                 "protocolVersion": requested,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "Pinterest Railway Bridge", "version": "1.0.0"},
+                "serverInfo": {"name": "Pinterest Railway Bridge", "version": "1.1.0"},
                 "instructions": "Use PINTEREST_SUBMIT_URL for exact product/affiliate URLs.",
             },
         )
@@ -138,14 +217,14 @@ async def _register_once() -> bool:
     }
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
-            "https://backend.composio.dev/api/v3.1/custom/toolkits/upsert",
+            f"{COMPOSIO_BASE}/custom/toolkits/upsert",
             headers=headers,
             json=payload,
         )
         response.raise_for_status()
-        normalized = response.json().get("slug", "CUSTOM_" + MCP_TOOLKIT_SLUG)
+        normalized = response.json().get("slug", CUSTOM_MCP_TOOLKIT_SLUG)
         sync = await client.post(
-            "https://backend.composio.dev/api/v3.1/custom/toolkits/sync",
+            f"{COMPOSIO_BASE}/custom/toolkits/sync",
             headers=headers,
             json={"slug": normalized},
         )
@@ -160,8 +239,16 @@ async def register_custom_mcp_with_retry() -> bool:
         try:
             if await _register_once():
                 print("Composio Custom MCP bridge registered and synced")
+                try:
+                    session = await ensure_composio_router_session()
+                    if session.get("ready"):
+                        print("Composio Railway Tool Router session ready with Pinterest bridge")
+                    else:
+                        print(f"Composio Railway Tool Router session dormant: {session.get('reason')}")
+                except Exception as exc:
+                    print(f"Composio Railway Tool Router session setup failed: {type(exc).__name__}")
                 return True
         except Exception as exc:
-            print(f"Composio Custom MCP registration attempt {attempt} failed: {exc}")
+            print(f"Composio Custom MCP registration attempt {attempt} failed: {type(exc).__name__}")
         await asyncio.sleep(min(2 ** attempt, 15))
     return False
