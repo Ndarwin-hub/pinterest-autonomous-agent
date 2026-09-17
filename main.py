@@ -31,6 +31,8 @@ from amazon_client import amazon_credentials_present
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
 from amazon_boards import REQUIRED_PRIMARY_SLOTS
 from daily_ledger import ledger as daily_ledger
+import publication_guard
+publication_guard.install(agent_module)
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO"),format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger=logging.getLogger("pinterest-agent"); job_store=JobStore(); _enqueue_lock=asyncio.Lock(); API_SECRET=os.getenv("API_SECRET","").strip(); AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip(); GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent"; GITHUB_ISSUER="https://token.actions.githubusercontent.com"; GITHUB_AUDIENCE=f"https://github.com/{GITHUB_REPO}"; _jwks=PyJWKClient("https://token.actions.githubusercontent.com/.well-known/jwks",cache_keys=True)
 def verify_secret(x_api_secret:Optional[str]=Header(None)):
