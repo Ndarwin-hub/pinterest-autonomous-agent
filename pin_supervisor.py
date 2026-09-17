@@ -1,15 +1,16 @@
-"""Autonomous Pin-command supervisor for both manual and background jobs.
+"""Pin-command result supervisor for manual and background jobs.
 
-This module is intentionally a thin policy layer over the existing Pinterest
-pipeline. It does not publish Pins itself and never bypasses the existing
-idempotency, image-diversity, quality, board, or verification gates.
+The supervisor reports the actual per-Pin outcome without rolling back Pins
+that were successfully published. It does not publish or unpublish Pins and
+never bypasses the existing idempotency, image-diversity, quality, board, or
+verification gates.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List
 from urllib.parse import urlsplit, urlunsplit
 
-VERSION = "pin-supervisor-v1"
+VERSION = "pin-supervisor-v2"
 
 
 def normalize_for_identity(url: str) -> str:
@@ -25,50 +26,71 @@ def _pins(result: Any) -> List[Dict[str, Any]]:
 
 
 def inspect_result(result: Dict[str, Any], requested_url: str) -> Dict[str, Any]:
-    """Apply the Pin command's final success contract to an existing job result."""
-    pins = _pins(result)
-    failures: List[str] = []
-    if len(pins) != 5:
-        failures.append(f"expected exactly 5 Pins, found {len(pins)}")
+    """Classify the completed publication attempt by the actual Pin results.
 
+    5/5 is completed, 1-4/5 is completed_partial, and 0/5 is failed.
+    Successfully published Pins are retained; there is no rollback/unpublish
+    operation in this supervisor.
+    """
+    pins = _pins(result)
     requested = str(requested_url or "").strip()
+    valid_verified: List[Dict[str, Any]] = []
+    failures: List[str] = []
+
     for index, pin in enumerate(pins, 1):
         if not isinstance(pin, dict):
             failures.append(f"Pin {index}: malformed result")
             continue
-        if not pin.get("verified"):
-            failures.append(f"Pin {index}: not individually verified")
+        pin_id = str(pin.get("pin_id") or "").strip()
         destination = str(pin.get("destination_url") or "").strip()
-        if destination and destination != requested:
-            failures.append(f"Pin {index}: destination URL mismatch")
-        if not destination:
-            failures.append(f"Pin {index}: missing destination URL")
-        if not pin.get("pin_id"):
-            failures.append(f"Pin {index}: missing Pinterest Pin ID")
+        if pin.get("verified") and pin_id and destination == requested:
+            valid_verified.append(pin)
+        else:
+            reasons = []
+            if not pin.get("verified"):
+                reasons.append("not individually verified")
+            if not pin_id:
+                reasons.append("missing Pinterest Pin ID")
+            if destination != requested:
+                reasons.append("destination URL mismatch")
+            failures.append(f"Pin {index}: {', '.join(reasons)}")
 
-    success = not failures and len(pins) == 5
+    verified_count = len(valid_verified)
+    if verified_count == 5:
+        status = "completed"
+    elif verified_count > 0:
+        status = "completed_partial"
+    else:
+        status = "failed"
+
     out = dict(result)
     out["pin_supervisor"] = {
         "version": VERSION,
-        "status": "SUCCESS" if success else "UNCONFIRMED",
-        "success_contract": "5_pins_published_and_individually_verified",
-        "verified_count": sum(1 for p in pins if isinstance(p, dict) and p.get("verified")),
+        "status": status,
+        "success_contract": "5_pins_published_and_individually_verified_for_completed",
+        "verified_count": verified_count,
+        "planned_count": 5,
         "failures": failures,
+        "rollback_unpublish": False,
     }
     out["pins_published"] = len(pins)
-    out["pin_supervisor_status"] = "SUCCESS" if success else "UNCONFIRMED"
+    out["verified_pins"] = verified_count
+    out["pin_supervisor_status"] = status
+    out["job_status"] = status
     return out
 
 
 def capability_contract() -> Dict[str, Any]:
-    """Describe what this supervisor owns without claiming providers are connected."""
+    """Describe supervisor ownership without claiming providers are connected."""
     return {
         "version": VERSION,
         "master": "application_supervisor",
         "delegates": "only actually executable configured providers",
         "publication_executor": "existing_pinterest_pipeline",
         "railway_role": "background_executor_and_scheduler",
-        "success_contract": "5_pins_published_and_individually_verified",
+        "completion_contract": "5_completed; 1_to_4_completed_partial; 0_failed",
+        "successful_pins_are_kept": True,
+        "unpublish_on_partial": False,
         "manual_submit_preserved": True,
         "idempotency_bypass": False,
         "image_diversity_bypass": False,
@@ -76,22 +98,14 @@ def capability_contract() -> Dict[str, Any]:
 
 
 def install_runtime(agent_module: Any) -> None:
-    """Install a final-result supervisor before main imports the job function."""
+    """Install a non-destructive result classifier around the existing job."""
     if getattr(agent_module, "_pin_supervisor_installed", False):
         return
     original = agent_module.process_pinterest_job
 
     async def supervised(job_id: str, url: str, job_store: Any):
         result = await original(job_id, url, job_store)
-        checked = inspect_result(result, url)
-        if checked["pin_supervisor_status"] != "SUCCESS":
-            # Preserve the underlying result for callers that can inspect the
-            # exception, but fail closed: a partial/unverified job is not success.
-            raise RuntimeError(
-                "Pin supervisor rejected final job state: "
-                + "; ".join(checked["pin_supervisor"]["failures"])
-            )
-        return checked
+        return inspect_result(result, url)
 
     agent_module.process_pinterest_job = supervised
     agent_module._pin_supervisor_installed = True
