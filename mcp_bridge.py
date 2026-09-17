@@ -1,9 +1,4 @@
-"""Minimal dependency-free MCP/JSON-RPC bridge for Composio Custom MCP.
-
-The bridge exposes exactly one tool and forwards the exact URL to the existing
-Railway /submit intake. It intentionally does not duplicate the Pinterest
-workflow.
-"""
+"""Minimal dependency-free MCP/JSON-RPC bridge for Composio Custom MCP."""
 import asyncio
 import os
 from typing import Any, Dict, Optional
@@ -31,16 +26,8 @@ _router_session_mcp_url: Optional[str] = None
 
 TOOL = {
     "name": "PINTEREST_SUBMIT_URL",
-    "description": (
-        "Submit one exact product/affiliate URL to the autonomous Pinterest workflow. "
-        "Pass the URL unchanged; do not shorten, rewrite, or replace it."
-    ),
-    "inputSchema": {
-        "type": "object",
-        "properties": {"url": {"type": "string", "description": "Exact http(s) product or affiliate URL."}},
-        "required": ["url"],
-        "additionalProperties": False,
-    },
+    "description": "Submit one exact product/affiliate URL to the autonomous Pinterest workflow. Pass the URL unchanged; do not shorten, rewrite, or replace it.",
+    "inputSchema": {"type": "object", "properties": {"url": {"type": "string", "description": "Exact http(s) product or affiliate URL."}}, "required": ["url"], "additionalProperties": False},
 }
 
 
@@ -73,13 +60,11 @@ async def _composio_request(method: str, path: str, body: Optional[Dict[str, Any
     async with httpx.AsyncClient(timeout=45.0) as client:
         response = await client.request(method, f"{COMPOSIO_BASE}{path}", headers=headers, json=body)
     if response.status_code >= 400:
-        detail = response.text[:1000].replace("\n", " ")
-        raise RuntimeError(f"Composio API HTTP {response.status_code}: {detail}")
+        raise RuntimeError(f"Composio API HTTP {response.status_code}: {response.text[:1000].replace(chr(10), ' ')}")
     return response.json()
 
 
 async def ensure_composio_router_session() -> Dict[str, Any]:
-    """Create a Railway-owned Tool Router session and explicitly enable both toolkits."""
     global _router_session_id, _router_submit_tool_slug, _router_session_mcp_url
     if not (COMPOSIO_API_KEY and COMPOSIO_ENTITY_ID):
         return {"ready": False, "reason": "Composio credentials are not configured"}
@@ -89,16 +74,16 @@ async def ensure_composio_router_session() -> Dict[str, Any]:
     last_error = ""
     for attempt in range(1, 6):
         try:
-            session = await _composio_request("POST", "/tool_router/session", {"user_id": COMPOSIO_ENTITY_ID})
+            # Composio requires Custom MCP toolkits to be selected at session creation.
+            session = await _composio_request(
+                "POST",
+                "/tool_router/session",
+                {"user_id": COMPOSIO_ENTITY_ID, "toolkits": {"enable": [COMPOSIO_SEARCH_TOOLKIT_SLUG, CUSTOM_MCP_TOOLKIT_SLUG]}},
+            )
             sid = str(session.get("session_id") or "")
             if not sid:
                 raise RuntimeError("Composio created a session without a session_id")
-            patched = await _composio_request(
-                "PATCH",
-                f"/tool_router/session/{sid}",
-                {"toolkits": {"enable": [COMPOSIO_SEARCH_TOOLKIT_SLUG, CUSTOM_MCP_TOOLKIT_SLUG]}},
-            )
-            custom_toolkits = ((patched.get("experimental") or {}).get("custom_toolkits") or [])
+            custom_toolkits = ((session.get("experimental") or {}).get("custom_toolkits") or [])
             submit_slug = None
             for toolkit in custom_toolkits:
                 for tool in toolkit.get("tools") or []:
@@ -111,8 +96,8 @@ async def ensure_composio_router_session() -> Dict[str, Any]:
                 raise RuntimeError("Composio session exists but PINTEREST_SUBMIT_URL is not exposed")
             _router_session_id = sid
             _router_submit_tool_slug = str(submit_slug)
-            _router_session_mcp_url = ((patched.get("mcp") or {}).get("url"))
-            return {"ready": True, "session_id": _router_session_id, "tool_slug": _router_submit_tool_slug, "mcp_url": _router_session_mcp_url, "enabled_toolkits": (patched.get("config") or {}).get("toolkits", {}).get("enabled", [])}
+            _router_session_mcp_url = ((session.get("mcp") or {}).get("url"))
+            return {"ready": True, "session_id": _router_session_id, "tool_slug": _router_submit_tool_slug, "mcp_url": _router_session_mcp_url, "enabled_toolkits": (session.get("config") or {}).get("toolkits", {}).get("enabled", [])}
         except Exception as exc:
             last_error = str(exc)
             print(f"Composio Tool Router session attempt {attempt} failed: {last_error[:500]}")
@@ -152,9 +137,8 @@ async def mcp_endpoint(request: Request):
     if method == "tools/list":
         return _result(request_id, {"tools": [TOOL]})
     if method == "tools/call":
-        name = params.get("name")
-        if name != TOOL["name"]:
-            return _error(request_id, -32601, f"Unknown tool: {name}")
+        if params.get("name") != TOOL["name"]:
+            return _error(request_id, -32601, f"Unknown tool: {params.get('name')}")
         try:
             text = await _submit_exact_url((params.get("arguments") or {}).get("url", ""))
             return _result(request_id, {"content": [{"type": "text", "text": text}], "isError": False})
