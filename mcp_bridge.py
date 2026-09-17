@@ -59,18 +59,11 @@ async def _submit_exact_url(url: str) -> str:
     if not value.startswith(("http://", "https://")):
         raise ValueError("url must be an http(s) URL")
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-        response = await client.post(
-            SUBMIT_URL,
-            headers={"X-API-Secret": API_SECRET},
-            json={"url": value},
-        )
+        response = await client.post(SUBMIT_URL, headers={"X-API-Secret": API_SECRET}, json={"url": value})
     if response.status_code >= 400:
         raise RuntimeError(f"Railway /submit returned HTTP {response.status_code}: {response.text[:500]}")
     data = response.json()
-    return (
-        f"Railway accepted the exact URL. job_id={data.get('job_id')}; "
-        f"status={data.get('status')}; message={data.get('message')}"
-    )
+    return f"Railway accepted the exact URL. job_id={data.get('job_id')}; status={data.get('status')}; message={data.get('message')}"
 
 
 async def _composio_request(method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -91,30 +84,19 @@ async def ensure_composio_router_session() -> Dict[str, Any]:
     if not (COMPOSIO_API_KEY and COMPOSIO_ENTITY_ID):
         return {"ready": False, "reason": "Composio credentials are not configured"}
     if _router_session_id and _router_submit_tool_slug:
-        return {
-            "ready": True,
-            "session_id": _router_session_id,
-            "tool_slug": _router_submit_tool_slug,
-            "mcp_url": _router_session_mcp_url,
-        }
+        return {"ready": True, "session_id": _router_session_id, "tool_slug": _router_submit_tool_slug, "mcp_url": _router_session_mcp_url}
 
     last_error = ""
     for attempt in range(1, 6):
         try:
-            # Start with the smallest valid session. Custom MCP sync can be
-            # eventually consistent, so toolkit selection is patched after creation.
-            session = await _composio_request(
-                "POST",
-                "/tool_router/session",
-                {"user_id": COMPOSIO_ENTITY_ID},
-            )
+            session = await _composio_request("POST", "/tool_router/session", {"user_id": COMPOSIO_ENTITY_ID})
             sid = str(session.get("session_id") or "")
             if not sid:
                 raise RuntimeError("Composio created a session without a session_id")
             patched = await _composio_request(
                 "PATCH",
                 f"/tool_router/session/{sid}",
-                {"toolkits": {"enabled": [COMPOSIO_SEARCH_TOOLKIT_SLUG, CUSTOM_MCP_TOOLKIT_SLUG]}},
+                {"toolkits": {"enable": [COMPOSIO_SEARCH_TOOLKIT_SLUG, CUSTOM_MCP_TOOLKIT_SLUG]}},
             )
             custom_toolkits = ((patched.get("experimental") or {}).get("custom_toolkits") or [])
             submit_slug = None
@@ -130,13 +112,7 @@ async def ensure_composio_router_session() -> Dict[str, Any]:
             _router_session_id = sid
             _router_submit_tool_slug = str(submit_slug)
             _router_session_mcp_url = ((patched.get("mcp") or {}).get("url"))
-            return {
-                "ready": True,
-                "session_id": _router_session_id,
-                "tool_slug": _router_submit_tool_slug,
-                "mcp_url": _router_session_mcp_url,
-                "enabled_toolkits": (patched.get("config") or {}).get("toolkits", {}).get("enabled", []),
-            }
+            return {"ready": True, "session_id": _router_session_id, "tool_slug": _router_submit_tool_slug, "mcp_url": _router_session_mcp_url, "enabled_toolkits": (patched.get("config") or {}).get("toolkits", {}).get("enabled", [])}
         except Exception as exc:
             last_error = str(exc)
             print(f"Composio Tool Router session attempt {attempt} failed: {last_error[:500]}")
@@ -151,60 +127,39 @@ async def composio_router_submit_exact_url(url: str) -> Dict[str, Any]:
     value = (url or "").strip()
     if not value.startswith(("http://", "https://")):
         raise ValueError("url must be an http(s) URL")
-    return await _composio_request(
-        "POST",
-        f"/tool_router/session/{_router_session_id}/execute",
-        {"tool_slug": _router_submit_tool_slug, "arguments": {"url": value}},
-    )
+    return await _composio_request("POST", f"/tool_router/session/{_router_session_id}/execute", {"tool_slug": _router_submit_tool_slug, "arguments": {"url": value}})
 
 
 @router.post("/")
 async def mcp_endpoint(request: Request):
-    """Handle the small MCP Streamable-HTTP JSON-RPC surface needed by Composio."""
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
     request_id = body.get("id")
     method = body.get("method")
     params = body.get("params") or {}
-
     if request_id is None:
         if method in {"notifications/initialized", "notifications/cancelled"}:
             return Response(status_code=202)
         if method == "ping":
             return Response(status_code=202)
-
     if method == "initialize":
         requested = params.get("protocolVersion") or "2025-06-18"
-        return _result(
-            request_id,
-            {
-                "protocolVersion": requested,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "Pinterest Railway Bridge", "version": "1.1.0"},
-                "instructions": "Use PINTEREST_SUBMIT_URL for exact product/affiliate URLs.",
-            },
-        )
-
+        return _result(request_id, {"protocolVersion": requested, "capabilities": {"tools": {}}, "serverInfo": {"name": "Pinterest Railway Bridge", "version": "1.1.0"}, "instructions": "Use PINTEREST_SUBMIT_URL for exact product/affiliate URLs."})
     if method == "ping":
         return _result(request_id, {})
-
     if method == "tools/list":
         return _result(request_id, {"tools": [TOOL]})
-
     if method == "tools/call":
         name = params.get("name")
         if name != TOOL["name"]:
             return _error(request_id, -32601, f"Unknown tool: {name}")
-        arguments = params.get("arguments") or {}
         try:
-            text = await _submit_exact_url(arguments.get("url", ""))
+            text = await _submit_exact_url((params.get("arguments") or {}).get("url", ""))
             return _result(request_id, {"content": [{"type": "text", "text": text}], "isError": False})
         except Exception as exc:
             return _result(request_id, {"content": [{"type": "text", "text": str(exc)}], "isError": True})
-
     return _error(request_id, -32601, f"Unsupported MCP method: {method}")
 
 
@@ -213,14 +168,7 @@ async def _register_once() -> bool:
         return False
     app_url = f"https://{PUBLIC_DOMAIN}{MCP_PATH}/"
     headers = {"x-api-key": COMPOSIO_API_KEY, "Content-Type": "application/json"}
-    payload = {
-        "slug": MCP_TOOLKIT_SLUG,
-        "toolkit_config": {
-            "name": "Pinterest Railway Bridge",
-            "app_url": app_url,
-            "auth_schemes": [{"mode": "NO_AUTH"}],
-        },
-    }
+    payload = {"slug": MCP_TOOLKIT_SLUG, "toolkit_config": {"name": "Pinterest Railway Bridge", "app_url": app_url, "auth_schemes": [{"mode": "NO_AUTH"}]}}
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(f"{COMPOSIO_BASE}/custom/toolkits/upsert", headers=headers, json=payload)
         response.raise_for_status()
