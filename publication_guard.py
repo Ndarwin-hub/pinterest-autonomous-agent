@@ -86,7 +86,7 @@ class PublicationGuard:
             )
             conn.commit()
             conn.close()
-            return "claimed", None, job_id
+            return "new", None, job_id
 
     def succeed(self, url: str, pin_index: int, result: dict):
         key = normalize_url(url)
@@ -139,7 +139,7 @@ def install(agent_module):
 
         if state == "claimed":
             raise RuntimeError(
-                f"Publication already claimed for url={normalize_url(link)} pin={pin_index}; refusing duplicate external create"
+                f"Publication already claimed for url={normalize_url(link)}; pin={pin_index}; refusing duplicate external create"
             )
 
         result = await original(
