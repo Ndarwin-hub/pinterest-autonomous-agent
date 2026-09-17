@@ -27,4 +27,4 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt pytest
       - run: python -m py_compile main.py publication_guard.py image_diversity_guard.py
-      - run: pytest -q tests/test_publication_guard.py
+      - run: PYTHONPATH=. pytest -q tests/test_publication_guard.py
