@@ -74,16 +74,33 @@ class AmazonScheduler:
    if claim.get("status") not in ("completed","running"):await send_failure_alert(batch=batch_index,reason=str(claim.get("status")),details=str(claim))
    return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json"),"active_batch":claim.get("active_batch")}
   self.status.update({"current_batch":batch_index,"dormant_reason":None});first=(batch_index-1)*BATCH_SIZE+1;last=first+BATCH_SIZE-1;successes=0;attempted=0;errors=[]
+  # Core board-balance rule: within this batch, process least-filled target boards first
+  balance_meta={"available":False,"message":"Board balancing could not be verified because current Pinterest counts were unavailable."}
+  slot_order=list(range(first,last+1))
   try:
-   for slot_no in range(first,last+1):
+   from board_balance import extract_board_rows,balance_state
+   rows=extract_board_rows(live);balance_meta=balance_state(rows)
+   if balance_meta.get("available"):
+    name_to_count={r["name"]:r.get("pin_count") for r in (balance_meta.get("ranked_dedicated") or [])}
+    def _slot_fill_key(slot_no):
+     if 1<=slot_no<=len(CATEGORY_SLOTS):
+      bname=CATEGORY_SLOTS[slot_no-1][1]
+      c=name_to_count.get(bname)
+      return (c is not None,c if c is not None else 10**9,slot_no)
+     return (True,10**9,slot_no)
+    slot_order=sorted(slot_order,key=_slot_fill_key)
+  except Exception as e:
+   logger.warning("Board balance reorder skipped: %s",e)
+  try:
+   for slot_no in slot_order:
     slot=ledger.next_pending_slot(day,slot_no,slot_no)
     if not slot:continue
     if not ledger.claim_slot(day,slot_no):continue
     attempted+=1;ok=await self._process_slot(slot,enqueue,wait_job,day)
-    if ok:successes+=1
+    if ok:successes,k=1
     else:errors.append({"slot":slot_no,"status":"failed_or_exhausted"})
    status="completed" if attempted>0 and successes>=attempted and not errors else ("partial_failure" if successes>0 else "failed")
-   result={"status":status,"day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted,"source":"composio_amazon"}
+   result={"status":status,"day"*day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted,"source":"composio_amazon","board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"slot_order":slot_order,"snapshot":balance_meta.get("snapshot")}}
    ledger.complete_batch(day,batch_index,owner,status=status,result_json=json.dumps(result,separators=(",",":")))
    if status!="completed":await send_failure_alert(batch=batch_index,reason=status,details=json.dumps(result))
    return result
@@ -93,7 +110,7 @@ class AmazonScheduler:
  async def _process_slot(self,slot,enqueue,wait_job,day):
   n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0);exclude=set()
   while attempts<MAX_REPLACEMENTS_PER_SLOT:
-   if 1<=n<=len(CATEGORY_SLOTS): candidate=await discover_category(CATEGORY_SLOTS[n-1][0],exclude_asins=exclude)
+   if 1<=n<=len(CATEGORY_SLOTS): candidate=await discover_category(CATEGORY_SLOTS[n1-1][0],exclude_asins=exclude)
    else:candidate=await discover_global(exclude_asins=exclude)
    if not candidate:ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
    exclude.add(candidate["asin"]);url=candidate["affiliate_url"];ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
