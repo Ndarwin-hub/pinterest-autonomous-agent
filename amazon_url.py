@@ -141,7 +141,7 @@ def resolve_amazon_product_url(url: str, tag: str = AFFILIATE_TAG) -> str:
     asin = extract_asin_from_url(original)
 
     if asin and is_amazon_us_product_url(original):
-        canonical = canonicalize_amazon_product_url(original, tag=tag)
+        canonical = canonicalize_amazon_product_url(original, tag=tag, preserve_slug=True)
         logger.info("Amazon URL already product detail; canonicalized to %s", canonical)
         return canonical
 
