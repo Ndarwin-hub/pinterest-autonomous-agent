@@ -35,11 +35,16 @@ async def _direct_composio_execute(tool_slug: str, arguments: Dict[str, Any], re
         "version": "latest",
         "dangerously_skip_version_check": True,
     }
-    account = _account_for(tool_slug)
-    if account:
-        payload["connected_account_id"] = account
+    # Use the production Composio user/entity for session-scoped account resolution.
+    # The Railway key currently cannot resolve the exposed connected-account nano-ID directly;
+    # user-scoped resolution is the compatible path for this existing production entity.
+    entity_id = os.getenv("COMPOSIO_ENTITY_ID", "").strip()
+    if entity_id:
+        payload["user_id"] = entity_id
     else:
-        payload["user_id"] = os.getenv("COMPOSIO_ENTITY_ID", "default").strip() or "default"
+        account = _account_for(tool_slug)
+        if account:
+            payload["connected_account_id"] = account
 
     url = f"https://backend.composio.dev/api/v3.1/tools/execute/{tool_slug}"
     headers = {"x-api-key": key, "Content-Type": "application/json"}
