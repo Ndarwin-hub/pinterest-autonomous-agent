@@ -82,10 +82,10 @@ try:
             try:
                 data = await _direct_execute("PINTEREST_LIST_BOARDS", {"page_size": 1}, retries=1)
                 items = data.get("items") or data.get("boards") or [] if isinstance(data, dict) else []
-                logger.info("COMPOSIO_TRANSPORT_SELFTEST=PASS pinterest_connected_account board_read=%s", bool(items))
+                print(f"COMPOSIO_TRANSPORT_SELFTEST=PASS pinterest_connected_account board_read={bool(items)}", flush=True)
             except Exception as exc:
-                logger.error("COMPOSIO_TRANSPORT_SELFTEST=FAIL %s", exc)
-
+                print(f"COMPOSIO_TRANSPORT_SELFTEST=FAIL {exc}", flush=True)
         asyncio.run(_selftest())
-except Exception:
+except Exception as exc:
+    print(f"COMPOSIO_TRANSPORT_HARDENING=FAIL {exc}", flush=True)
     logger.exception("Composio transport hardening could not be installed; original transport retained.")
