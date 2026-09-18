@@ -1,8 +1,6 @@
 name: Pinterest end-to-end smoke test
 on:
   push:
-    paths:
-      - '.github/workflows/e2e-pinterest-smoke.yml'
   workflow_dispatch:
 jobs:
   smoke:
