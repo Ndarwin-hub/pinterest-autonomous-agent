@@ -21,6 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            --write-out '\nHTTP_STATUS:%{http_code}\n' \
             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             -H 'Accept: application/json; api-version=2.0' \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
@@ -41,5 +42,5 @@ jobs:
             -H 'Content-Type: application/json' \
             -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/manual-submit' \
             --data-binary @.github/manual-amazon-submit.json | tee response.json
-          jq . response.json
+          cat response.json
           test "$(jq -r '.accepted' response.json)" -eq "$(jq -r '.requested' response.json)"
