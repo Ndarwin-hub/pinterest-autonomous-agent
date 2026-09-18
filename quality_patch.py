@@ -101,6 +101,30 @@ def install_identity(agent_mod) -> str:
         slug = _amazon_slug(resolved_url)
         if slug and (_generic(current) or _is_asin(current) or len(current) < 6):
             current = slug
+        # Amazon anti-bot/interstitial pages can expose only "Amazon.com" as the
+        # scraped title. Recover identity from Composio image-search metadata using
+        # the exact ASIN before rejecting the product. This keeps the pipeline fail-closed
+        # while avoiding false rejection of a valid Amazon product URL.
+        try:
+            from amazon_url import extract_asin_from_url
+            asin = extract_asin_from_url(resolved_url)
+            if asin and (_generic(current) or _is_asin(current) or len(current) < 6):
+                data = await agent_mod.run_composio_tool(
+                    "COMPOSIO_SEARCH_IMAGE",
+                    {"query": f"{asin} Amazon product", "num_images": 5},
+                    retries=1,
+                )
+                results = ((data or {}).get("images_results") or []) if isinstance(data, dict) else []
+                for candidate in results:
+                    title = _clean(candidate.get("title") or "")
+                    link = str(candidate.get("link") or "")
+                    if title and asin in link and not _generic(title) and not _is_asin(title):
+                        title = re.sub(r"^Amazon(?:\.com)?\s*:\s*", "", title, flags=re.I).strip()
+                        if len(title) >= 6 and not _generic(title):
+                            current = title
+                            break
+        except Exception as e:
+            logger.warning("QUALITY ASIN identity recovery skipped: %s", e)
         current = assert_valid_identity(current, context="research")
         product["name"] = current
         if not product.get("brand"):
