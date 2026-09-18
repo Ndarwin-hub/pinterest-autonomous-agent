@@ -38,7 +38,11 @@ def apply_agent_wiring(agent_mod:Any)->None:
             if b.grok_invocations>=10:
                 raise RuntimeError("Final Grok visual-review budget exhausted safely.")
             b.grok_invocations+=1
-        b.reserve(slug); return await orig_run(slug,args or {},retries=0)
+        b.reserve(slug)
+        transport = getattr(agent_mod, "_composio_transport_executor", None)
+        if transport is not None:
+            return await transport(slug, args or {}, retries=0)
+        return await orig_run(slug,args or {},retries=0)
     async def strict_publish(board_id,title,description,alt_text,image_mode,image_value,link,job_store,job_id,pin_index):
         # Dynamic lookup: runtime_hardening.install() replaces agent_mod.publish_and_verify
         # after this wiring. Never call the captured pre-hardening orig_publish (it bypassed
