@@ -90,6 +90,7 @@ def _install_composio_transport(agent_mod: Any) -> None:
             return await _direct_composio_execute(tool_slug, arguments, retries=retries)
         return await original(tool_slug, arguments, retries=retries)
 
+    agent_mod._composio_transport_executor = _direct_composio_execute
     agent_mod.run_composio_tool = run_with_connected_account
     agent_mod._connected_account_transport_installed = True
     logger.info("Composio connected-account transport installed.")
