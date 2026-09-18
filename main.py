@@ -42,6 +42,15 @@ logger=logging.getLogger("pinterest-agent");job_store=JobStore();_enqueue_lock=a
 def verify_secret(x_api_secret:Optional[str]=Header(None)):
  if API_SECRET and x_api_secret!=API_SECRET:raise HTTPException(status_code=401,detail="Invalid or missing API secret")
  return True
+def verify_manual_oidc(authorization:Optional[str]=Header(None)):
+ if not authorization or not authorization.startswith("Bearer "):raise HTTPException(status_code=401,detail="Missing scheduler authentication")
+ token=authorization.split(" ",1)[1].strip()
+ try:
+  key=_jwks.get_signing_key_from_jwt(token).key;claims=jwt.decode(token,key,algorithms=["RS256"],issuer=GITHUB_ISSUER,audience=GITHUB_AUDIENCE,options={"require":["iss","sub","aud","exp","repository"]})
+  if claims.get("repository")!=GITHUB_REPO or claims.get("ref")!="refs/heads/main" or claims.get("event_name") not in ("push","workflow_dispatch","schedule"):raise ValueError("OIDC claims not authorized")
+  return True
+ except Exception as e:logger.warning("GitHub OIDC manual-submit authentication failed: %s",type(e).__name__);raise HTTPException(status_code=401,detail="Invalid scheduler identity")
+
 def verify_batch_secret(authorization:Optional[str]=Header(None),x_scheduler_secret:Optional[str]=Header(None,alias="X-Scheduler-Secret")):
  if AMAZON_BATCH_SECRET and x_scheduler_secret and hmac.compare_digest(x_scheduler_secret,AMAZON_BATCH_SECRET):return True
  if not authorization or not authorization.startswith("Bearer "):raise HTTPException(status_code=401,detail="Missing scheduler authentication")
@@ -119,6 +128,27 @@ async def status(job_id:str,_:bool=Depends(verify_secret)):
  return StatusResponse(job_id=job.job_id,status=job.status.value,progress=job.progress,result=job.result,error=job.error,created_at=job.created_at,updated_at=job.updated_at)
 @app.get("/amazon/status")
 async def amazon_status(_:bool=Depends(verify_secret)):return {"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"daily":daily_ledger.get_day_status(),"published_count":registry.count_success(),"required_primary_boards":REQUIRED_PRIMARY_SLOTS}
+@app.post("/amazon/manual-submit")
+async def amazon_manual_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_manual_oidc)):
+ """Authenticated GitHub-OIDC bridge for explicit Amazon US affiliate URLs; feeds the unchanged /submit pipeline."""
+ if not body.urls:raise HTTPException(status_code=400,detail="urls must be a non-empty list")
+ if len(body.urls)>MAX_BATCH:raise HTTPException(status_code=400,detail=f"max {MAX_BATCH} urls per batch")
+ prepared=await prepare_batch_items(body.urls)
+ results=[]
+ for item in prepared:
+  entry={"input_url":item.get("input_url"),"asin":item.get("asin"),"affiliate_url":item.get("affiliate_url"),"product_url":item.get("product_url"),"status":item.get("status"),"job_id":None,"message":item.get("message"),"error":item.get("error")}
+  if item.get("status")!="accepted" or not item.get("affiliate_url"):
+   results.append(entry);continue
+  try:
+   resp=await enqueue_job(item["affiliate_url"],background_tasks)
+   entry["job_id"]=resp.job_id;entry["status"]=resp.status;entry["message"]=resp.message
+  except HTTPException as he:
+   entry["status"]="failed";entry["error"]=str(he.detail);entry["message"]=str(he.detail)
+  except Exception as e:
+   entry["status"]="failed";entry["error"]=str(e)[:500];entry["message"]=entry["error"]
+  results.append(entry)
+ return {"requested":len(body.urls),"accepted":sum(1 for r in results if r.get("job_id")),"skipped":sum(1 for r in results if r.get("status")=="skipped"),"rejected":sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id")),"results":results,"pipeline":"existing_/submit_job_pipeline","affiliate_tag":"desiredplus-20"}
+
 @app.post("/amazon/run-batch")
 async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)):
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
