@@ -1,11 +1,33 @@
 name: Amazon external batches
 on:
   schedule:
+    # Each batch has a primary trigger plus three independent catch-up triggers.
+    # GitHub documents that scheduled events can occasionally be delayed or dropped,
+    # so the later triggers provide redundancy. The Railway daily ledger makes them
+    # idempotent: once a batch is completed, later triggers return already_completed.
     - cron: '0 6 * * *'
+      timezone: 'America/New_York'
+    - cron: '5 6 * * *'
+      timezone: 'America/New_York'
+    - cron: '10 6 * * *'
+      timezone: 'America/New_York'
+    - cron: '15 6 * * *'
       timezone: 'America/New_York'
     - cron: '40 7 * * *'
       timezone: 'America/New_York'
+    - cron: '45 7 * * *'
+      timezone: 'America/New_York'
+    - cron: '50 7 * * *'
+      timezone: 'America/New_York'
+    - cron: '55 7 * * *'
+      timezone: 'America/New_York'
     - cron: '20 9 * * *'
+      timezone: 'America/New_York'
+    - cron: '25 9 * * *'
+      timezone: 'America/New_York'
+    - cron: '30 9 * * *'
+      timezone: 'America/New_York'
+    - cron: '35 9 * * *'
       timezone: 'America/New_York'
   workflow_dispatch:
     inputs:
@@ -14,12 +36,17 @@ on:
         required: true
         type: choice
         options: ['1','2','3']
+
 permissions:
   contents: read
   id-token: write
+
+# Never cancel an in-flight batch. Allow multiple recovery triggers to queue.
 concurrency:
   group: amazon-external-batch
   cancel-in-progress: false
+  queue: max
+
 jobs:
   wake:
     runs-on: ubuntu-latest
@@ -32,15 +59,24 @@ jobs:
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event.schedule }}" == "0 6 * * *" ]]; then
-            echo "batch=1" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event.schedule }}" == "40 7 * * *" ]]; then
-            echo "batch=2" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event.schedule }}" == "20 9 * * *" ]]; then
-            echo "batch=3" >> "$GITHUB_OUTPUT"
           else
-            echo 'Unknown schedule' >&2; exit 1
+            case "${{ github.event.schedule }}" in
+              '0 6 * * *'|'5 6 * * *'|'10 6 * * *'|'15 6 * * *')
+                echo "batch=1" >> "$GITHUB_OUTPUT"
+                ;;
+              '40 7 * * *'|'45 7 * * *'|'50 7 * * *'|'55 7 * * *')
+                echo "batch=2" >> "$GITHUB_OUTPUT"
+                ;;
+              '20 9 * * *'|'25 9 * * *'|'30 9 * * *'|'35 9 * * *')
+                echo "batch=3" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "Unknown schedule: ${{ github.event.schedule }}" >&2
+                exit 1
+                ;;
+            esac
           fi
+
       - name: Request GitHub OIDC token
         id: oidc
         shell: bash
@@ -53,36 +89,55 @@ jobs:
           token=$(printf '%s' "$response" | jq -r '.value')
           test -n "$token" && test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"
-      - name: Wake Railway and run batch
+
+      - name: Wake Railway and run batch with application-level recovery
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
           BATCH: ${{ steps.select.outputs.batch }}
         shell: bash
         run: |
           set -euo pipefail
-          response_file=$(mktemp)
-          trap 'rm -f "$response_file"' EXIT
 
-          curl --fail --silent --show-error --no-buffer \
-            --connect-timeout 20 --max-time 2400 \
-            --retry 5 --retry-delay 10 --retry-max-time 120 \
-            --retry-all-errors \
-            -H "Authorization: Bearer $ID_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/run-batch' \
-            --data "{\"batch\":$BATCH}" | tee "$response_file"
+          # A scheduled trigger is only the transport layer. The Railway ledger is
+          # the source of truth and makes repeated attempts safe.
+          for attempt in 1 2 3; do
+            echo "Starting Amazon batch $BATCH, recovery attempt $attempt/3"
 
-          final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
-          case "$final_status" in
-            completed|already_completed)
-              echo "Amazon batch terminal status: $final_status"
-              ;;
-            partial_failure|failed|blocked|busy)
-              echo "Amazon batch terminal status: $final_status" >&2
-              exit 1
-              ;;
-            *)
-              echo "Unknown or missing Amazon batch terminal status: ${final_status:-<empty>}" >&2
-              exit 1
-              ;;
-          esac
+            response_file=$(mktemp)
+            trap 'rm -f "$response_file"' EXIT
+
+            curl --fail --silent --show-error --no-buffer \
+              --connect-timeout 20 --max-time 2400 \
+              --retry 5 --retry-delay 10 --retry-max-time 120 \
+              --retry-all-errors \
+              -H "Authorization: Bearer $ID_TOKEN" \
+              -H 'Content-Type: application/json' \
+              -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/run-batch' \
+              --data "{\"batch\":$BATCH}" | tee "$response_file"
+
+            final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
+
+            case "$final_status" in
+              completed|already_completed)
+                echo "Amazon batch terminal status: $final_status"
+                exit 0
+                ;;
+              partial_failure|failed|blocked|busy)
+                echo "Amazon batch attempt $attempt returned: $final_status" >&2
+                if [[ "$attempt" -lt 3 ]]; then
+                  sleep 20
+                  continue
+                fi
+                echo "Amazon batch exhausted all in-run recovery attempts." >&2
+                exit 1
+                ;;
+              *)
+                echo "Unknown or missing Amazon batch terminal status: ${final_status:-<empty>}" >&2
+                if [[ "$attempt" -lt 3 ]]; then
+                  sleep 20
+                  continue
+                fi
+                exit 1
+                ;;
+            esac
+          done
