@@ -110,7 +110,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
             return fallback
         raise RuntimeError("No verified permanent Pinterest board is available for this product; automatic board creation is disabled.")
     def build_review_items(pins,product):
-        return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
+        return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"image_provider":p["image"].get("provider"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
     def failed_indexes(review,pin_count):
         status=review.get("status")
         if status=="AI_REVIEW_UNAVAILABLE" or status=="AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED":return set()
