@@ -31,7 +31,9 @@ from models import JobStore
 logger = logging.getLogger("pinterest-agent.core")
 
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
-COMPOSIO_ENTITY_ID = os.getenv("COMPOSIO_ENTITY_ID", "default").strip() or "default"
+COMPOSIO_ENTITY_ID = os.getenv("COMPOSIO_ENTITY_ID", "").strip()
+COMPOSIO_PINTEREST_ACCOUNT_ID = os.getenv("COMPOSIO_PINTEREST_ACCOUNT_ID", "").strip()
+COMPOSIO_GMAIL_ACCOUNT_ID = os.getenv("COMPOSIO_GMAIL_ACCOUNT_ID", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
@@ -55,11 +57,19 @@ async def run_composio_tool(tool_slug: str, arguments: Dict[str, Any], retries: 
     url = f"https://backend.composio.dev/api/v3.1/tools/execute/{tool_slug}"
     headers = {"x-api-key": COMPOSIO_API_KEY, "Content-Type": "application/json"}
     payload = {
-        "user_id": COMPOSIO_ENTITY_ID,
         "arguments": arguments or {},
         "version": "latest",
         "dangerously_skip_version_check": True,
     }
+    # Composio v3.1 resolves connected accounts with connected_account_id.
+    # The previous implementation incorrectly passed the Pinterest connected-account ID
+    # as user_id, which produced "No connected account found" despite an active account.
+    if tool_slug.upper().startswith("PINTEREST_") and COMPOSIO_PINTEREST_ACCOUNT_ID:
+        payload["connected_account_id"] = COMPOSIO_PINTEREST_ACCOUNT_ID
+    elif tool_slug.upper().startswith("GMAIL_") and COMPOSIO_GMAIL_ACCOUNT_ID:
+        payload["connected_account_id"] = COMPOSIO_GMAIL_ACCOUNT_ID
+    elif COMPOSIO_ENTITY_ID:
+        payload["user_id"] = COMPOSIO_ENTITY_ID
 
     last_err: Optional[Exception] = None
     for attempt in range(retries + 1):
