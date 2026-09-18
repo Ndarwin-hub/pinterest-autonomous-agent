@@ -69,12 +69,12 @@ jobs:
             --retry-all-errors \
             -H "Authorization: Bearer $ID_TOKEN" \
             -H 'Content-Type: application/json' \
-            -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch' \
+            -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/run-batch' \
             --data "{\"batch\":$BATCH}" | tee "$response_file"
 
           final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
           case "$final_status" in
-            completed|already_completed|dormant)
+            completed|already_completed)
               echo "Amazon batch terminal status: $final_status"
               ;;
             partial_failure|failed|blocked|busy)
