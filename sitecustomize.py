@@ -1,14 +1,11 @@
 """Runtime hardening for Composio execution from Railway.
 
-Composio's 2026 API supports connected_account_id for direct tool execution.
-The legacy user_id/entity routing can enter managed-job execution paths that are
-not available to this unattended Railway process. This startup shim keeps the
-existing application code intact while routing Pinterest/Gmail calls through
-their explicit connected accounts when configured.
+Routes authenticated Pinterest/Gmail calls through their explicit Composio
+connected-account IDs instead of legacy user/entity routing. A read-only
+Pinterest self-test can be enabled at startup to prove the transport works.
 """
 from __future__ import annotations
 import asyncio
-import json
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -21,7 +18,6 @@ def _account_for(slug: str) -> Optional[str]:
         return os.getenv("COMPOSIO_PINTEREST_ACCOUNT_ID", "").strip() or None
     if s.startswith("GMAIL_"):
         return os.getenv("COMPOSIO_GMAIL_ACCOUNT_ID", "").strip() or None
-    # Authenticated toolkit calls can be mapped explicitly without changing code.
     key = "COMPOSIO_ACCOUNT_" + "".join(c if c.isalnum() else "_" for c in s)
     return os.getenv(key, "").strip() or None
 
@@ -80,6 +76,16 @@ try:
 
     _agent.run_composio_tool = _hardened_run
     logger.info("Composio transport hardening installed; explicit connected-account routing enabled.")
+
+    if os.getenv("COMPOSIO_TRANSPORT_SELFTEST", "").strip().lower() in {"1", "true", "yes"}:
+        async def _selftest() -> None:
+            try:
+                data = await _direct_execute("PINTEREST_LIST_BOARDS", {"page_size": 1}, retries=1)
+                items = data.get("items") or data.get("boards") or [] if isinstance(data, dict) else []
+                logger.info("COMPOSIO_TRANSPORT_SELFTEST=PASS pinterest_connected_account board_read=%s", bool(items))
+            except Exception as exc:
+                logger.error("COMPOSIO_TRANSPORT_SELFTEST=FAIL %s", exc)
+
+        asyncio.run(_selftest())
 except Exception:
-    # sitecustomize must never make the service unbootable.
     logger.exception("Composio transport hardening could not be installed; original transport retained.")
