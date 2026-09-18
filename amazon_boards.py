@@ -2,15 +2,23 @@
 from __future__ import annotations
 from typing import Any,Dict,List,Optional,Tuple
 from board_org import LEGACY_BOARD_IDS,LEGACY_BOARD_NAMES,PERMANENT_BOARD_IDS,DEFAULT_BOARD_NAME
-REQUIRED_PRIMARY_SLOTS=10
-APPROVED_PRIMARY_BOARD_IDS={bid for name,bid in PERMANENT_BOARD_IDS.items() if name!=DEFAULT_BOARD_NAME}
-BOARD_SEARCH_PROFILES={
- "Health & Fitness":{"keywords":["fitness equipment","whey protein powder","reusable ice packs"]},"Electronics & Gadgets":{"keywords":["surge protector power strip"]},"Home, Kitchen & Dining":{"keywords":["Stanley Quencher tumbler","countertop ice maker"]},"Sports, Games & Toys":{"keywords":["LCD writing tablet kids","gaming headset"]},"Fashion & Lifestyle":{"keywords":["running shoes"]},"Pet Supplies":{"keywords":["cat litter"]},"Baby & Kids":{"keywords":["baby wipes"]},"Automotive & Tools":{"keywords":["automotive tools"]},"Office & Productivity":{"keywords":["desk accessories"]},"Books & Learning":{"keywords":["bestselling paperback"]},"Everything Else":{"keywords":["popular new releases"]}}
+# The scheduler must gate on the unique parent boards actually required by
+# CATEGORY_SLOTS, not an unrelated historical minimum. Fourteen category slots
+# intentionally share several parent boards; requiring 10+ primary boards could
+# incorrectly block a valid 15-slot run.
 CATEGORY_SLOTS=[
  ("Electronics","Electronics & Gadgets"),("Clothing/Shoes","Fashion & Lifestyle"),("Beauty","Health & Fitness"),
  ("Home & Kitchen","Home, Kitchen & Dining"),("Health & Household","Health & Fitness"),("Toys & Games","Sports, Games & Toys"),
  ("Sports & Outdoors","Health & Fitness"),("Baby","Baby & Kids"),("Pet Supplies","Pet Supplies"),("Appliances","Home, Kitchen & Dining"),
  ("Cell Phones & Accessories","Electronics & Gadgets"),("Computers & Accessories","Electronics & Gadgets"),("Video Games","Sports, Games & Toys"),("Musical Instruments","Electronics & Gadgets")]
+REQUIRED_PRIMARY_SLOTS=len({board_name for _,board_name in CATEGORY_SLOTS})
+APPROVED_PRIMARY_BOARD_IDS={bid for name,bid in PERMANENT_BOARD_IDS.items() if name!=DEFAULT_BOARD_NAME}
+BOARD_SEARCH_PROFILES={
+ "Health & Fitness":{"keywords":["fitness equipment","whey protein powder","reusable ice packs"]},"Electronics & Gadgets":{"keywords":["surge protector power strip"]},
+ "Home, Kitchen & Dining":{"keywords":["Stanley Quencher tumbler","countertop ice maker"]},"Sports, Games & Toys":{"keywords":["LCD writing tablet kids","gaming headset"]},
+ "Fashion & Lifestyle":{"keywords":["running shoes"]},"Pet Supplies":{"keywords":["cat litter"]},"Baby & Kids":{"keywords":["baby wipes"]},
+ "Automotive & Tools":{"keywords":["automotive tools"]},"Office & Productivity":{"keywords":["desk accessories"]},"Books & Learning":{"keywords":["bestselling paperback"]},
+ "Everything Else":{"keywords":["popular new releases"]}}
 def classify_live_boards(live_items:List[Dict[str,Any]])->Dict[str,Any]:
  by_id={v:k for k,v in PERMANENT_BOARD_IDS.items()};approved=[];legacy=[];unknown=[]
  for b in live_items:
