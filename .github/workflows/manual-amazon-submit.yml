@@ -40,7 +40,7 @@ jobs:
             --write-out '\nHTTP_STATUS:%{http_code}\n' \
             -H "Authorization: Bearer $ID_TOKEN" \
             -H 'Content-Type: application/json' \
-            -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/manual-submit' \
+            -X POST 'http://iriguchi.proxy.rlwy.net:32414/amazon/manual-submit' \
             --data-binary @.github/manual-amazon-submit.json | tee response.json
           cat response.json
           test "$(jq -r '.accepted' response.json)" -eq "$(jq -r '.requested' response.json)"
