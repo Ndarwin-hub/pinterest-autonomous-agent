@@ -96,3 +96,6 @@ After deployment, the service exposes `/health`, `/submit`, and `/status/{job_id
 - At least one Pinterest board should exist (or the agent can be extended to create one).
 
 Once the above are satisfied and `COMPOSIO_API_KEY` is set, the full flow works end-to-end.
+
+
+<!-- e2e-smoke-trigger -->
