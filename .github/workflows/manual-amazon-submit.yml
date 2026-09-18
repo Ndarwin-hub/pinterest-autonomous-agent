@@ -39,7 +39,7 @@ jobs:
             --retry 5 --retry-delay 10 --retry-max-time 120 --retry-all-errors \
             -H "Authorization: Bearer $ID_TOKEN" \
             -H 'Content-Type: application/json' \
-            -X POST 'https://web-production-dae68.up.railway.app/amazon/manual-submit' \
+            -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/manual-submit' \
             --data-binary @.github/manual-amazon-submit.json | tee response.json
           jq . response.json
           test "$(jq -r '.accepted' response.json)" -eq "$(jq -r '.requested' response.json)"
