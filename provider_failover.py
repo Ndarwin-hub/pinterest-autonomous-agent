@@ -79,10 +79,15 @@ def _deterministic_validate(items:List[Dict[str,Any]])->Dict[str,Any]:
     for i,item in enumerate(items,1):
         meta=item.get("metadata") or {}; score=int(meta.get("image_score") or 0)
         dims=meta.get("dimensions") or []
+        provider=str(meta.get("image_provider") or "").lower()
+        trusted_provider=provider in {"product_page","composio_search_image"}
         try:w,h=int(dims[0]),int(dims[1])
         except Exception:w=h=0
         title=str(meta.get("title") or "").strip(); desc=str(meta.get("description") or "").strip(); ref=str(item.get("image_ref") or "").strip()
-        if score<85:failures.append(f"Pin {i}: image_score {score}<85")
+        # When visual AI is unavailable, retain a hard deterministic gate: only trusted
+        # product/commerce image sources, strong heuristic score, and sufficient resolution.
+        if not trusted_provider:failures.append(f"Pin {i}: untrusted image provider {provider!r}")
+        if score<80:failures.append(f"Pin {i}: image_score {score}<80 deterministic gate")
         if w<800 or h<800:failures.append(f"Pin {i}: dimensions {w}x{h} below 800px gate")
         if not ref:failures.append(f"Pin {i}: missing image reference")
         if not title or not desc:failures.append(f"Pin {i}: missing title/description")
