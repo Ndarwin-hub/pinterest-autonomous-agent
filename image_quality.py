@@ -7,8 +7,10 @@ from PIL import ImageFile
 logger=logging.getLogger("pinterest-agent.image-quality")
 MIN_DIMENSION=800
 PREFERRED_MIN_DIMENSION=1200
+PREFERRED_PORTRAIT_MIN_HEIGHT=1200
 MAX_ASPECT=2.0
 MIN_SCORE=85
+MAX_CANDIDATES_PER_PIN=12
 MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
@@ -56,7 +58,7 @@ def score(c:Dict[str,Any],product:Dict[str,Any],strategy:str)->int:
         toks=[x for x in re.findall(r"[a-z0-9]+",name) if len(x)>3];s+=min(10,sum(1 for x in toks[:5] if x in src))
     elif p=="pexels":s+=8
     if min(w,h)>=PREFERRED_MIN_DIMENSION:s+=12
-    if .60<=ratio<=.80:s+=12
+    if .60<=ratio<=.80:s+=14
     elif .80<ratio<=1.05:s+=10
     elif 1.05<ratio<=1.35:s+=7
     elif 1.35<ratio<=1.80:s+=3
@@ -115,7 +117,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     valid=await validate_many(raw)
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
     valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
-    return [c for c in valid if c.get("score",0)>=MIN_SCORE][:12]
+    return [c for c in valid if c.get("score",0)>=MIN_SCORE][:MAX_CANDIDATES_PER_PIN]
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
