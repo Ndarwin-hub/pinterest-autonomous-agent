@@ -1,19 +1,111 @@
-"""Final runtime hardening applied after the legacy wiring layer.
+"""Final runtime hardening for the Pinterest/Amazon Railway service.
 
-The repository accumulated two publish wrappers: board_org's legacy section-aware
-wrapper and wire_board_org's strict wrapper. The legacy wrapper captured the old
-Composio runner before the per-job budget was installed, which could bypass the
-40-call governor. This module replaces the final publish function with one
-canonical implementation that always uses the currently-installed runner.
+Installs the canonical publish/verify wrapper and routes authenticated
+Pinterest/Gmail Composio calls through explicit connected-account IDs.
+This avoids legacy entity routing that can enter Composio managed-job
+execution paths unavailable to the unattended Railway process.
 """
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any
+import logging
+import os
+from typing import Any, Dict, Optional
 
+logger = logging.getLogger("pinterest-agent.runtime-hardening")
+
+def _account_for(slug: str) -> Optional[str]:
+    s = slug.upper()
+    if s.startswith("PINTEREST_"):
+        return os.getenv("COMPOSIO_PINTEREST_ACCOUNT_ID", "").strip() or None
+    if s.startswith("GMAIL_"):
+        return os.getenv("COMPOSIO_GMAIL_ACCOUNT_ID", "").strip() or None
+    key = "COMPOSIO_ACCOUNT_" + "".join(c if c.isalnum() else "_" for c in s)
+    return os.getenv(key, "").strip() or None
+
+async def _direct_composio_execute(tool_slug: str, arguments: Dict[str, Any], retries: int = 2) -> Dict[str, Any]:
+    import httpx
+    key = os.getenv("COMPOSIO_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("COMPOSIO_API_KEY is not set in Railway variables.")
+
+    payload: Dict[str, Any] = {
+        "arguments": arguments or {},
+        "version": "latest",
+        "dangerously_skip_version_check": True,
+    }
+    account = _account_for(tool_slug)
+    if account:
+        payload["connected_account_id"] = account
+    else:
+        payload["user_id"] = os.getenv("COMPOSIO_ENTITY_ID", "default").strip() or "default"
+
+    url = f"https://backend.composio.dev/api/v3.1/tools/execute/{tool_slug}"
+    headers = {"x-api-key": key, "Content-Type": "application/json"}
+    last: Optional[Exception] = None
+
+    for attempt in range(retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                try:
+                    data = response.json()
+                except Exception:
+                    data = {"raw": response.text}
+
+                if response.status_code >= 400:
+                    error = data.get("error") if isinstance(data, dict) else data
+                    if isinstance(error, dict):
+                        error = error.get("message") or error
+                    raise RuntimeError(f"{tool_slug} HTTP {response.status_code}: {error}")
+
+                if isinstance(data, dict) and data.get("successful") is False:
+                    error = data.get("error") or data.get("data", {}).get("message") or str(data)
+                    raise RuntimeError(f"{tool_slug} unsuccessful: {error}")
+
+                if isinstance(data, dict) and "data" in data:
+                    return data["data"] if data["data"] is not None else {}
+                return data if isinstance(data, dict) else {"result": data}
+        except Exception as exc:
+            last = exc
+            if attempt < retries:
+                await asyncio.sleep(min(2 ** attempt, 8))
+
+    raise RuntimeError(str(last) if last else f"{tool_slug} failed")
+
+def _install_composio_transport(agent_mod: Any) -> None:
+    if getattr(agent_mod, "_connected_account_transport_installed", False):
+        return
+
+    original = agent_mod.run_composio_tool
+
+    async def run_with_connected_account(tool_slug: str, arguments: Dict[str, Any], retries: int = 2) -> Dict[str, Any]:
+        if _account_for(tool_slug):
+            return await _direct_composio_execute(tool_slug, arguments, retries=retries)
+        return await original(tool_slug, arguments, retries=retries)
+
+    agent_mod.run_composio_tool = run_with_connected_account
+    agent_mod._connected_account_transport_installed = True
+    logger.info("Composio connected-account transport installed.")
+
+    if os.getenv("COMPOSIO_TRANSPORT_SELFTEST", "").strip().lower() in {"1", "true", "yes"}:
+        async def selftest() -> None:
+            try:
+                data = await _direct_composio_execute("PINTEREST_LIST_BOARDS", {"page_size": 1}, retries=1)
+                items = (data.get("items") or data.get("boards") or []) if isinstance(data, dict) else []
+                logger.warning("COMPOSIO_TRANSPORT_SELFTEST=PASS pinterest_board_read=%s", bool(items))
+            except Exception as exc:
+                logger.error("COMPOSIO_TRANSPORT_SELFTEST=FAIL %s", exc)
+        try:
+            asyncio.create_task(selftest())
+        except RuntimeError:
+            pass
 
 def install(agent_mod: Any) -> str:
     """Install one canonical section-aware, budget-aware publish/verify function."""
+    _install_composio_transport(agent_mod)
+
     if getattr(agent_mod, "_runtime_publish_hardening_installed", False):
         return "already-installed"
 
@@ -53,8 +145,6 @@ def install(agent_mod: Any) -> str:
         if section_id:
             args["board_section_id"] = str(section_id)
 
-        # Always resolve the runner dynamically so wire_board_org's per-job
-        # budget/governor remains authoritative.
         data = await agent_mod.run_composio_tool("PINTEREST_CREATE_PIN", args, retries=2)
         pin_id = str(
             data.get("id")
@@ -65,8 +155,6 @@ def install(agent_mod: Any) -> str:
         if not pin_id:
             raise RuntimeError(f"Pin created but no ID: {json.dumps(data)[:400]}")
 
-        # One independent GET is sufficient: it verifies both publication and
-        # actual board/section placement without the old wrapper's duplicate GET.
         verified = await agent_mod.run_composio_tool(
             "PINTEREST_GET_PIN", {"pin_id": pin_id}, retries=1
         )
