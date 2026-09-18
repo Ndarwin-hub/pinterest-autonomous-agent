@@ -21,7 +21,6 @@ jobs:
         run: |
           set -euo pipefail
           response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
-            --write-out '\nHTTP_STATUS:%{http_code}\n' \
             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             -H 'Accept: application/json; api-version=2.0' \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
@@ -35,9 +34,10 @@ jobs:
         run: |
           set -euo pipefail
           test -f .github/manual-amazon-submit.json
-          curl --fail --silent --show-error --no-buffer \
+          curl --silent --show-error --no-buffer \
             --connect-timeout 20 --max-time 2400 \
             --retry 5 --retry-delay 10 --retry-max-time 120 --retry-all-errors \
+            --write-out '\nHTTP_STATUS:%{http_code}\n' \
             -H "Authorization: Bearer $ID_TOKEN" \
             -H 'Content-Type: application/json' \
             -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/manual-submit' \
