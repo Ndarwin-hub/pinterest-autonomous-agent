@@ -62,9 +62,27 @@ def apply_agent_wiring(agent_mod:Any)->None:
         job_store.update(job_id,progress="Selecting Pinterest board")
         data=await budgeted_run("PINTEREST_LIST_BOARDS",{}); items=data.get("items") or data.get("boards") or []
         from board_org import classify_with_confidence
+        from board_balance import resolve_board_with_balance
         info=classify_with_confidence(product)
         category=(info.get("category") or product.get("category") or "general").lower()
         confidence=(info.get("confidence") or "LOW").upper()
+        # Core rule: live counts → relevance-first assignment with balance metadata
+        resolved=resolve_board_with_balance(product,items)
+        product["category"]=resolved.get("category") or category
+        product["board_confidence"]=resolved.get("confidence") or confidence
+        product["board_balance"]=resolved.get("balance")
+        product["board_assignment_reason"]=resolved.get("reason")
+        mid=resolved.get("board_id")
+        if mid:
+            if str(mid) in LEGACY_BOARD_IDS:raise RuntimeError("Legacy board ID selected for a new Pin; refusing publication.")
+            for b in items:
+                bid=str(b.get("id") or b.get("board_id") or "")
+                if bid==str(mid) and (b.get("name") or "").strip() in LEGACY_BOARD_NAMES:raise RuntimeError("Legacy board name selected for a new Pin; refusing publication.")
+            # Confirm the live board still exists
+            live_ids={str(b.get("id") or b.get("board_id") or "") for b in items}
+            if str(mid) in live_ids:
+                return str(mid)
+        # Fallback to previous name-based match if balance resolver missed a live id
         preferred=preferred_board_name(category)
         mid=find_matching_board(items,preferred)
         if mid:

@@ -3,7 +3,7 @@ The existing /submit URL->5-pin workflow is unchanged; Amazon automation is addi
 """
 import os,uuid,re,logging,asyncio,hmac,json
 from datetime import datetime,timezone
-from typing import Optional,Dict,Any
+from typing import Optional,Dict,Any,List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,BackgroundTasks,HTTPException,Header,Depends
 from fastapi.responses import StreamingResponse
@@ -28,6 +28,7 @@ from agent import process_pinterest_job
 from models import JobStore,JobStatus,Job
 from published_registry import registry,extract_asin
 from amazon_client import amazon_credentials_present
+from batch_submit import prepare_batch_items, discover_n_products, MAX_BATCH, validate_and_canonicalize
 from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
 from amazon_boards import REQUIRED_PRIMARY_SLOTS
@@ -57,7 +58,7 @@ def extract_url(text:str)->str:
  raise ValueError("No valid http(s) URL found")
 @asynccontextmanager
 async def lifespan(app:FastAPI):
- logger.info("Pinterest Autonomous Agent v3.7.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
+ logger.info("Pinterest Autonomous Agent v3.9.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
  registration_task=None
  if MCP_PATH:registration_task=asyncio.create_task(register_custom_mcp_with_retry())
  else:logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured")
@@ -84,12 +85,18 @@ async def lifespan(app:FastAPI):
   try:await registration_task
   except asyncio.CancelledError:pass
  logger.info("Shutting down...")
-app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",version="3.7.0",lifespan=lifespan)
+app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",version="3.9.0",lifespan=lifespan)
 if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
 class SubmitResponse(BaseModel):job_id:str;status:str;message:str
 class StatusResponse(BaseModel):job_id:str;status:str;progress:Optional[str]=None;result:Optional[Dict[str,Any]]=None;error:Optional[str]=None;created_at:str;updated_at:str
 class BatchRequest(BaseModel):batch:int=Field(...,ge=1,le=3)
+class BatchSubmitRequest(BaseModel):
+ urls:List[str]=Field(...,min_length=1,max_length=50,description="List of already-resolved Amazon US product/affiliate URLs")
+ wait:bool=Field(False,description="If true, wait briefly for job acceptance only; does not wait for full 5-Pin completion")
+class DiscoverSubmitRequest(BaseModel):
+ count:int=Field(...,ge=1,le=50,description="Number of distinct Amazon US products to discover and submit")
+ exclude_asins:Optional[List[str]]=Field(default=None,description="Optional ASIN exclude list")
 async def enqueue_job(url_str:str,background_tasks:BackgroundTasks)->SubmitResponse:
  async with _enqueue_lock:
   existing=job_store.find_by_url(url_str)
@@ -97,7 +104,7 @@ async def enqueue_job(url_str:str,background_tasks:BackgroundTasks)->SubmitRespo
   if not quota.reserve_job():raise HTTPException(status_code=429,detail={"message":"Monthly safe Pinterest capacity reached; job not started.","quota":quota.snapshot()})
   job_id=str(uuid.uuid4());job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress="Job accepted — 5-pin workflow queued");job_store.save(job);background_tasks.add_task(run_job,job_id,url_str);return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}")
 @app.get("/health")
-async def health():return {"status":"ok","service":"pinterest-autonomous-agent","version":"3.7.0","quality_patch_version":QUALITY_PATCH_VERSION,"mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
+async def health():return {"status":"ok","service":"pinterest-autonomous-agent","version":"3.9.0","quality_patch_version":QUALITY_PATCH_VERSION,"mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
 @app.get("/quota")
 async def quota_status(_:bool=Depends(verify_secret)):return quota.snapshot()
 @app.post("/submit",response_model=SubmitResponse)
@@ -124,8 +131,75 @@ async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)
   try:yield json.dumps(task.result(),separators=(",",":"))+"\n"
   except Exception as e:yield json.dumps({"status":"failed","batch":body.batch,"error":str(e)[:500]})+"\n"
  return StreamingResponse(stream(),media_type="application/x-ndjson")
+@app.post("/batch-submit")
+async def batch_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
+ """Accept a list of already-resolved Amazon US product URLs. Each accepted URL is fed into the existing single-product job pipeline unchanged in behavior."""
+ if not body.urls:raise HTTPException(status_code=400,detail="urls must be a non-empty list")
+ if len(body.urls)>MAX_BATCH:raise HTTPException(status_code=400,detail=f"max {MAX_BATCH} urls per batch")
+ prepared=await prepare_batch_items(body.urls)
+ results=[]
+ for item in prepared:
+  entry={"input_url":item.get("input_url"),"asin":item.get("asin"),"affiliate_url":item.get("affiliate_url"),"product_url":item.get("product_url"),"status":item.get("status"),"job_id":None,"message":item.get("message"),"error":item.get("error")}
+  if item.get("status")!="accepted" or not item.get("affiliate_url"):
+   results.append(entry);continue
+  try:
+   resp=await enqueue_job(item["affiliate_url"],background_tasks)
+   entry["job_id"]=resp.job_id;entry["status"]=resp.status;entry["message"]=resp.message
+  except HTTPException as he:
+   entry["status"]="failed";entry["error"]=str(he.detail);entry["message"]=str(he.detail)
+  except Exception as e:
+   entry["status"]="failed";entry["error"]=str(e)[:500];entry["message"]=entry["error"]
+  results.append(entry)
+ accepted=sum(1 for r in results if r.get("job_id"))
+ skipped=sum(1 for r in results if r.get("status")=="skipped")
+ rejected=sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id"))
+ return {"batch_size":len(body.urls),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"pipeline":"existing_/submit_job_pipeline","note":"Each accepted URL enters the existing 5-Pin research/publish/verify workflow. Poll /status/{job_id} for completion."}
+
+@app.post("/amazon/discover-submit")
+async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
+ """Discover N distinct Amazon US products using live board-balance ordering, then submit each to the existing job pipeline."""
+ n=int(body.count)
+ if n<1 or n>MAX_BATCH:raise HTTPException(status_code=400,detail=f"count must be 1..{MAX_BATCH}")
+ exclude=set(a.upper() for a in (body.exclude_asins or []) if a)
+ live_boards=[]
+ balance_meta={"available":False,"message":"Board balancing could not be verified because current Pinterest counts were unavailable."}
+ try:
+  from board_balance import extract_board_rows,balance_state,discovery_board_order
+  data=await agent_module.run_composio_tool("PINTEREST_LIST_BOARDS",{})
+  live_boards=data.get("items") or data.get("boards") or []
+  balance_meta=balance_state(extract_board_rows(live_boards))
+ except Exception as e:
+  logger.warning("Live board fetch for balance failed: %s",e)
+ try:
+  discovered=await discover_n_products(n,exclude_asins=exclude,live_boards=live_boards)
+ except Exception as e:
+  raise HTTPException(status_code=502,detail=f"discovery_failed:{type(e).__name__}:{e}")
+ if not discovered:
+  return {"requested":n,"discovered":0,"accepted":0,"skipped":0,"rejected":0,"results":[],"board_balance":balance_meta,"message":"No distinct unpublished Amazon US products found"}
+ urls=[d["affiliate_url"] for d in discovered if d.get("affiliate_url")]
+ prepared=await prepare_batch_items(urls,exclude_asins=exclude)
+ title_by_asin={ (d.get("asin") or "").upper():d.get("title") for d in discovered }
+ target_by_asin={ (d.get("asin") or "").upper():{"board":d.get("target_board_name"),"mode":d.get("balance_mode")} for d in discovered }
+ results=[]
+ for item in prepared:
+  entry={"input_url":item.get("input_url"),"asin":item.get("asin"),"title":title_by_asin.get((item.get("asin") or "").upper()),"affiliate_url":item.get("affiliate_url"),"product_url":item.get("product_url"),"status":item.get("status"),"job_id":None,"message":item.get("message"),"error":item.get("error"),"target_board":(target_by_asin.get((item.get("asin") or "").upper()) or {}).get("board"),"balance_mode":(target_by_asin.get((item.get("asin") or "").upper()) or {}).get("mode")}
+  if item.get("status")!="accepted" or not item.get("affiliate_url"):
+   results.append(entry);continue
+  try:
+   resp=await enqueue_job(item["affiliate_url"],background_tasks)
+   entry["job_id"]=resp.job_id;entry["status"]=resp.status;entry["message"]=resp.message
+  except HTTPException as he:
+   entry["status"]="failed";entry["error"]=str(he.detail);entry["message"]=str(he.detail)
+  except Exception as e:
+   entry["status"]="failed";entry["error"]=str(e)[:500];entry["message"]=entry["error"]
+  results.append(entry)
+ accepted=sum(1 for r in results if r.get("job_id"))
+ skipped=sum(1 for r in results if r.get("status")=="skipped")
+ rejected=sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id"))
+ return {"requested":n,"discovered":len(discovered),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"snapshot":balance_meta.get("snapshot")},"pipeline":"existing_/submit_job_pipeline","tag":"desiredplus-20","note":"Discovery used live board pin counts + COMPOSIO_SEARCH_AMAZON + tag injection. Each accepted product uses the existing 5-Pin pipeline."}
+
 @app.get("/")
-async def root():return {"service":"Pinterest Autonomous Agent","version":"3.7.0","endpoints":{"health":"GET /health","submit":"POST /submit body: {\"url\": \"<product_url>\"}","status":"GET /status/{job_id}","quota":"GET /quota","amazon_status":"GET /amazon/status","amazon_batch":"POST /amazon/run-batch body: {\"batch\":1|2|3}"},"usage":"Send one product/affiliate URL. System creates 5 unique Pins automatically."}
+async def root():return {"service":"Pinterest Autonomous Agent","version":"3.9.0","endpoints":{"health":"GET /health","submit":"POST /submit body: {\"url\": \"<product_url>\"}","status":"GET /status/{job_id}","quota":"GET /quota","amazon_status":"GET /amazon/status","amazon_batch":"POST /amazon/run-batch body: {\"batch\":1|2|3}","batch_submit":"POST /batch-submit body: {\"urls\":[\"<amazon_us_url\",...]}","amazon_discover_submit":"POST /amazon/discover-submit body: {\"count\":N}"},"usage":"Send one product/affiliate URL. System creates 5 unique Pins automatically."}
 async def run_job(job_id:str,url:str):
  try:
   job_store.update(job_id,status=JobStatus.RUNNING,progress="Starting 5-pin workflow")
