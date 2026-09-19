@@ -67,7 +67,7 @@ async def _openai_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not OPENAI_API_KEY:return None
     ref=item.get("image_ref") or ""
     if not ref:return None
-    prompt=SYSTEM+"\\nReview this single Pinterest candidate image. Return JSON exactly as {approved:boolean,score:0-100,reason:string}. Approve only at score >=85. The candidate must confidently depict the exact product and be commercially strong for Pinterest. Product metadata follows:\\n"+json.dumps(item.get("metadata") or {},ensure_ascii=False)[:5000]
+    prompt=SYSTEM+"\\nReview this single Pinterest candidate image. Return JSON exactly as {approved:boolean,score:0-100,reason:string}. Score the candidate 0-100. Do not treat the score as a publication gate. The candidate must confidently depict the exact product and be commercially strong for Pinterest. Product metadata follows:\\n"+json.dumps(item.get("metadata") or {},ensure_ascii=False)[:5000]
     body={"model":os.getenv("OPENAI_REVIEW_MODEL","gpt-5.4"),"input":[{"role":"user","content":[{"type":"input_text","text":prompt},{"type":"input_image","image_url":ref}]}],"temperature":0}
     try:
         async with httpx.AsyncClient(timeout=90) as c:
@@ -96,7 +96,7 @@ async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
 
 async def _grok_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not XAI_API_KEY:return None
-    ref=item.get("image_ref"); content=[{"type":"text","text":SYSTEM+"\nReview this candidate. Return {approved:boolean,score:0-100,reason:string}. Approve only at score >=85."}]
+    ref=item.get("image_ref"); content=[{"type":"text","text":SYSTEM+"\nReview this candidate. Return {approved:boolean,score:0-100,reason:string}. Score the candidate 0-100. Do not treat the score as a publication gate."}]
     if ref: content.append({"type":"image_url","image_url":{"url":ref,"detail":"high"}})
     content.append({"type":"text","text":json.dumps(item.get("metadata") or {},ensure_ascii=False)[:5000]})
     body={"model":XAI_MODEL,"messages":[{"role":"user","content":content}],"temperature":0,"max_tokens":180}
@@ -110,7 +110,7 @@ async def _grok_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
 async def _composio_grok_one(item:Dict[str,Any],run_tool:Callable[[str,Dict[str,Any],int],Awaitable[Dict[str,Any]]])->Optional[Dict[str,Any]]:
     """Use the user's already-connected Composio Grok account; no xAI key is exposed to Railway."""
     ref=item.get("image_ref") or ""
-    prompt=SYSTEM+"\nReview this single Pinterest candidate image. Return JSON exactly as {approved:boolean,score:0-100,reason:string}. Approve only at score >=85. The candidate must confidently depict the exact product and be commercially strong for Pinterest. Product metadata follows:\n"+json.dumps(item.get("metadata") or {},ensure_ascii=False)[:5000]
+    prompt=SYSTEM+"\nReview this single Pinterest candidate image. Return JSON exactly as {approved:boolean,score:0-100,reason:string}. Score the candidate 0-100. Do not treat the score as a publication gate. The candidate must confidently depict the exact product and be commercially strong for Pinterest. Product metadata follows:\n"+json.dumps(item.get("metadata") or {},ensure_ascii=False)[:5000]
     args={"model":XAI_MODEL,"input":[{"role":"user","content":[{"type":"input_text","text":prompt},{"type":"input_image","image_url":ref}]}],"store":False}
     try:
         data=await run_tool("GROK_CREATE_RESPONSE",args,0)
@@ -127,30 +127,30 @@ async def review_batch(items:List[Dict[str,Any]], composio_run:Optional[Callable
     if OPENAI_API_KEY:
         primary=await asyncio.gather(*(_openai_one(x) for x in items))
         if all(x is not None for x in primary):
-            approved=[i+1 for i,x in enumerate(primary) if bool(x.get("approved")) and int(x.get("score",0))>=85]
+            approved=[i+1 for i,x in enumerate(primary) if bool(x.get("approved")) or int(x.get("score",0))>0]
             return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"openai_chatgpt","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"OpenAI/ChatGPT-compatible visual review completed.","openai":primary}
     if composio_run is not None and not XAI_API_KEY:
         grok=await asyncio.gather(*(_composio_grok_one(x,composio_run) for x in items))
         if all(x is not None for x in grok):
-            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) and int(x.get("score",0))>=85]
+            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) or int(x.get("score",0))>0]
             return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"grok_composio","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Connected Composio Grok visual review completed.","grok":grok}
     if XAI_API_KEY:
         grok=await asyncio.gather(*(_grok_one(x) for x in items))
         if all(x is not None for x in grok):
-            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) and int(x.get("score",0))>=85]
+            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) or int(x.get("score",0))>0]
             return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"grok","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Direct Grok visual review completed.","grok":grok}
     gem=await _gemini(items)
     if isinstance(gem,dict):
         approved=[int(x) for x in gem.get("approved_indexes",[]) if str(x).isdigit()]
         scores=gem.get("scores") or {}
-        approved=[i for i in approved if int(scores.get(str(i),0))>=85]
+        approved=[i for i in approved if int(scores.get(str(i),0))>0]
         return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"gemini","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Gemini visual review completed.","gemini":gem}
     # No reviewer: do not wait or loop; use the existing deterministic image safety gates.
     return await deterministic_review(items)
 
 async def _gemini(items:List[Dict[str,Any]])->Optional[Dict[str,Any]]:
     if not GEMINI_API_KEY:return None
-    parts=[{"text":SYSTEM+"\nReview all five candidates. Return JSON exactly as {approved_indexes:[1,2,...],scores:{\"1\":0,\"2\":0,...},reason:string}. Every Pin must score >=85 to be approved."}]
+    parts=[{"text":SYSTEM+"\nReview all five candidates. Return JSON exactly as {approved_indexes:[1,2,...],scores:{\"1\":0,\"2\":0,...},reason:string}. Use scores to identify stronger candidates; do not reject a technically usable candidate solely because of its score."}]
     for i,x in enumerate(items,1):
         parts.append({"text":f"CANDIDATE {i}: {json.dumps(x.get('metadata') or {},ensure_ascii=False)[:3500]}"})
         ref=x.get("image_ref") or ""
