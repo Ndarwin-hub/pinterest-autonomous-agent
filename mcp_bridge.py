@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse,Response
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip();COMPOSIO_ENTITY_ID=os.getenv("COMPOSIO_ENTITY_ID","").strip();API_SECRET=os.getenv("API_SECRET","").strip();BRIDGE_TOKEN=os.getenv("MCP_BRIDGE_TOKEN","").strip();PUBLIC_DOMAIN=os.getenv("RAILWAY_PUBLIC_DOMAIN","web-production-dae68.up.railway.app").strip();SUBMIT_URL=f"https://{PUBLIC_DOMAIN}/submit";DISCOVER_URL=f"https://{PUBLIC_DOMAIN}/amazon/discover-submit";MCP_TOOLKIT_SLUG="PINTEREST_RAILWAY_BRIDGE";CUSTOM_MCP_TOOLKIT_SLUG="CUSTOM_PINTEREST_RAILWAY_BRIDGE";COMPOSIO_SEARCH_TOOLKIT_SLUG="composio_search";COMPOSIO_BASE="https://backend.composio.dev/api/v3.1";MCP_PATH=f"/mcp/{BRIDGE_TOKEN}" if BRIDGE_TOKEN else "";SMOKE_TEST_URL=os.getenv("COMPOSIO_BRIDGE_SMOKE_TEST_URL","").strip();SMOKE_MARKER="/data/composio_bridge_smoke_test_v2.sha256"
 router=APIRouter();_router_session_id:Optional[str]=None;_router_submit_tool_slug:Optional[str]=None;_router_amazon_tool_slug:Optional[str]=None;_router_session_mcp_url:Optional[str]=None
 TOOL={"name":"PINTEREST_SUBMIT_URL","description":"Submit one exact product/affiliate URL to the autonomous Pinterest workflow. Pass the URL unchanged; do not shorten, rewrite, or replace it.","inputSchema":{"type":"object","properties":{"url":{"type":"string","description":"Exact http(s) product or affiliate URL."}},"required":["url"],"additionalProperties":False}}
+HEALTH_TOOL={"name":"PINTEREST_BRIDGE_HEALTH","description":"Non-publishing bridge health check. Returns a fixed readiness response and does not submit or publish anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}}
 COUNT_TOOL={"name":"PINTEREST_PIN_COUNT","description":"Search, verify and publish N distinct Amazon US products through the Railway Pinterest workflow. N is the number of products, not the number of Pins. Each product uses the existing independent Pin research/image/publish/verification pipeline; publish every usable verified Pin and do not block the batch merely because fewer than five usable Pins are available for a product. Preserve desiredplus-20, reject duplicate ASINs, and use the configured image-quality priority.","inputSchema":{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":50,"description":"Number of distinct Amazon US products to search, verify and publish."}},"required":["count"],"additionalProperties":False}}
 
 def _result(request_id:Any,result:Dict[str,Any])->JSONResponse:return JSONResponse({"jsonrpc":"2.0","id":request_id,"result":result})
@@ -59,7 +60,7 @@ async def _composio_request(method:str,path:str,body:Optional[Dict[str,Any]]=Non
  if response.status_code>=400:raise RuntimeError(f"Composio API HTTP {response.status_code}: {response.text[:1000].replace(chr(10),' ')}")
  return response.json()
 async def ensure_composio_router_session()->Dict[str,Any]:
- global _router_session_id,_router_submit_tool_slug,_router_session_mcp_url
+ global _router_session_id,_router_submit_tool_slug,_router_health_tool_slug,_router_session_mcp_url
  if not(COMPOSIO_API_KEY and COMPOSIO_ENTITY_ID):return {"ready":False,"reason":"Composio credentials are not configured"}
  if _router_session_id and _router_submit_tool_slug:return {"ready":True,"session_id":_router_session_id,"tool_slug":_router_submit_tool_slug,"mcp_url":_router_session_mcp_url}
  last_error=""
@@ -67,19 +68,23 @@ async def ensure_composio_router_session()->Dict[str,Any]:
   try:
    session=await _composio_request("POST","/tool_router/session",{"user_id":COMPOSIO_ENTITY_ID,"toolkits":{"enable":[COMPOSIO_SEARCH_TOOLKIT_SLUG,CUSTOM_MCP_TOOLKIT_SLUG]}});sid=str(session.get("session_id") or "")
    if not sid:raise RuntimeError("Composio created a session without a session_id")
-   search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute Pinterest Railway tools PINTEREST_SUBMIT_URL or PINTEREST_PIN_COUNT"}],"search_strategy":"tool_search"})
+   search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute Pinterest Railway tools PINTEREST_SUBMIT_URL, PINTEREST_PIN_COUNT, or PINTEREST_BRIDGE_HEALTH"}],"search_strategy":"tool_search"})
    submit_slug=None
    for result in search.get("results") or []:
     for slug in (result.get("primary_tool_slugs") or [])+(result.get("related_tool_slugs") or []):
-     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL"):submit_slug=str(slug);break
+     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL"):submit_slug=str(slug)
+     if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
+     if submit_slug and health_slug:break
     if submit_slug:break
    if not submit_slug:
     for slug,schema in (search.get("tool_schemas") or {}).items():
-     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL") or "exact product/affiliate URL" in str(schema.get("description","")):submit_slug=str(slug);break
+     if str(slug).upper().endswith("PINTEREST_SUBMIT_URL") or "exact product/affiliate URL" in str(schema.get("description","")):submit_slug=str(slug)
+     if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
+     if submit_slug and health_slug:break
    if not submit_slug:raise RuntimeError("Composio session search did not expose PINTEREST_SUBMIT_URL")
-   _router_session_id=sid;_router_submit_tool_slug=submit_slug;_router_session_mcp_url=(session.get("mcp") or {}).get("url")
+   _router_session_id=sid;_router_submit_tool_slug=submit_slug;_router_health_tool_slug=health_slug;_router_session_mcp_url=(session.get("mcp") or {}).get("url")
    print(f"Composio Railway Tool Router session ready; Pinterest bridge tool discovered as {_router_submit_tool_slug}")
-   return {"ready":True,"session_id":sid,"tool_slug":submit_slug,"mcp_url":_router_session_mcp_url}
+   return {"ready":True,"session_id":sid,"tool_slug":submit_slug,"health_tool_slug":health_slug,"mcp_url":_router_session_mcp_url}
   except Exception as exc:
    last_error=str(exc);print(f"Composio Tool Router session attempt {attempt} failed: {last_error[:500]}");await asyncio.sleep(min(2**attempt,15))
  return {"ready":False,"reason":last_error[:1000] or "Tool Router session creation failed"}
@@ -127,7 +132,7 @@ async def mcp_endpoint(request:Request):
   if method=="ping":return Response(status_code=202)
  if method=="initialize":return _result(request_id,{"protocolVersion":params.get("protocolVersion") or "2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"Pinterest Railway Bridge","version":"1.2.0"},"instructions":"Use PINTEREST_SUBMIT_URL for exact URLs or PINTEREST_PIN_COUNT for Pin N product batches."})
  if method=="ping":return _result(request_id,{})
- if method=="tools/list":return _result(request_id,{"tools":[TOOL,COUNT_TOOL]})
+ if method=="tools/list":return _result(request_id,{"tools":[TOOL,HEALTH_TOOL,COUNT_TOOL]})
  if method=="tools/call":
   name=params.get("name");args=params.get("arguments") or {}
   try:
@@ -158,7 +163,14 @@ async def register_custom_mcp_with_retry()->bool:
   try:
    if await _register_once():
     print("Composio Custom MCP bridge registered and synced");session=await ensure_composio_router_session()
-    if session.get("ready"):print("Composio Railway Tool Router session ready with Pinterest bridge");await run_one_shot_smoke_test()
+    if session.get("ready"):
+     print("Composio Railway Tool Router session ready with Pinterest bridge")
+     if session.get("health_tool_slug"):
+      try:
+       health=await _composio_request("POST",f"/tool_router/session/{_router_session_id}/execute",{"tool_slug":_router_health_tool_slug,"arguments":{}})
+       print(f"Composio Railway bridge execution self-test: {health}")
+      except Exception as exc: print(f"Composio Railway bridge execution self-test failed: {type(exc).__name__}")
+     await run_one_shot_smoke_test()
     else:print(f"Composio Railway Tool Router session dormant: {session.get('reason')}")
     return True
   except Exception as exc:print(f"Composio Custom MCP registration attempt {attempt} failed: {type(exc).__name__}")
