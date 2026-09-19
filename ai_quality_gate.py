@@ -61,6 +61,39 @@ async def generate_image(product:Dict[str,Any],strategy:Dict[str,Any])->Optional
         except Exception:pass
     return None
 
+
+async def _openai_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
+    """First-priority OpenAI/ChatGPT-compatible visual reviewer when an API key is configured."""
+    if not OPENAI_API_KEY:return None
+    ref=item.get("image_ref") or ""
+    if not ref:return None
+    prompt=SYSTEM+"\\nReview this single Pinterest candidate image. Return JSON exactly as {approved:boolean,score:0-100,reason:string}. Approve only at score >=85. The candidate must confidently depict the exact product and be commercially strong for Pinterest. Product metadata follows:\\n"+json.dumps(item.get("metadata") or {},ensure_ascii=False)[:5000]
+    body={"model":os.getenv("OPENAI_REVIEW_MODEL","gpt-5.4"),"input":[{"role":"user","content":[{"type":"input_text","text":prompt},{"type":"input_image","image_url":ref}]}],"temperature":0}
+    try:
+        async with httpx.AsyncClient(timeout=90) as c:
+            r=await c.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {OPENAI_API_KEY}","Content-Type":"application/json"},json=body)
+            if r.status_code>=400:return None
+            return _json(r.json().get("output_text",""))
+    except Exception as e:
+        logger.warning("OpenAI/ChatGPT visual review failed: %s",e)
+        return None
+
+async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
+    """Fast local safety gate used immediately when no AI reviewer is executable."""
+    approved=[]; scores={}; reasons=[]; seen=set()
+    for i,item in enumerate(items,1):
+        meta=item.get("metadata") or {}; ref=item.get("image_ref") or ""
+        dims=meta.get("dimensions") or []
+        w=int(dims[0] or 0) if len(dims)>0 and dims[0] else 0
+        h=int(dims[1] or 0) if len(dims)>1 and dims[1] else 0
+        score=int(meta.get("image_score") or 0)
+        ok=bool(ref) and ref not in seen and w>=800 and h>=800 and max(w,h)/max(1,min(w,h))<=2.0 and score>=85
+        if ref: seen.add(ref)
+        scores[str(i)]=score
+        if ok: approved.append(i)
+        else: reasons.append(f"Pin {i} failed deterministic image safety checks")
+    return {"approved_indexes":approved,"scores":scores,"reason":"; ".join(reasons) if reasons else "All candidates passed deterministic safety checks.","status":"DETERMINISTIC_VALIDATION_PASSED" if approved else "DETERMINISTIC_VALIDATION_FAILED","final_reviewer":"deterministic","tool_failure":False}
+
 async def _grok_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not XAI_API_KEY:return None
     ref=item.get("image_ref"); content=[{"type":"text","text":SYSTEM+"\nReview this candidate. Return {approved:boolean,score:0-100,reason:string}. Approve only at score >=85."}]
@@ -88,26 +121,32 @@ async def _composio_grok_one(item:Dict[str,Any],run_tool:Callable[[str,Dict[str,
         logger.warning("Composio Grok visual review failed: %s",e)
     return None
 
+
 async def review_batch(items:List[Dict[str,Any]], composio_run:Optional[Callable[[str,Dict[str,Any],int],Awaitable[Dict[str,Any]]]]=None)->Dict[str,Any]:
-    # Prefer the already-connected Composio Grok account when available.
+    # Priority: OpenAI/ChatGPT-compatible reviewer, then Grok, then Gemini.
+    if OPENAI_API_KEY:
+        primary=await asyncio.gather(*(_openai_one(x) for x in items))
+        if all(x is not None for x in primary):
+            approved=[i+1 for i,x in enumerate(primary) if bool(x.get("approved")) and int(x.get("score",0))>=85]
+            return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"openai_chatgpt","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"OpenAI/ChatGPT-compatible visual review completed.","openai":primary}
     if composio_run is not None and not XAI_API_KEY:
         grok=await asyncio.gather(*(_composio_grok_one(x,composio_run) for x in items))
-        passed=all(isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85 for x in grok)
         if all(x is not None for x in grok):
-            return {"approved":passed,"final_reviewer":"grok_composio","status":"AI_REVIEW_PASSED" if passed else "AI_REVIEW_REJECTED","tool_failure":False,"reason":"All Pins passed the connected Composio Grok final approval." if passed else "Composio Grok final approval failed.","grok":grok}
-        # Tool unavailability is not a product-quality rejection. The failover
-        # layer must be allowed to try Gemini or deterministic validation.
-        return {"approved":False,"final_reviewer":"grok_composio","status":"AI_REVIEW_UNAVAILABLE","tool_failure":True,"reason":"Connected Composio Grok did not return a valid visual review for every candidate.","grok":grok}
-    gem=await _gemini(items)
+            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) and int(x.get("score",0))>=85]
+            return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"grok_composio","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Connected Composio Grok visual review completed.","grok":grok}
     if XAI_API_KEY:
-        grok=await asyncio.gather(*(_grok_one(x) for x in items)); passed=all(isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85 for x in grok)
+        grok=await asyncio.gather(*(_grok_one(x) for x in items))
         if all(x is not None for x in grok):
-            return {"approved":passed,"final_reviewer":"grok","status":"AI_REVIEW_PASSED" if passed else "AI_REVIEW_REJECTED","tool_failure":False,"reason":"All Pins passed Grok final approval." if passed else "Grok final approval failed.","gemini":gem,"grok":grok}
-        return {"approved":False,"final_reviewer":"grok","status":"AI_REVIEW_UNAVAILABLE","tool_failure":True,"reason":"Direct Grok did not return a valid visual review for every candidate.","gemini":gem,"grok":grok}
+            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) and int(x.get("score",0))>=85]
+            return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"grok","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Direct Grok visual review completed.","grok":grok}
+    gem=await _gemini(items)
     if isinstance(gem,dict):
-        approved=gem.get("approved_indexes") or []; scores=gem.get("scores") or {}; passed=len(approved)==len(items) and all(int(scores.get(str(i),0))>=85 for i in range(1,len(items)+1))
-        return {"approved":passed,"final_reviewer":"gemini","status":"AI_REVIEW_PASSED" if passed else "AI_REVIEW_REJECTED","tool_failure":False,"reason":"Gemini final review passed." if passed else "Gemini final review failed.","gemini":gem}
-    return {"approved":False,"final_reviewer":"none","status":"AI_REVIEW_UNAVAILABLE","tool_failure":True,"reason":"No visual AI reviewer returned a valid review."}
+        approved=[int(x) for x in gem.get("approved_indexes",[]) if str(x).isdigit()]
+        scores=gem.get("scores") or {}
+        approved=[i for i in approved if int(scores.get(str(i),0))>=85]
+        return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"gemini","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Gemini visual review completed.","gemini":gem}
+    # No reviewer: do not wait or loop; use the existing deterministic image safety gates.
+    return await deterministic_review(items)
 
 async def _gemini(items:List[Dict[str,Any]])->Optional[Dict[str,Any]]:
     if not GEMINI_API_KEY:return None
