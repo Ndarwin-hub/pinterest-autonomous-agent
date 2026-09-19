@@ -1,5 +1,5 @@
 """Minimal dependency-free MCP/JSON-RPC bridge for Composio Custom MCP."""
-import asyncio,hashlib,os
+import asyncio,hashlib,os,json
 from typing import Any,Dict,Optional
 import httpx
 from fastapi import APIRouter,Request
