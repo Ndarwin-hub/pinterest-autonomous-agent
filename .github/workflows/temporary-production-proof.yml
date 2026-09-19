@@ -1,0 +1,46 @@
+name: Temporary production batch proof
+on:
+  workflow_dispatch:
+    inputs:
+      batch:
+        required: true
+        type: choice
+        options: ['1','2','3']
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Request OIDC
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -H 'Accept: application/json; api-version=2.0' \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          token=$(printf '%s' "$response" | jq -r '.value')
+          test -n "$token" && test "$token" != "null"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Run production Railway batch
+        env:
+          ID_TOKEN: ${{ steps.oidc.outputs.token }}
+          BATCH: ${{ inputs.batch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --no-buffer \
+            --connect-timeout 20 --max-time 2400 \
+            --retry 5 --retry-delay 10 --retry-max-time 120 --retry-all-errors \
+            -H "Authorization: Bearer $ID_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+            -H 'X-GitHub-Schedule: manual-proof' \
+            -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/run-batch' \
+            --data "{\"batch\":$BATCH,\"scheduler_run_id\":\"$GITHUB_RUN_ID\",\"scheduled_local_time\":\"manual-proof\"}" | tee /tmp/result
+          status=$(awk 'NF { last=$0 } END { print last }' /tmp/result | jq -r '.status // empty')
+          case "$status" in completed|already_completed) exit 0;; *) echo "Terminal status: ${status:-empty}"; exit 1;; esac
