@@ -22,11 +22,11 @@ def pinterest_five_verified(result:Dict[str,Any])->bool:
 class AmazonScheduler:
  def __init__(self):self._task=None;self._stop=asyncio.Event();self.status={"running":False,"dormant_reason":None,"last_tick":None,"mode":SCHEDULER_MODE,"current_batch":None,"source":"composio"}
  def gate_status(self,live_boards=None):
-  composio=not is_dormant();ready=composio and SCHEDULER_ENABLED;info=classify_live_boards(live_boards or []);reasons=[]
+  amazon_source_ready=not is_dormant();ready=amazon_source_ready and SCHEDULER_ENABLED;info=classify_live_boards(live_boards or []);reasons=[]
   if not SCHEDULER_ENABLED:reasons.append("AMAZON_SCHEDULER_ENABLED is false")
   if not composio:reasons.append("Composio Amazon connection/configuration is not available")
   if live_boards is not None and not info["scheduler_ready"]:reasons.append(f"Need {REQUIRED_PRIMARY_SLOTS} approved primary boards; have {info['primary_count']}")
-  return {"credentials_present":composio,"scheduler_enabled_flag":SCHEDULER_ENABLED,"mode":SCHEDULER_MODE,"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),"blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
+  return {"credentials_present":amazon_source_ready,"scheduler_enabled_flag":SCHEDULER_ENABLED,"mode":SCHEDULER_MODE,"source":"amazon_api_primary_composio_fallback" if amazon_credentials_present() else "composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),"blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
  async def start(self,*,enqueue,list_boards,wait_job=None):
   if SCHEDULER_MODE!="continuous":self.status.update({"mode":SCHEDULER_MODE,"running":False,"dormant_reason":"external_mode"});return
   if self._task and not self._task.done():return
