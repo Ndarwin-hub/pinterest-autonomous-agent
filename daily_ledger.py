@@ -1,9 +1,9 @@
-"""Durable 15-slot daily Amazon success ledger with batch idempotency."""
+"""Durable 50-slot daily Amazon success ledger with 10-batch idempotency."""
 from __future__ import annotations
 import os, sqlite3, threading, time
 from datetime import datetime, timezone, date
 from pathlib import Path
-DATA=Path(os.getenv("DATA_DIR", "/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("DAILY_LEDGER_DB_PATH",str(DATA/"amazon_daily_ledger.db"))); _lock=threading.Lock(); SLOT_COUNT=15; BATCH_SIZE=5; BATCH_LEASE_SEC=int(os.getenv("AMAZON_BATCH_LEASE_SEC","2700")); SLOT_PROCESSING_LEASE_SEC=int(os.getenv("AMAZON_SLOT_PROCESSING_LEASE_SEC","2700"))
+DATA=Path(os.getenv("DATA_DIR", "/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("DAILY_LEDGER_DB_PATH",str(DATA/"amazon_daily_ledger.db"))); _lock=threading.Lock(); SLOT_COUNT=50; BATCH_SIZE=5; BATCH_LEASE_SEC=int(os.getenv("AMAZON_BATCH_LEASE_SEC","2700")); SLOT_PROCESSING_LEASE_SEC=int(os.getenv("AMAZON_SLOT_PROCESSING_LEASE_SEC","2700"))
 class DailyLedger:
     def __init__(self,db_path=DB_PATH): self.db_path=Path(db_path); self._init()
     def _conn(self):
