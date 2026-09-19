@@ -172,9 +172,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 recovery_rounds+=1
             published=[]; errors=[]
             approved_indexes=set(int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit())
-            publish_all = review.get("final_reviewer") == "deterministic"
             for p in pins:
-                if not publish_all and p["pin_number"] not in approved_indexes:
+                if p["pin_number"] not in approved_indexes:
                     errors.append({"pin_number":p["pin_number"],"error":"Rejected by visual quality reviewer; not published"})
                     continue
                 s=p["seo"]; im=p["image"]
