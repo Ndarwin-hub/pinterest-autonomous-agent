@@ -46,7 +46,7 @@ _BOARD_CATEGORY={
  "Sports, Games & Toys":"Toys & Games","Fashion & Lifestyle":"Clothing/Shoes",
  "Pet Supplies":"Pet Supplies","Baby & Kids":"Baby","Automotive & Tools":"Electronics",
  "Office & Productivity":"Computers & Accessories","Travel & Camping":"Clothing/Shoes","Books & Learning":"Home & Kitchen"}
-def is_dormant()->bool:return not composio_ready()
+def is_dormant()->bool:return not (amazon_credentials_present() or composio_ready())
 async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=None,client=None):
  category=_BOARD_CATEGORY.get(board_name,"Electronics")
  api_candidate=await _discover_api(category,exclude_asins)
