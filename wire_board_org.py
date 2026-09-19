@@ -139,6 +139,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 review_items=build_review_items(pins,product)
                 job_store.update(job_id,progress="AI visual review" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
                 review=await review_batch(review_items,composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
+                logger.info("AI review summary reviewer=%s status=%s approved=%s tool_failure=%s reason=%s",review.get("final_reviewer"),review.get("status"),review.get("approved_indexes"),review.get("tool_failure"),str(review.get("reason") or "")[:500])
                 failed=failed_indexes(review,len(pins))
                 # Partial approval is sufficient. A fifth rejected/missing Pin never blocks valid Pins.
                 if not failed or review.get("final_reviewer")=="deterministic":
