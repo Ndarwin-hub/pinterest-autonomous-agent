@@ -11,7 +11,7 @@ from daily_ledger import ledger,SLOT_COUNT,BATCH_SIZE
 from published_registry import registry
 from amazon_alerts import send_failure_alert
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
-SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60)));SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes");SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
+SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(48*60)));SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes");SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
 EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]];ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]];WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
 def pinterest_any_verified(result:Dict[str,Any])->bool:
  pins=result.get("pins") if isinstance(result,dict) else None
@@ -61,7 +61,7 @@ class AmazonScheduler:
   slot=ledger.next_pending_slot(day)
   if slot and ledger.claim_slot(day,int(slot["slot"])):await self._process_slot(slot,enqueue,wait_job,day)
  async def run_batch(self,batch_index:int,enqueue,list_boards,wait_job):
-  if batch_index not in (1,2,3):raise ValueError("batch must be 1, 2, or 3")
+  if batch_index < 1 or batch_index > (SLOT_COUNT // BATCH_SIZE):raise ValueError(f"batch must be 1..{SLOT_COUNT // BATCH_SIZE}")
   if is_dormant():
    self.status["dormant_reason"]="no_composio";await send_failure_alert(batch=batch_index,reason="Composio Amazon discovery is unavailable");return {"status":"failed","batch":batch_index,"reason":"Composio Amazon discovery is unavailable"}
   live=await list_boards();gate=self.gate_status(live)
@@ -69,7 +69,7 @@ class AmazonScheduler:
    self.status["dormant_reason"]="; ".join(gate["blocking_reasons"]);await send_failure_alert(batch=batch_index,reason="scheduler gate blocked",details="; ".join(gate["blocking_reasons"]));return {"status":"blocked","batch":batch_index,"reasons":gate["blocking_reasons"]}
   specs,_=build_slot_specs(live)
   if not specs:
-   await send_failure_alert(batch=batch_index,reason="15 category slots unavailable");return {"status":"blocked","batch":batch_index,"reason":"15 category slots unavailable"}
+   await send_failure_alert(batch=batch_index,reason="daily slot configuration unavailable");return {"status":"blocked","batch":batch_index,"reason":"daily slot configuration unavailable"}
   day=ledger.ensure_day(slots_spec=specs);ledger.reclaim_stale_processing(day);owner=f"batch-{batch_index}-{uuid.uuid4().hex}";claim=ledger.try_begin_batch(day,batch_index,owner);wait_cycles=0
   while not claim["acquired"] and claim.get("status")=="busy" and wait_cycles<160:
    await asyncio.sleep(15);wait_cycles+=1;claim=ledger.try_begin_batch(day,batch_index,owner)
