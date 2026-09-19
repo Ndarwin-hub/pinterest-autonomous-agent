@@ -114,7 +114,7 @@ if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
 class SubmitResponse(BaseModel):job_id:str;status:str;message:str
 class StatusResponse(BaseModel):job_id:str;status:str;progress:Optional[str]=None;result:Optional[Dict[str,Any]]=None;error:Optional[str]=None;created_at:str;updated_at:str
-class BatchRequest(BaseModel):batch:int=Field(...,ge=1,le=3)
+class BatchRequest(BaseModel):batch:int=Field(...,ge=1,le=10)
 class BatchSubmitRequest(BaseModel):
  urls:List[str]=Field(...,min_length=1,max_length=50,description="List of already-resolved Amazon US product/affiliate URLs")
  wait:bool=Field(False,description="If true, wait briefly for job acceptance only; does not wait for full 5-Pin completion")
