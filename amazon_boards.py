@@ -1,4 +1,4 @@
-"""Approved Pinterest board gate plus 14 logical Amazon categories and one extra."""
+"""Approved Pinterest board gate plus 14 logical Amazon categories and 36 rolling global slots."""
 from __future__ import annotations
 from typing import Any,Dict,List,Optional,Tuple
 from board_org import LEGACY_BOARD_IDS,LEGACY_BOARD_NAMES,PERMANENT_BOARD_IDS,DEFAULT_BOARD_NAME
@@ -37,5 +37,6 @@ def build_slot_specs(live_items:List[Dict[str,Any]])->Tuple[Optional[List[Dict[s
   board=by_name.get(board_name)
   if not board:return None,info
   specs.append({"slot":slot,"slot_kind":"category","target_board_name":board_name,"target_board_id":board["id"],"amazon_category":category})
- specs.append({"slot":15,"slot_kind":"global","target_board_name":None,"target_board_id":None,"amazon_category":"Extra"})
+ for slot in range(len(CATEGORY_SLOTS)+1, 51):
+  specs.append({"slot":slot,"slot_kind":"global","target_board_name":None,"target_board_id":None,"amazon_category":"Extra"})
  return specs,info
