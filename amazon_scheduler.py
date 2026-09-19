@@ -128,3 +128,5 @@ class AmazonScheduler:
     continue
    attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,error="job_not_completed")
   ledger.mark_slot(n,status="exhausted",day=day,error="max_replacements");return False
+
+amazon_scheduler=AmazonScheduler()
