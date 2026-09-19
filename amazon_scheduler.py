@@ -1,4 +1,4 @@
-"""External-wake Amazon scheduler feeding only the existing 5-Pin pipeline."""
+"""External-wake Amazon scheduler feeding the existing Pinterest pipeline."""
 from __future__ import annotations
 import asyncio,logging,os,uuid,json
 from datetime import datetime,timezone
@@ -13,6 +13,9 @@ from amazon_alerts import send_failure_alert
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
 SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(96*60)));SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes");SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
 EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]];ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]];WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
+def pinterest_any_verified(result:Dict[str,Any])->bool:
+ pins=result.get("pins") if isinstance(result,dict) else None
+ return isinstance(pins,list) and any(isinstance(p,dict) and bool(p.get("verified")) and bool(p.get("pin_id")) and bool(p.get("destination_url")) for p in pins)
 def pinterest_five_verified(result:Dict[str,Any])->bool:
  pins=result.get("pins") if isinstance(result,dict) else None
  return isinstance(pins,list) and len(pins)==5 and all(isinstance(p,dict) and bool(p.get("verified")) for p in pins)
@@ -74,7 +77,6 @@ class AmazonScheduler:
    if claim.get("status") not in ("completed","running"):await send_failure_alert(batch=batch_index,reason=str(claim.get("status")),details=str(claim))
    return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json"),"active_batch":claim.get("active_batch")}
   self.status.update({"current_batch":batch_index,"dormant_reason":None});first=(batch_index-1)*BATCH_SIZE+1;last=first+BATCH_SIZE-1;successes=0;attempted=0;errors=[]
-  # Core board-balance rule: within this batch, process least-filled target boards first
   balance_meta={"available":False,"message":"Board balancing could not be verified because current Pinterest counts were unavailable."}
   slot_order=list(range(first,last+1))
   try:
@@ -84,13 +86,10 @@ class AmazonScheduler:
     name_to_count={r["name"]:r.get("pin_count") for r in (balance_meta.get("ranked_dedicated") or [])}
     def _slot_fill_key(slot_no):
      if 1<=slot_no<=len(CATEGORY_SLOTS):
-      bname=CATEGORY_SLOTS[slot_no-1][1]
-      c=name_to_count.get(bname)
-      return (c is None,c if c is not None else 10**9,slot_no)
+      bname=CATEGORY_SLOTS[slot_no-1][1];c=name_to_count.get(bname);return (c is None,c if c is not None else 10**9,slot_no)
      return (True,10**9,slot_no)
     slot_order=sorted(slot_order,key=_slot_fill_key)
-  except Exception as e:
-   logger.warning("Board balance reorder skipped: %s",e)
+  except Exception as e:logger.warning("Board balance reorder skipped: %s",e)
   try:
    for slot_no in slot_order:
     slot=ledger.next_pending_slot(day,slot_no,slot_no)
@@ -110,21 +109,22 @@ class AmazonScheduler:
  async def _process_slot(self,slot,enqueue,wait_job,day):
   n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0);exclude=set()
   while attempts<MAX_REPLACEMENTS_PER_SLOT:
-   if 1<=n<=len(CATEGORY_SLOTS): candidate=await discover_category(CATEGORY_SLOTS[n-1][0],exclude_asins=exclude)
+   if 1<=n<=len(CATEGORY_SLOTS):candidate=await discover_category(CATEGORY_SLOTS[n-1][0],exclude_asins=exclude)
    else:candidate=await discover_global(exclude_asins=exclude)
    if not candidate:ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
    exclude.add(candidate["asin"]);url=candidate["affiliate_url"];ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
    try:result=await enqueue(url)
    except Exception as e:attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,error=str(e)[:500]);continue
    job_id=result.get("job_id")
-   if result.get("status")=="completed" and pinterest_five_verified(result):ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
+   if result.get("status")=="completed" and pinterest_any_verified(result):ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
    if wait_job and job_id:
     final=await wait_job(job_id)
-    if final.get("status")=="completed" and pinterest_five_verified(final.get("result") or {}):ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
-    attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(final.get("error") or "five_pin_verification_failed")[:500])
-    try:registry.record_blocked(asin=candidate.get("asin"),product_url=url,affiliate_url=url,job_id=job_id,notes="partial_or_failed_five_pin")
+    final_result=final.get("result") or {}
+    if final.get("status") in ("completed","completed_partial") and pinterest_any_verified(final_result):
+     ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
+    attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(final.get("error") or "no_verified_pin_published")[:500])
+    try:registry.record_blocked(asin=candidate.get("asin"),product_url=url,affiliate_url=url,job_id=job_id,notes="no_verified_pin_published")
     except Exception:pass
     continue
    attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,error="job_not_completed")
   ledger.mark_slot(n,status="exhausted",day=day,error="max_replacements");return False
-amazon_scheduler=AmazonScheduler()
