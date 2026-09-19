@@ -85,7 +85,7 @@ async def lifespan(app:FastAPI):
     logger.info("STARTUP PIN %s COMPLETED: %s",startup_pin_count,json.dumps(result,separators=(",",":"))[:5000])
    except Exception as exc:logger.exception("STARTUP PIN %s FAILED: %s",startup_pin_count,exc)
   asyncio.create_task(_run_startup_pin_command(),name=f"startup-pin-{startup_pin_count}")
- else:logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured")
+ else:logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured") if not MCP_PATH else logger.info("MCP bridge enabled at configured protected endpoint")
  async def _enqueue_for_amazon(url:str):
   class _BG:
    def add_task(self,fn,*args):asyncio.create_task(fn(*args))
