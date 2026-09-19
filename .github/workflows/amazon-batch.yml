@@ -24,6 +24,8 @@ on:
         required: true
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10']
+  repository_dispatch:
+    types: [production-batch-test]
 
 permissions:
   contents: read
@@ -47,8 +49,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+              echo "batch=${{ github.event.client_payload.batch }}" >> "$GITHUB_OUTPUT"
+            else
+              echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
+            fi
             echo "scheduled_local_time=manual" >> "$GITHUB_OUTPUT"
             echo "action=run" >> "$GITHUB_OUTPUT"
           else
