@@ -187,6 +187,18 @@ async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)
  logger.info("Amazon wake trigger requested_batch=%s github_run=%s delay=%ss queued=%s active=%s load=%s",body.batch,body.scheduler_run_id,body.github_delay_seconds,body.github_queued_runs,body.github_active_runs,body.github_load_class)
  result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=body.batch)
  return {**result,"scheduler":"railway_owned_daily_session","github_trigger_batch":body.batch,"day":day,"message":"Railway owns the remaining daily batches after this successful wake; later GitHub triggers are idempotent backups."}
+@app.post("/amazon/notification-check")
+async def amazon_notification_check(_:bool=Depends(verify_batch_secret)):
+    """Final reconciliation check: sends exactly one daily STARTED or NOT STARTED status notification."""
+    day=daily_ledger.today_str()
+    from amazon_alerts import notify_daily_started,notify_daily_not_started
+    state=daily_ledger.daily_status_state(day)
+    if state.get("started"):
+        await notify_daily_started(day,int(state.get("started_trigger_batch") or 0),state.get("started_scheduled_local_time"))
+        return {"status":"already_started","day":day,"notification":"started"}
+    await notify_daily_not_started(day)
+    return {"status":"not_started","day":day,"notification":"not_started"}
+
 @app.post("/batch-submit")
 async def batch_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
  """Accept a list of already-resolved Amazon US product URLs. Each accepted URL is fed into the existing single-product job pipeline unchanged in behavior."""
