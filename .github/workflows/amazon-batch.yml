@@ -30,6 +30,7 @@ permissions:
   id-token: write
   actions: read
 
+# Manual-dispatch entrypoint retained for one-shot production batch wakeups.
 # Never cancel an in-flight batch. Allow multiple recovery triggers to queue.
 concurrency:
   group: amazon-external-batch
