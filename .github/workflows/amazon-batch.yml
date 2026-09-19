@@ -1,85 +1,32 @@
 name: Amazon external batches
 on:
   schedule:
-    - cron: '0 6 * * *'
+    # Avoid GitHub's documented high-load top-of-hour window.
+    - cron: '8 6 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '5 6 * * *'
+    - cron: '56 6 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '10 6 * * *'
+    - cron: '44 7 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '15 6 * * *'
+    - cron: '32 8 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '48 6 * * *'
+    - cron: '20 9 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '53 6 * * *'
+    - cron: '8 10 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '58 6 * * *'
+    - cron: '56 10 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '3 7 * * *'
+    - cron: '44 11 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '36 7 * * *'
+    - cron: '32 12 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '41 7 * * *'
+    - cron: '20 13 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '46 7 * * *'
+    - cron: '36 13 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '51 7 * * *'
+    - cron: '48 13 * * *'
       timezone: 'Asia/Kathmandu'
-    - cron: '24 8 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '29 8 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '34 8 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '39 8 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '12 9 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '17 9 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '22 9 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '27 9 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '0 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '5 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '10 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '15 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '48 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '53 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '58 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '3 11 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '36 11 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '41 11 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '46 11 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '51 11 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '24 12 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '29 12 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '34 12 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '39 12 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '12 13 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '17 13 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '22 13 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '27 13 * * *'
+    - cron: '0 14 * * *'
       timezone: 'Asia/Kathmandu'
   workflow_dispatch:
     inputs:
@@ -92,62 +39,70 @@ on:
 permissions:
   contents: read
   id-token: write
+  actions: read
 
 # Never cancel an in-flight batch. Allow multiple recovery triggers to queue.
 concurrency:
   group: amazon-external-batch
   cancel-in-progress: false
+  queue: max
 
 jobs:
   wake:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Select batch
+      - name: Select batch and measure scheduler workload
         id: select
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
+            echo "scheduled_local_time=manual" >> "$GITHUB_OUTPUT"
           else
             case "${{ github.event.schedule }}" in
-              '0 6 * * *'|'5 6 * * *'|'10 6 * * *'|'15 6 * * *')
-                echo "batch=1" >> "$GITHUB_OUTPUT"
-                ;;
-              '48 6 * * *'|'53 6 * * *'|'58 6 * * *'|'3 7 * * *')
-                echo "batch=2" >> "$GITHUB_OUTPUT"
-                ;;
-              '36 7 * * *'|'41 7 * * *'|'46 7 * * *'|'51 7 * * *')
-                echo "batch=3" >> "$GITHUB_OUTPUT"
-                ;;
-              '24 8 * * *'|'29 8 * * *'|'34 8 * * *'|'39 8 * * *')
-                echo "batch=4" >> "$GITHUB_OUTPUT"
-                ;;
-              '12 9 * * *'|'17 9 * * *'|'22 9 * * *'|'27 9 * * *')
-                echo "batch=5" >> "$GITHUB_OUTPUT"
-                ;;
-              '0 10 * * *'|'5 10 * * *'|'10 10 * * *'|'15 10 * * *')
-                echo "batch=6" >> "$GITHUB_OUTPUT"
-                ;;
-              '48 10 * * *'|'53 10 * * *'|'58 10 * * *'|'3 11 * * *')
-                echo "batch=7" >> "$GITHUB_OUTPUT"
-                ;;
-              '36 11 * * *'|'41 11 * * *'|'46 11 * * *'|'51 11 * * *')
-                echo "batch=8" >> "$GITHUB_OUTPUT"
-                ;;
-              '24 12 * * *'|'29 12 * * *'|'34 12 * * *'|'39 12 * * *')
-                echo "batch=9" >> "$GITHUB_OUTPUT"
-                ;;
-              '12 13 * * *'|'17 13 * * *'|'22 13 * * *'|'27 13 * * *')
-                echo "batch=10" >> "$GITHUB_OUTPUT"
-                ;;
-              *)
-                echo "Unknown schedule: ${{ github.event.schedule }}" >&2
-                exit 1
-                ;;
+              '8 6 * * *') echo "batch=1" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=06:08" >> "$GITHUB_OUTPUT" ;;
+              '56 6 * * *') echo "batch=2" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=06:56" >> "$GITHUB_OUTPUT" ;;
+              '44 7 * * *') echo "batch=3" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=07:44" >> "$GITHUB_OUTPUT" ;;
+              '32 8 * * *') echo "batch=4" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=08:32" >> "$GITHUB_OUTPUT" ;;
+              '20 9 * * *') echo "batch=5" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=09:20" >> "$GITHUB_OUTPUT" ;;
+              '8 10 * * *') echo "batch=6" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=10:08" >> "$GITHUB_OUTPUT" ;;
+              '56 10 * * *') echo "batch=7" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=10:56" >> "$GITHUB_OUTPUT" ;;
+              '44 11 * * *') echo "batch=8" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=11:44" >> "$GITHUB_OUTPUT" ;;
+              '32 12 * * *') echo "batch=9" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=12:32" >> "$GITHUB_OUTPUT" ;;
+              '20 13 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=13:20" >> "$GITHUB_OUTPUT" ;;
+              '36 13 * * *'|'48 13 * * *'|'0 14 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=reconcile" >> "$GITHUB_OUTPUT" ;;
+              *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
             esac
           fi
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
+          runs_json="$(curl --fail --silent --show-error -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2026-03-10" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs?per_page=100&event=schedule")"
+          queued="$(printf '%s' "$runs_json" | jq '[.workflow_runs[] | select(.status=="queued" or .status=="waiting" or .status=="pending" or .status=="requested")] | length')"
+          active="$(printf '%s' "$runs_json" | jq '[.workflow_runs[] | select(.status=="in_progress")] | length')"
+          scheduled_time="${{ steps.select.outputs.scheduled_local_time }}"
+          if [[ "$scheduled_time" == "manual" || "$scheduled_time" == "reconcile" ]]; then delay=0; else
+            delay="$(python3 - "$scheduled_time" <<'PY'
+import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
+scheduled=sys.argv[1]; now=datetime.now(ZoneInfo("Asia/Kathmandu"))
+target=datetime.combine(now.date(), datetime.strptime(scheduled,"%H:%M").time(), tzinfo=now.tzinfo)
+print(max(0,int((now-target).total_seconds())))
+PY
+)"
+          fi
+          if (( delay >= 600 || queued >= 8 || active >= 8 )); then load_class="HIGH_LOAD_SUSPECTED"
+          elif (( delay >= 180 || queued >= 3 || active >= 4 )); then load_class="DELAYED"
+          else load_class="NORMAL"; fi
+          echo "queued=$queued" >> "$GITHUB_OUTPUT"
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          echo "delay=$delay" >> "$GITHUB_OUTPUT"
+          echo "load_class=$load_class" >> "$GITHUB_OUTPUT"
+          echo "GitHub scheduler observation: delay=$delay s queued=$queued active=$active class=$load_class"
 
       - name: Request GitHub OIDC token
         id: oidc
@@ -166,6 +121,14 @@ jobs:
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
           BATCH: ${{ steps.select.outputs.batch }}
+          SCHEDULED_LOCAL_TIME: ${{ steps.select.outputs.scheduled_local_time }}
+          GH_STARTED_AT: ${{ steps.select.outputs.started_at }}
+          GH_DELAY: ${{ steps.select.outputs.delay }}
+          GH_QUEUED: ${{ steps.select.outputs.queued }}
+          GH_ACTIVE: ${{ steps.select.outputs.active }}
+          GH_LOAD_CLASS: ${{ steps.select.outputs.load_class }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_SCHEDULE: ${{ github.event.schedule || 'manual' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -184,8 +147,16 @@ jobs:
               --retry-all-errors \
               -H "Authorization: Bearer $ID_TOKEN" \
               -H 'Content-Type: application/json' \
+              -H "X-GitHub-Run-ID: $GH_RUN_ID" \
+              -H "X-GitHub-Schedule: $GH_SCHEDULE" \
+              -H "X-GitHub-Started-At: $GH_STARTED_AT" \
+              -H "X-GitHub-Scheduled-Local-Time: $SCHEDULED_LOCAL_TIME" \
+              -H "X-GitHub-Delay-Seconds: $GH_DELAY" \
+              -H "X-GitHub-Queued-Runs: $GH_QUEUED" \
+              -H "X-GitHub-Active-Runs: $GH_ACTIVE" \
+              -H "X-GitHub-Load-Class: $GH_LOAD_CLASS" \
               -X POST 'https://pinterest-autonomous-agent-production.up.railway.app/amazon/run-batch' \
-              --data "{\"batch\":$BATCH}" | tee "$response_file"
+              --data "{\"batch\":$BATCH,\"scheduler_run_id\":\"$GH_RUN_ID\",\"scheduled_local_time\":\"$SCHEDULED_LOCAL_TIME\",\"github_delay_seconds\":$GH_DELAY,\"github_queued_runs\":$GH_QUEUED,\"github_active_runs\":$GH_ACTIVE,\"github_load_class\":\"$GH_LOAD_CLASS\"}" | tee "$response_file"
 
             final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
 
