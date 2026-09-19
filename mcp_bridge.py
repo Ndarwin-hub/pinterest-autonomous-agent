@@ -6,7 +6,7 @@ from fastapi import APIRouter,Request
 from fastapi.responses import JSONResponse,Response
 
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip();COMPOSIO_ENTITY_ID=os.getenv("COMPOSIO_ENTITY_ID","").strip();API_SECRET=os.getenv("API_SECRET","").strip();BRIDGE_TOKEN=os.getenv("MCP_BRIDGE_TOKEN","").strip();PUBLIC_DOMAIN=os.getenv("RAILWAY_PUBLIC_DOMAIN","web-production-dae68.up.railway.app").strip();SUBMIT_URL=f"https://{PUBLIC_DOMAIN}/submit";DISCOVER_URL=f"https://{PUBLIC_DOMAIN}/amazon/discover-submit";MCP_TOOLKIT_SLUG="PINTEREST_RAILWAY_BRIDGE";CUSTOM_MCP_TOOLKIT_SLUG="CUSTOM_PINTEREST_RAILWAY_BRIDGE";COMPOSIO_SEARCH_TOOLKIT_SLUG="composio_search";COMPOSIO_BASE="https://backend.composio.dev/api/v3.1";MCP_PATH=f"/mcp/{BRIDGE_TOKEN}" if BRIDGE_TOKEN else "";SMOKE_TEST_URL=os.getenv("COMPOSIO_BRIDGE_SMOKE_TEST_URL","").strip();SMOKE_MARKER="/data/composio_bridge_smoke_test_v2.sha256"
-router=APIRouter();_router_session_id:Optional[str]=None;_router_submit_tool_slug:Optional[str]=None;_router_session_mcp_url:Optional[str]=None
+router=APIRouter();_router_session_id:Optional[str]=None;_router_submit_tool_slug:Optional[str]=None;_router_amazon_tool_slug:Optional[str]=None;_router_session_mcp_url:Optional[str]=None
 TOOL={"name":"PINTEREST_SUBMIT_URL","description":"Submit one exact product/affiliate URL to the autonomous Pinterest workflow. Pass the URL unchanged; do not shorten, rewrite, or replace it.","inputSchema":{"type":"object","properties":{"url":{"type":"string","description":"Exact http(s) product or affiliate URL."}},"required":["url"],"additionalProperties":False}}
 COUNT_TOOL={"name":"PINTEREST_PIN_COUNT","description":"Search, verify and publish N distinct Amazon US products through the Railway Pinterest workflow. N is the number of products, not the number of Pins. Each product uses the existing independent Pin research/image/publish/verification pipeline; publish every usable verified Pin and do not block the batch merely because fewer than five usable Pins are available for a product. Preserve desiredplus-20, reject duplicate ASINs, and use the configured image-quality priority.","inputSchema":{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":50,"description":"Number of distinct Amazon US products to search, verify and publish."}},"required":["count"],"additionalProperties":False}}
 
@@ -83,6 +83,22 @@ async def ensure_composio_router_session()->Dict[str,Any]:
   except Exception as exc:
    last_error=str(exc);print(f"Composio Tool Router session attempt {attempt} failed: {last_error[:500]}");await asyncio.sleep(min(2**attempt,15))
  return {"ready":False,"reason":last_error[:1000] or "Tool Router session creation failed"}
+async def composio_router_search_amazon(query:str,amazon_domain:str="amazon.com",page:int=1)->Dict[str,Any]:
+ global _router_amazon_tool_slug
+ session=await ensure_composio_router_session()
+ if not session.get("ready"):raise RuntimeError(str(session.get("reason") or "Composio Tool Router session is not ready"))
+ if not _router_amazon_tool_slug:
+  search=await _composio_request("POST",f"/tool_router/session/{_router_session_id}/search",{"queries":[{"use_case":"search Amazon products and return buyable product detail results from the requested Amazon marketplace","known_fields":f"amazon_domain:{amazon_domain}"}],"search_strategy":"tool_search"})
+  for result in search.get("results") or []:
+   for slug in (result.get("primary_tool_slugs") or [])+(result.get("related_tool_slugs") or []):
+    if str(slug).upper()=="COMPOSIO_SEARCH_AMAZON":_router_amazon_tool_slug=str(slug);break
+   if _router_amazon_tool_slug:break
+  if not _router_amazon_tool_slug:
+   for slug in (search.get("tool_schemas") or {}):
+    if str(slug).upper()=="COMPOSIO_SEARCH_AMAZON":_router_amazon_tool_slug=str(slug);break
+  if not _router_amazon_tool_slug:raise RuntimeError("Composio Tool Router did not expose COMPOSIO_SEARCH_AMAZON")
+ return await _composio_request("POST",f"/tool_router/session/{_router_session_id}/execute",{"tool_slug":_router_amazon_tool_slug,"arguments":{"query":query,"amazon_domain":amazon_domain,"page":page}})
+
 async def composio_router_submit_exact_url(url:str)->Dict[str,Any]:
  session=await ensure_composio_router_session()
  if not session.get("ready"):raise RuntimeError(str(session.get("reason") or "Composio Tool Router session is not ready"))
