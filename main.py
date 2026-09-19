@@ -70,6 +70,21 @@ async def lifespan(app:FastAPI):
  logger.info("Pinterest Autonomous Agent v3.9.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
  registration_task=None
  if MCP_PATH:registration_task=asyncio.create_task(register_custom_mcp_with_retry())
+ startup_pin_count=int(os.getenv("PIN_COMMAND_ON_START","0") or "0")
+ if startup_pin_count>0:
+  async def _run_startup_pin_command():
+   marker="/data/pin_command_"+str(startup_pin_count)+".done"
+   try:
+    if os.path.exists(marker):
+     logger.info("Startup Pin command %s already consumed",startup_pin_count);return
+    class _BG:
+     def add_task(self,fn,*args):asyncio.create_task(fn(*args))
+    result=await amazon_discover_submit(DiscoverSubmitRequest(count=startup_pin_count,exclude_asins=[]),_BG(),True)
+    os.makedirs("/data",exist_ok=True)
+    with open(marker,"w") as f:json.dump({"count":startup_pin_count,"result":result},f,default=str)
+    logger.info("STARTUP PIN %s COMPLETED: %s",startup_pin_count,json.dumps(result,separators=(",",":"))[:5000])
+   except Exception as exc:logger.exception("STARTUP PIN %s FAILED: %s",startup_pin_count,exc)
+  asyncio.create_task(_run_startup_pin_command(),name=f"startup-pin-{startup_pin_count}")
  else:logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured")
  async def _enqueue_for_amazon(url:str):
   class _BG:
