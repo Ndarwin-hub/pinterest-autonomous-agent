@@ -159,8 +159,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
                         if extra:
                             p["candidate_pool"]=(pool or [])+extra; pool=p["candidate_pool"]; cursor=int(p.get("candidate_cursor") or 0)
                             while cursor+1<len(pool):
-                                cursor+=1; c=pool[cursor]; u=c.get("url")
-                                if not u or u not in used:next_candidate=c;break
+                                cursor+=1; c=pool[cursor]
+                                if candidate_is_unique(c,used):next_candidate=c;break
                             p["candidate_cursor"]=cursor
                     if next_candidate:
                         old=p["image"]; old_url=old.get("url")
