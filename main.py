@@ -79,7 +79,8 @@ async def lifespan(app:FastAPI):
      logger.info("Startup Pin command %s already consumed",startup_pin_count);return
     class _BG:
      def add_task(self,fn,*args):asyncio.create_task(fn(*args))
-    result=await amazon_discover_submit(DiscoverSubmitRequest(count=startup_pin_count,exclude_asins=[]),_BG(),True)
+    startup_excludes={x.strip().upper() for x in os.getenv("PIN_COMMAND_EXCLUDE_ASINS","").split(",") if x.strip()}
+    result=await amazon_discover_submit(DiscoverSubmitRequest(count=startup_pin_count,exclude_asins=sorted(startup_excludes)),_BG(),True)
     os.makedirs("/data",exist_ok=True)
     with open(marker,"w") as f:json.dump({"count":startup_pin_count,"result":result},f,default=str)
     logger.info("STARTUP PIN %s COMPLETED: %s",startup_pin_count,json.dumps(result,separators=(",",":"))[:5000])
