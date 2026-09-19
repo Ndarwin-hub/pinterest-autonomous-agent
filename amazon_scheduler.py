@@ -9,7 +9,7 @@ from amazon_discovery import MAX_REPLACEMENTS_PER_SLOT,discover_for_board,discov
 from amazon_composio_discovery import discover_category
 from daily_ledger import ledger,SLOT_COUNT,BATCH_SIZE
 from published_registry import registry
-from amazon_alerts import send_failure_alert
+from amazon_alerts import send_failure_alert,notify_daily_started
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
 SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(48*60)));SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes");SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
 EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]];ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]];WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
@@ -32,6 +32,7 @@ class AmazonScheduler:
    return {"status":"already_completed","day":day}
   self._daily_day=day;self._daily_stop.clear()
   self.status["daily_session"]={"running":True,"day":day,"started_at":datetime.now(timezone.utc).isoformat(),"completed_at":None,"next_batch":ledger.next_unfinished_batch(day)}
+  await notify_daily_started(day,trigger_batch or 0,None)
   self._daily_task=asyncio.create_task(self._daily_loop(enqueue,list_boards,wait_job,day,trigger_batch),name=f"amazon-daily-session-{day}")
   return {"status":"session_started","day":day,"next_batch":self.status["daily_session"]["next_batch"]}
  async def _daily_loop(self,enqueue,list_boards,wait_job,day,trigger_batch=None):
@@ -45,8 +46,16 @@ class AmazonScheduler:
     if status in ("blocked","failed","partial_failure"):
      logger.warning("Daily session batch %s returned %s; retrying after the configured interval.",batch,status)
     if ledger.is_day_complete(day): break
-    try: await asyncio.wait_for(self._daily_stop.wait(),timeout=SLOT_INTERVAL_SEC)
-    except asyncio.TimeoutError: pass
+    try:
+     await asyncio.wait_for(self._daily_stop.wait(),timeout=min(SLOT_INTERVAL_SEC,240))
+    except asyncio.TimeoutError:
+     try:
+      import httpx
+      public_domain=os.getenv("RAILWAY_PUBLIC_DOMAIN","pinterest-autonomous-agent-production.up.railway.app").strip()
+      async with httpx.AsyncClient(timeout=15.0) as client:
+       await client.get(f"https://{public_domain}/health?daily_heartbeat=1")
+     except Exception as heartbeat_error:
+      logger.warning("Daily session heartbeat failed: %s",heartbeat_error)
   except asyncio.CancelledError: raise
   except Exception as e:
    logger.exception("Daily Amazon session failed: %s",e)
