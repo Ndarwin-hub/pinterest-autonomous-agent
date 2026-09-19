@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -592,7 +593,7 @@ async def get_best_pin_image(
     """
     job_store.update(job_id, progress=f"Pin {pin_index}/5: image search ({strategy['name']})")
     from image_quality import choose_best_image
-    selected = await choose_best_image(product, strategy, pin_index, used_urls, globals()["__import__"]("agent"))
+    selected = await choose_best_image(product, strategy, pin_index, used_urls, sys.modules[__name__])
     if selected:
         return {
             "mode": "url",
