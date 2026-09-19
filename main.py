@@ -71,21 +71,6 @@ async def lifespan(app:FastAPI):
  registration_task=None
  if MCP_PATH:registration_task=asyncio.create_task(register_custom_mcp_with_retry())
  startup_pin_count=int(os.getenv("PIN_COMMAND_ON_START","0") or "0")
- startup_retry_url=os.getenv("PIN_RETRY_URL_ON_START","").strip()
- if startup_retry_url:
-  async def _run_startup_retry_url():
-   marker="/data/pin_retry_url.done"
-   try:
-    if os.path.exists(marker):
-     logger.info("Startup retry URL already consumed");return
-    class _BG:
-     def add_task(self,fn,*args):asyncio.create_task(fn(*args))
-    resp=await enqueue_job(startup_retry_url,_BG())
-    os.makedirs("/data",exist_ok=True)
-    with open(marker,"w") as f:json.dump({"url":startup_retry_url,"job_id":resp.job_id,"status":resp.status},f)
-    logger.info("STARTUP RETRY URL ACCEPTED: job_id=%s status=%s",resp.job_id,resp.status)
-   except Exception as exc:logger.exception("STARTUP RETRY URL FAILED: %s",exc)
-  asyncio.create_task(_run_startup_retry_url(),name="startup-retry-url")
  if startup_pin_count>0:
   async def _run_startup_pin_command():
    marker="/data/pin_command_"+str(startup_pin_count)+".done"
