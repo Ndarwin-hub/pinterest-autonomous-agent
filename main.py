@@ -142,7 +142,8 @@ async def status(job_id:str,_:bool=Depends(verify_secret)):
  if not job:raise HTTPException(status_code=404,detail="Job not found")
  return StatusResponse(job_id=job.job_id,status=job.status.value,progress=job.progress,result=job.result,error=job.error,created_at=job.created_at,updated_at=job.updated_at)
 @app.get("/amazon/status")
-async def amazon_status(_:bool=Depends(verify_secret)):return {"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"daily":daily_ledger.get_day_status(),"published_count":registry.count_success(),"required_primary_boards":REQUIRED_PRIMARY_SLOTS}
+async def amazon_status(_:bool=Depends(verify_secret)):
+ return {"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"daily":daily_ledger.get_day_status(),"scheduler_events":daily_ledger.latest_scheduler_events(),"published_count":registry.count_success(),"required_primary_boards":REQUIRED_PRIMARY_SLOTS}
 @app.post("/amazon/manual-submit")
 async def amazon_manual_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_manual_oidc)):
  """Authenticated GitHub-OIDC bridge for explicit Amazon US affiliate URLs; feeds the unchanged /submit pipeline."""
@@ -167,7 +168,11 @@ async def amazon_manual_submit(body:BatchSubmitRequest,background_tasks:Backgrou
 @app.post("/amazon/run-batch")
 async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)):
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
- task=asyncio.create_task(amazon_scheduler.run_batch(body.batch,app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job),name=f"amazon-batch-{body.batch}")
+ day=daily_ledger.today_str()
+ daily_ledger.record_scheduler_event(day=day,batch_requested=body.batch,scheduler_run_id=body.scheduler_run_id,scheduled_local_time=body.scheduled_local_time,github_delay_seconds=body.github_delay_seconds,github_queued_runs=body.github_queued_runs,github_active_runs=body.github_active_runs,github_load_class=body.github_load_class)
+ effective_batch=daily_ledger.next_unfinished_batch(day,max_batch=10) or body.batch
+ logger.info("Amazon scheduler trigger requested_batch=%s effective_batch=%s github_run=%s delay=%ss queued=%s active=%s load=%s",body.batch,effective_batch,body.scheduler_run_id,body.github_delay_seconds,body.github_queued_runs,body.github_active_runs,body.github_load_class)
+ task=asyncio.create_task(amazon_scheduler.run_batch(effective_batch,app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job),name=f"amazon-batch-{effective_batch}")
  async def stream():
   while not task.done():
    yield json.dumps({"status":"running","batch":body.batch,"time":datetime.now(timezone.utc).isoformat()})+"\n"
