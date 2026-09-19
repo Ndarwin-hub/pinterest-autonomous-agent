@@ -81,6 +81,7 @@ jobs:
               '5 14 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=final-check" >> "$GITHUB_OUTPUT"; echo "action=check" >> "$GITHUB_OUTPUT" ;;
               *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
             esac
+            if [[ "${{ github.event.schedule }}" != "5 14 * * *" ]]; then echo "action=run" >> "$GITHUB_OUTPUT"; fi
           fi
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
