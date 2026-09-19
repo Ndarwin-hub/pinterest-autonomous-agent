@@ -48,15 +48,19 @@ _BOARD_CATEGORY={
  "Office & Productivity":"Computers & Accessories","Travel & Camping":"Clothing/Shoes","Books & Learning":"Home & Kitchen"}
 def is_dormant()->bool:return not composio_ready()
 async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=None,client=None):
- return await discover_category(_BOARD_CATEGORY.get(board_name,"Electronics"),exclude_asins=exclude_asins)
+ category=_BOARD_CATEGORY.get(board_name,"Electronics")
+ api_candidate=await _discover_api(category,exclude_asins)
+ return api_candidate or await composio_discover_category(category,exclude_asins=exclude_asins)
 async def discover_global(*,exclude_asins:Optional[Set[str]]=None,client=None):
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
  for category,q in (("Electronics",["best selling new electronics"]),("Home & Kitchen",["best selling home kitchen"]),("Toys & Games",["popular new toys games"])):
-  try:api_candidate=await _discover_api(category,excluded)
+  try:
+   api_candidate=await _discover_api(category,excluded)
    if api_candidate and api_candidate["asin"] not in excluded:
     candidates.append(api_candidate)
    else:
     candidates += [c for c in (_candidate(x,category) for x in await _search(q[0],1)) if c and c["asin"] not in excluded]
-  except Exception:pass
+  except Exception:
+   pass
  return sorted(candidates,key=lambda x:(-x["score"],x["asin"]))[0] if candidates else None
 def assert_url_unmodified(original,candidate):return (original or "")== (candidate or "")
