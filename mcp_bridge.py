@@ -125,7 +125,12 @@ async def _register_once()->bool:
  if not(COMPOSIO_API_KEY and MCP_PATH):return False
  app_url=f"https://{PUBLIC_DOMAIN}{MCP_PATH}/";headers={"x-api-key":COMPOSIO_API_KEY,"Content-Type":"application/json"};payload={"slug":MCP_TOOLKIT_SLUG,"toolkit_config":{"name":"Pinterest Railway Bridge","app_url":app_url,"auth_schemes":[{"mode":"NO_AUTH"}]}}
  async with httpx.AsyncClient(timeout=30.0) as client:
-  response=await client.post(f"{COMPOSIO_BASE}/custom/toolkits/upsert",headers=headers,json=payload);response.raise_for_status();normalized=response.json().get("slug",CUSTOM_MCP_TOOLKIT_SLUG);sync=await client.post(f"{COMPOSIO_BASE}/custom/toolkits/sync",headers=headers,json={"slug":normalized});sync.raise_for_status();return True
+  response=await client.post(f"{COMPOSIO_BASE}/custom/toolkits/upsert",headers=headers,json=payload)
+  if response.status_code not in (200,201,409):response.raise_for_status()
+  normalized=(response.json().get("slug") if response.status_code in (200,201) else None) or MCP_TOOLKIT_SLUG or CUSTOM_MCP_TOOLKIT_SLUG
+  sync=await client.post(f"{COMPOSIO_BASE}/custom/toolkits/sync",headers=headers,json={"slug":normalized})
+  sync.raise_for_status()
+  return True
 async def register_custom_mcp_with_retry()->bool:
  if not(COMPOSIO_API_KEY and MCP_PATH):return False
  for attempt in range(1,6):
