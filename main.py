@@ -179,6 +179,21 @@ async def amazon_manual_submit(body:BatchSubmitRequest,background_tasks:Backgrou
   results.append(entry)
  return {"requested":len(body.urls),"accepted":sum(1 for r in results if r.get("job_id")),"skipped":sum(1 for r in results if r.get("status")=="skipped"),"rejected":sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id")),"results":results,"pipeline":"existing_/submit_job_pipeline","affiliate_tag":"desiredplus-20"}
 
+@app.post("/amazon/composio-test")
+async def amazon_composio_test(_:bool=Depends(verify_manual_oidc)):
+ """One-product live proof: force the Amazon-API-absent Composio discovery path, then run the normal 5-Pin pipeline."""
+ if not amazon_discovery_dormant():
+  pass
+ else: raise HTTPException(status_code=503,detail="Composio Amazon discovery is unavailable")
+ discovered=await discover_n_products(1,exclude_asins=registry.all_published_asins())
+ if len(discovered)!=1: raise HTTPException(status_code=502,detail=f"Expected exactly one Composio Amazon product, got {len(discovered)}")
+ item=discovered[0]
+ queued=await app.state.amazon_enqueue(item["affiliate_url"])
+ job_id=queued.get("job_id")
+ if not job_id: raise HTTPException(status_code=502,detail=f"Pinterest job was not queued: {queued}")
+ final=await app.state.amazon_wait_job(job_id)
+ return {"test":"composio_amazon_to_pinterest","source":item.get("source"),"product":item,"job_id":job_id,"job":final,"pins_published":(final.get("result") or {}).get("pins_published"),"pins":(final.get("result") or {}).get("pins")}
+
 @app.post("/amazon/run-batch")
 async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)):
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
