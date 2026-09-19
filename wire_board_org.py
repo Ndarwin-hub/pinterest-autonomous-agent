@@ -21,7 +21,7 @@ class CallBudget:
         if self.used>=self.maximum: raise RuntimeError(f"Composio hard job budget exhausted ({self.maximum} calls); stopping safely.")
         self.used+=1; logger.info("Composio budget %s/%s %s",self.used,self.maximum,slug)
 async def _static_capabilities(agent_mod):
-    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"Four targeted search angles per Pin, with one adaptive recovery search round available."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio only when the normal Composio image route is unavailable."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
+    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"Four targeted search angles per Pin, with one adaptive recovery search round available."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio only when the normal Composio image route is unavailable."},"openai_chatgpt_review":{"connected":bool(OPENAI_API_KEY),"executable":bool(OPENAI_API_KEY),"kind":"visual_quality","reason":"First-priority OpenAI/ChatGPT-compatible visual review when configured."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
 def apply_agent_wiring(agent_mod:Any)->None:
     orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; orig_publish=agent_mod.publish_and_verify
     async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
@@ -112,18 +112,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
     def build_review_items(pins,product):
         return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"image_provider":p["image"].get("provider"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
     def failed_indexes(review,pin_count):
-        status=review.get("status")
-        if status=="AI_REVIEW_UNAVAILABLE" or status=="AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED":return set()
-        if review.get("final_reviewer") in ("grok","grok_composio"):
-            results=review.get("grok") or []
-            return {i+1 for i,x in enumerate(results[:pin_count]) if not (isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85)}
-        if review.get("final_reviewer") in ("gemini","gemini_composio"):
-            gem=review.get("gemini") or []
-            if isinstance(gem,list):return {i+1 for i,x in enumerate(gem[:pin_count]) if not (isinstance(x,dict) and bool(x.get("approved")) and int(x.get("score",0))>=85)}
-            approved={int(x) for x in gem.get("approved_indexes",[]) if str(x).isdigit()}; scores=gem.get("scores") or {}
-            return {i for i in range(1,pin_count+1) if i not in approved or int(scores.get(str(i),0))<85}
-        if status=="DETERMINISTIC_VALIDATION_FAILED":return set(range(1,pin_count+1))
-        return set(range(1,pin_count+1))
+        approved={int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit()}
+        return {i for i in range(1,pin_count+1) if i not in approved}
     async def process(job_id,url,job_store):
         token=_call_budget.set(CallBudget()); b=_call_budget.get()
         try:
@@ -147,15 +137,14 @@ def apply_agent_wiring(agent_mod:Any)->None:
             review=None; recovery_rounds=0
             while True:
                 review_items=build_review_items(pins,product)
-                job_store.update(job_id,progress="Composio Grok visual review" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
+                job_store.update(job_id,progress="AI visual review" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
                 review=await review_batch(review_items,composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
-                if review.get("approved"):break
                 failed=failed_indexes(review,len(pins))
-                if not failed:
-                    if review.get("status")=="AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED":break
-                    if review.get("status")=="AI_REVIEW_UNAVAILABLE":
-                        raise RuntimeError("Visual AI reviewer unavailable and no safe deterministic fallback passed; refusing publication.")
-                if recovery_rounds>=MAX_RECOVERY_ROUNDS:raise RuntimeError("Zero-tolerance AI quality gate blocked publication after automatic recovery attempts: "+str(review.get("reason")))
+                # Partial approval is sufficient. A fifth rejected/missing Pin never blocks valid Pins.
+                if not failed or review.get("final_reviewer")=="deterministic":
+                    break
+                if recovery_rounds>=MAX_RECOVERY_ROUNDS:
+                    break
                 replaced=0; refreshed=False
                 for idx in sorted(failed):
                     p=pins[idx-1]; pool=p.get("candidate_pool") or []; cursor=int(p.get("candidate_cursor") or 0); next_candidate=None
@@ -174,13 +163,20 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     if next_candidate:
                         old=p["image"]; old_url=old.get("url")
                         if old_url:used.discard(old_url)
-                        p["image"]=next_candidate; p["image_ref"]=next_candidate.get("url") or (f"data:image/jpeg;base64,{next_candidate['value']}" if next_candidate.get("value") else ""); p["candidate_count"]=len(p.get("candidate_pool") or [])
+                        p["image"]=next_candidate
+                        p["image_ref"]=next_candidate.get("url") or ("data:image/jpeg;base64,"+str(next_candidate.get("value") or ""))
+                        p["candidate_count"]=len(p.get("candidate_pool") or [])
                         if next_candidate.get("url"):used.add(next_candidate["url"])
                         resources.add(next_candidate.get("provider") or "unknown"); replaced+=1
-                if replaced==0:raise RuntimeError("Zero-tolerance AI quality gate blocked publication: failed Pin(s) had no unused prevalidated replacement candidates and the adaptive 40-call budget cannot safely buy another recovery round.")
+                if replaced==0:break
                 recovery_rounds+=1
             published=[]; errors=[]
+            approved_indexes=set(int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit())
+            publish_all = review.get("final_reviewer") == "deterministic"
             for p in pins:
+                if not publish_all and p["pin_number"] not in approved_indexes:
+                    errors.append({"pin_number":p["pin_number"],"error":"Rejected by visual quality reviewer; not published"})
+                    continue
                 s=p["seo"]; im=p["image"]
                 try:
                     dest_url=(product.get("url") or product.get("affiliate_url") or url); r=await agent_mod.publish_and_verify(board_id,s["title"],s["description"],s["alt_text"],im.get("mode","url"),im.get("value") or im.get("url"),dest_url,job_store,job_id,p["pin_number"])
