@@ -17,6 +17,8 @@ on:
     - cron: '48 13 * * *'
     - cron: '0 14 * * *'
     - cron: '5 14 * * *'
+  repository_dispatch:
+    types: [amazon-batch]
   workflow_dispatch:
     inputs:
       batch:
