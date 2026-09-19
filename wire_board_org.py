@@ -1,4 +1,4 @@
-"""Runtime wiring: zero-tolerance image sourcing, AI approval, recovery and 40-call cap."""
+"""Runtime wiring: priority-ranked image sourcing, AI guidance, recovery and 40-call cap."""
 from __future__ import annotations
 import contextvars, logging, re
 from typing import Any, Dict
@@ -172,11 +172,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 if replaced==0:break
                 recovery_rounds+=1
             published=[]; errors=[]
-            approved_indexes=set(int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit())
+            # AI review is advisory only; technically usable candidates remain publishable.
             for p in pins:
-                if p["pin_number"] not in approved_indexes:
-                    errors.append({"pin_number":p["pin_number"],"error":"Rejected by visual quality reviewer; not published"})
-                    continue
                 s=p["seo"]; im=p["image"]
                 try:
                     dest_url=(product.get("url") or product.get("affiliate_url") or url); r=await agent_mod.publish_and_verify(board_id=board_id,title=s["title"],description=s["description"],alt_text=s["alt_text"],image_mode=im.get("mode","url"),image_value=im.get("value") or im.get("url"),link=dest_url,job_store=job_store,job_id=job_id,pin_index=p["pin_number"],strategy_key=p["strategy"].get("key"))
