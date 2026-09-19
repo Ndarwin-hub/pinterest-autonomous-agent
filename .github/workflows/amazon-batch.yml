@@ -1,35 +1,22 @@
 name: Amazon external batches
 on:
+  # Primary clock: explicit UTC times. Nepal is UTC+5:45.
+  # 00:15 UTC = 06:00 Nepal. Extra staggered times provide recovery
+  # opportunities if GitHub delays or drops a scheduled event.
   schedule:
-    # Avoid GitHub's documented high-load top-of-hour window.
-    - cron: '8 6 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '56 6 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '44 7 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '32 8 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '20 9 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '8 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '56 10 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '44 11 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '32 12 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '20 13 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '36 13 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '48 13 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '0 14 * * *'
-      timezone: 'Asia/Kathmandu'
-    - cron: '5 14 * * *'
-      timezone: 'Asia/Kathmandu'
+    - cron: '15 0 * * *'   # 06:00 Nepal
+    - cron: '25 0 * * *'   # 06:10 Nepal
+    - cron: '35 0 * * *'   # 06:20 Nepal
+    - cron: '45 0 * * *'   # 06:30 Nepal
+    - cron: '55 0 * * *'   # 06:40 Nepal
+    - cron: '5 1 * * *'    # 06:50 Nepal
+    - cron: '15 1 * * *'   # 07:00 Nepal
+    - cron: '25 1 * * *'   # 07:10 Nepal
+    - cron: '35 1 * * *'   # 07:20 Nepal
+    - cron: '45 1 * * *'   # 07:30 Nepal
+    - cron: '55 1 * * *'   # 07:40 Nepal
+    - cron: '5 2 * * *'    # 07:50 Nepal
+    - cron: '15 2 * * *'   # 08:00 Nepal
   workflow_dispatch:
     inputs:
       batch:
