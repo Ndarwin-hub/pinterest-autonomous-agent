@@ -68,7 +68,11 @@ async def run_composio_tool(tool_slug: str, arguments: Dict[str, Any], retries: 
         payload["connected_account_id"] = COMPOSIO_PINTEREST_ACCOUNT_ID
     elif tool_slug.upper().startswith("GMAIL_") and COMPOSIO_GMAIL_ACCOUNT_ID:
         payload["connected_account_id"] = COMPOSIO_GMAIL_ACCOUNT_ID
-    elif COMPOSIO_ENTITY_ID:
+    elif COMPOSIO_ENTITY_ID and not tool_slug.upper().startswith("COMPOSIO_SEARCH_"):
+        # Search-toolkit calls (including COMPOSIO_SEARCH_AMAZON) are auth-free and
+        # must not be routed through the connected entity. Keeping them entity-free
+        # avoids managed-job/account routing limits and ensures Amazon discovery uses
+        # the Composio Amazon US search path when Amazon API credentials are absent.
         payload["user_id"] = COMPOSIO_ENTITY_ID
 
     last_err: Optional[Exception] = None
