@@ -115,6 +115,7 @@ async def prepare_batch_items(
     for raw in urls:
         item = validate_and_canonicalize(raw)
         item["status"] = "rejected"
+        item["outcome"] = "automation_rejection"
         item["job_id"] = None
         item["message"] = None
 
@@ -129,6 +130,7 @@ async def prepare_batch_items(
         if asin in exclude or asin in seen_asins:
             item["ok"] = False
             item["status"] = "skipped"
+            item["outcome"] = "intentional_skip"
             item["error"] = "duplicate_asin_in_batch_or_exclude"
             item["message"] = item["error"]
             items.append(item)
@@ -137,6 +139,7 @@ async def prepare_batch_items(
         if aff in seen_urls:
             item["ok"] = False
             item["status"] = "skipped"
+            item["outcome"] = "intentional_skip"
             item["error"] = "duplicate_url_in_batch"
             item["message"] = item["error"]
             items.append(item)
@@ -146,6 +149,7 @@ async def prepare_batch_items(
         if dup:
             item["ok"] = False
             item["status"] = "skipped"
+            item["outcome"] = "intentional_skip"
             item["error"] = dup
             item["message"] = dup
             items.append(item)
@@ -154,6 +158,7 @@ async def prepare_batch_items(
         seen_asins.add(asin)
         seen_urls.add(aff)
         item["status"] = "accepted"
+        item["outcome"] = "accepted"
         item["message"] = "validated_amazon_us_with_affiliate_tag"
         items.append(item)
 
