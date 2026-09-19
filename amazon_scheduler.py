@@ -20,7 +20,49 @@ def pinterest_five_verified(result:Dict[str,Any])->bool:
  pins=result.get("pins") if isinstance(result,dict) else None
  return isinstance(pins,list) and len(pins)==5 and all(isinstance(p,dict) and bool(p.get("verified")) for p in pins)
 class AmazonScheduler:
- def __init__(self):self._task=None;self._stop=asyncio.Event();self.status={"running":False,"dormant_reason":None,"last_tick":None,"mode":SCHEDULER_MODE,"current_batch":None,"source":"composio"}
+ def __init__(self):
+  self._task=None;self._stop=asyncio.Event();self._daily_task=None;self._daily_stop=asyncio.Event();self._daily_day=None
+  self.status={"running":False,"dormant_reason":None,"last_tick":None,"mode":SCHEDULER_MODE,"current_batch":None,"source":"composio","daily_session":{"running":False,"day":None,"started_at":None,"completed_at":None,"next_batch":None}}
+ async def start_daily_session(self,enqueue,list_boards,wait_job=None,trigger_batch=None):
+  if SCHEDULER_MODE!="external": return {"status":"ignored","reason":"not_external_mode"}
+  day=ledger.today_str()
+  if self._daily_task and not self._daily_task.done() and self._daily_day==day:
+   return {"status":"already_running","day":day,"next_batch":ledger.next_unfinished_batch(day)}
+  if ledger.is_day_complete(day):
+   return {"status":"already_completed","day":day}
+  self._daily_day=day;self._daily_stop.clear()
+  self.status["daily_session"]={"running":True,"day":day,"started_at":datetime.now(timezone.utc).isoformat(),"completed_at":None,"next_batch":ledger.next_unfinished_batch(day)}
+  self._daily_task=asyncio.create_task(self._daily_loop(enqueue,list_boards,wait_job,day,trigger_batch),name=f"amazon-daily-session-{day}")
+  return {"status":"session_started","day":day,"next_batch":self.status["daily_session"]["next_batch"]}
+ async def _daily_loop(self,enqueue,list_boards,wait_job,day,trigger_batch=None):
+  try:
+   while not self._daily_stop.is_set():
+    if ledger.is_day_complete(day): break
+    batch=ledger.next_unfinished_batch(day,max_batch=SLOT_COUNT//BATCH_SIZE)
+    if batch is None: break
+    result=await self.run_batch(batch,enqueue,list_boards,wait_job)
+    status=str(result.get("status") or "")
+    if status in ("blocked","failed","partial_failure"):
+     logger.warning("Daily session batch %s returned %s; retrying after the configured interval.",batch,status)
+    if ledger.is_day_complete(day): break
+    try: await asyncio.wait_for(self._daily_stop.wait(),timeout=SLOT_INTERVAL_SEC)
+    except asyncio.TimeoutError: pass
+  except asyncio.CancelledError: raise
+  except Exception as e:
+   logger.exception("Daily Amazon session failed: %s",e)
+  finally:
+   complete=ledger.is_day_complete(day)
+   self.status["daily_session"]={"running":False,"day":day,"started_at":self.status.get("daily_session",{}).get("started_at"),"completed_at":datetime.now(timezone.utc).isoformat() if complete else None,"next_batch":ledger.next_unfinished_batch(day)}
+   self._daily_task=None
+   self.status["current_batch"]=None
+   if complete: logger.info("DAILY AMAZON SESSION COMPLETE for %s; service is now idle and may sleep.",day)
+ async def stop_daily_session(self):
+  self._daily_stop.set()
+  if self._daily_task:
+   self._daily_task.cancel()
+   try: await self._daily_task
+   except asyncio.CancelledError: pass
+   self._daily_task=None
  def gate_status(self,live_boards=None):
   amazon_source_ready=not is_dormant();ready=amazon_source_ready and SCHEDULER_ENABLED;info=classify_live_boards(live_boards or []);reasons=[]
   if not SCHEDULER_ENABLED:reasons.append("AMAZON_SCHEDULER_ENABLED is false")
