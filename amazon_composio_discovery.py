@@ -5,10 +5,7 @@ from typing import Any, Dict, List, Optional, Set
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from published_registry import registry
 logger = logging.getLogger("pinterest-agent.amazon_composio_discovery")
-AMAZON_DISCOVERY_DOMAINS = [d.strip().lower() for d in os.getenv(
-    "AMAZON_DISCOVERY_DOMAINS",
-    "amazon.com,amazon.co.uk,amazon.ca,amazon.de,amazon.fr,amazon.it,amazon.es,amazon.co.jp,amazon.com.au,amazon.in,amazon.sg,amazon.ae,amazon.sa,amazon.nl,amazon.se,amazon.pl,amazon.com.mx,amazon.com.br"
-).split(",") if d.strip()]
+AMAZON_DISCOVERY_DOMAINS = ["amazon.com"]
 AMAZON_DOMAIN = AMAZON_DISCOVERY_DOMAINS[0] if AMAZON_DISCOVERY_DOMAINS else "amazon.com"
 _domain_cursor = 0
 AFFILIATE_TAG = "desiredplus-20"
@@ -52,17 +49,15 @@ def _candidate(raw:Dict[str,Any],category:str)->Optional[Dict[str,Any]]:
  bought=_bought(raw.get("bought_last_month")); rating=float(raw.get("rating") or 0); reviews=int(raw.get("reviews") or 0); deal=50000 if "deal" in bt else 0
  return {"asin":asin,"affiliate_url":link,"product_url":link,"title":title,"category":category,"price":price,"rating":rating,"reviews":reviews,"bought_last_month":raw.get("bought_last_month"),"score":bought*1000+reviews+rating*100+deal-int(raw.get("position") or 999),"source":"composio_amazon","raw":raw}
 async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
- from agent import run_composio_tool
- global _domain_cursor
- if not AMAZON_DISCOVERY_DOMAINS:
-  return []
- domain=AMAZON_DISCOVERY_DOMAINS[_domain_cursor % len(AMAZON_DISCOVERY_DOMAINS)]
- _domain_cursor += 1
+ from mcp_bridge import composio_router_search_amazon
+ domain="amazon.com"
  try:
-  data=await run_composio_tool("COMPOSIO_SEARCH_AMAZON",{"query":query,"amazon_domain":domain,"page":page})
+  data=await composio_router_search_amazon(query,domain,page)
  except Exception as e:
-  logger.warning("Composio Amazon search failed domain=%s query=%s: %s",domain,query,e)
+  logger.warning("Composio Amazon Tool Router search failed domain=%s query=%s: %s",domain,query,e)
   return []
+ if isinstance(data,dict) and isinstance(data.get("data"),dict):
+  data=data["data"]
  products=list(data.get("products") or []) if isinstance(data,dict) else []
  for p in products:
   if isinstance(p,dict):
