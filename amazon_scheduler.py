@@ -47,7 +47,7 @@ class AmazonScheduler:
      logger.warning("Daily session batch %s returned %s; retrying after the configured interval.",batch,status)
     if ledger.is_day_complete(day): break
     try:
-     await asyncio.wait_for(self._daily_stop.wait(),timeout=min(SLOT_INTERVAL_SEC,240))
+     await asyncio.wait_for(self._daily_stop.wait(),timeout=SLOT_INTERVAL_SEC)
     except asyncio.TimeoutError:
      try:
       import httpx
