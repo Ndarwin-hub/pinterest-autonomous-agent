@@ -34,7 +34,6 @@ permissions:
 concurrency:
   group: amazon-external-batch
   cancel-in-progress: false
-  queue: max
 
 jobs:
   wake:
