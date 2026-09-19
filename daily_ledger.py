@@ -11,7 +11,7 @@ class DailyLedger:
     def _init(self):
         with _lock:
             c=self._conn(); c.execute("CREATE TABLE IF NOT EXISTS daily_days(day TEXT PRIMARY KEY,status TEXT NOT NULL,success_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_slots(day TEXT NOT NULL,slot INTEGER NOT NULL,target_board_name TEXT,target_board_id TEXT,slot_kind TEXT NOT NULL,status TEXT NOT NULL,selected_asin TEXT,selected_url TEXT,affiliate_url TEXT,replacement_attempts INTEGER NOT NULL DEFAULT 0,job_id TEXT,pinterest_verified INTEGER DEFAULT 0,error TEXT,completed_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,slot))"); c.execute("CREATE TABLE IF NOT EXISTS batch_runs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,started_at TEXT,completed_at TEXT,result_json TEXT,error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,batch_index))")
-            c.execute("CREATE TABLE IF NOT EXISTS scheduler_events(id INTEGER PRIMARY KEY AUTOINCREMENT,day TEXT NOT NULL,batch_requested INTEGER,scheduler_run_id TEXT,scheduled_local_time TEXT,github_delay_seconds INTEGER,github_queued_runs INTEGER,github_active_runs INTEGER,github_load_class TEXT,received_at TEXT NOT NULL)")
+            c.execute("CREATE TABLE IF NOT EXISTS scheduler_events(id INTEGER PRIMARY KEY AUTOINCREMENT,day TEXT NOT NULL,batch_requested INTEGER,scheduler_run_id TEXT,scheduled_local_time TEXT,github_delay_seconds INTEGER,github_queued_runs INTEGER,github_active_runs INTEGER,github_load_class TEXT,received_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_status_notifications(day TEXT PRIMARY KEY,started_at TEXT,started_trigger_batch INTEGER,started_scheduled_local_time TEXT,started_claimed_at TEXT,started_notified_at TEXT,not_started_claimed_at TEXT,not_started_notified_at TEXT,updated_at TEXT NOT NULL)")
             c.commit(); c.close()
     @staticmethod
     def today_str(): return date.today().isoformat()
@@ -43,6 +43,36 @@ class DailyLedger:
         with _lock:
             c=self._conn()
             c.execute("INSERT INTO scheduler_events(day,batch_requested,scheduler_run_id,scheduled_local_time,github_delay_seconds,github_queued_runs,github_active_runs,github_load_class,received_at) VALUES(?,?,?,?,?,?,?,?,?)",(day,batch_requested,scheduler_run_id,scheduled_local_time,int(github_delay_seconds or 0),int(github_queued_runs or 0),int(github_active_runs or 0),github_load_class or "UNKNOWN",now))
+            c.commit(); c.close()
+
+    def mark_daily_started(self,day=None,trigger_batch=None,scheduled_local_time=None):
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("INSERT OR IGNORE INTO daily_status_notifications(day,updated_at) VALUES(?,?)",(day,now))
+            c.execute("UPDATE daily_status_notifications SET started_at=COALESCE(started_at,?),started_trigger_batch=COALESCE(started_trigger_batch,?),started_scheduled_local_time=COALESCE(started_scheduled_local_time,?),updated_at=? WHERE day=?",(now,trigger_batch,scheduled_local_time,now,day)); c.commit(); c.close()
+    def daily_status_state(self,day=None):
+        day=day or self.today_str()
+        with _lock:
+            c=self._conn(); row=c.execute("SELECT day,started_at,started_trigger_batch,started_scheduled_local_time,started_claimed_at,started_notified_at,not_started_claimed_at,not_started_notified_at,updated_at FROM daily_status_notifications WHERE day=?",(day,)).fetchone(); c.close()
+        if not row:return {"day":day,"started":False,"started_at":None,"started_notified":False,"not_started_notified":False}
+        return {"day":row[0],"started":bool(row[1]),"started_at":row[1],"started_trigger_batch":row[2],"started_scheduled_local_time":row[3],"started_notified":bool(row[5]),"not_started_notified":bool(row[7]),"updated_at":row[8]}
+    def claim_daily_notification(self,day=None,kind="started"):
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        if kind not in ("started","not_started"): raise ValueError("kind must be started or not_started")
+        claim_col=f"{kind}_claimed_at"; notified_col=f"{kind}_notified_at"
+        with _lock:
+            c=self._conn(); c.execute("BEGIN IMMEDIATE"); c.execute("INSERT OR IGNORE INTO daily_status_notifications(day,updated_at) VALUES(?,?)",(day,now))
+            row=c.execute(f"SELECT {notified_col},{claim_col} FROM daily_status_notifications WHERE day=?",(day,)).fetchone()
+            if row and (row[0] or row[1]): c.commit(); c.close(); return False
+            c.execute(f"UPDATE daily_status_notifications SET {claim_col}=?,updated_at=? WHERE day=? AND {notified_col} IS NULL AND {claim_col} IS NULL",(now,now,day)); ok=c.rowcount==1; c.commit(); c.close(); return ok
+    def finish_daily_notification(self,day=None,kind="started",success=True):
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        if kind not in ("started","not_started"): raise ValueError("kind must be started or not_started")
+        claim_col=f"{kind}_claimed_at"; notified_col=f"{kind}_notified_at"
+        with _lock:
+            c=self._conn()
+            if success: c.execute(f"UPDATE daily_status_notifications SET {notified_col}=?,{claim_col}=NULL,updated_at=? WHERE day=?",(now,now,day))
+            else: c.execute(f"UPDATE daily_status_notifications SET {claim_col}=NULL,updated_at=? WHERE day=?",(now,day))
             c.commit(); c.close()
 
     def latest_scheduler_events(self,day=None,limit=20):
