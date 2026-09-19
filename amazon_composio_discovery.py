@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Optional, Set
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from published_registry import registry
 logger = logging.getLogger("pinterest-agent.amazon_composio_discovery")
-AMAZON_DOMAIN = "amazon.com"
+AMAZON_DISCOVERY_DOMAINS = [d.strip().lower() for d in os.getenv(
+    "AMAZON_DISCOVERY_DOMAINS",
+    "amazon.com,amazon.co.uk,amazon.ca,amazon.de,amazon.fr,amazon.it,amazon.es,amazon.co.jp,amazon.com.au,amazon.in,amazon.sg,amazon.ae,amazon.sa,amazon.nl,amazon.se,amazon.pl,amazon.com.mx,amazon.com.br"
+).split(",") if d.strip()]
+AMAZON_DOMAIN = AMAZON_DISCOVERY_DOMAINS[0] if AMAZON_DISCOVERY_DOMAINS else "amazon.com"
+_domain_cursor = 0
 AFFILIATE_TAG = "desiredplus-20"
 ASIN_RE = re.compile(r"(?:/dp/|/gp/product/)([A-Z0-9]{10})(?:[/?]|$)", re.I)
 CATEGORY_QUERIES = {
@@ -28,10 +33,12 @@ def _asin(value: Any)->Optional[str]:
  m=ASIN_RE.search(str(value or "")); return m.group(1).upper() if m else None
 def _detail_url(link:str)->Optional[str]:
  p=urlsplit(str(link or ""))
- if p.scheme.lower() not in {"http","https"} or p.netloc.lower() not in {"amazon.com","www.amazon.com"}: return None
+ host=p.netloc.lower().replace("www.","")
+ allowed={d.lower().replace("www.","") for d in AMAZON_DISCOVERY_DOMAINS}
+ if p.scheme.lower() not in {"http","https"} or host not in allowed: return None
  if not re.search(r"/(?:dp|gp/product)/[A-Z0-9]{10}(?:[/?]|$)",p.path,re.I): return None
  q=dict(parse_qsl(p.query,keep_blank_values=True)); q["tag"]=AFFILIATE_TAG
- return urlunsplit(("https","www.amazon.com",p.path.rstrip("/"),urlencode(q),""))
+ return urlunsplit(("https",host,p.path.rstrip("/"),urlencode(q),""))
 def _bought(v:Any)->int:
  m=re.search(r"([0-9][0-9,]*)\s*([KkMm])?",str(v or ""))
  if not m:return 0
@@ -46,8 +53,21 @@ def _candidate(raw:Dict[str,Any],category:str)->Optional[Dict[str,Any]]:
  return {"asin":asin,"affiliate_url":link,"product_url":link,"title":title,"category":category,"price":price,"rating":rating,"reviews":reviews,"bought_last_month":raw.get("bought_last_month"),"score":bought*1000+reviews+rating*100+deal-int(raw.get("position") or 999),"source":"composio_amazon","raw":raw}
 async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
  from agent import run_composio_tool
- data=await run_composio_tool("COMPOSIO_SEARCH_AMAZON",{"query":query,"amazon_domain":AMAZON_DOMAIN,"page":page})
- return list(data.get("products") or []) if isinstance(data,dict) else []
+ global _domain_cursor
+ if not AMAZON_DISCOVERY_DOMAINS:
+  return []
+ domain=AMAZON_DISCOVERY_DOMAINS[_domain_cursor % len(AMAZON_DISCOVERY_DOMAINS)]
+ _domain_cursor += 1
+ try:
+  data=await run_composio_tool("COMPOSIO_SEARCH_AMAZON",{"query":query,"amazon_domain":domain,"page":page})
+ except Exception as e:
+  logger.warning("Composio Amazon search failed domain=%s query=%s: %s",domain,query,e)
+  return []
+ products=list(data.get("products") or []) if isinstance(data,dict) else []
+ for p in products:
+  if isinstance(p,dict):
+   p.setdefault("_amazon_domain",domain)
+ return products
 async def discover_category(category:str,exclude_asins:Optional[Set[str]]=None)->Optional[Dict[str,Any]]:
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
  for q in CATEGORY_QUERIES.get(category,[category]):
