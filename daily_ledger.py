@@ -10,7 +10,9 @@ class DailyLedger:
         self.db_path.parent.mkdir(parents=True,exist_ok=True); c=sqlite3.connect(str(self.db_path),check_same_thread=False,timeout=30); c.execute("PRAGMA busy_timeout=30000"); return c
     def _init(self):
         with _lock:
-            c=self._conn(); c.execute("CREATE TABLE IF NOT EXISTS daily_days(day TEXT PRIMARY KEY,status TEXT NOT NULL,success_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_slots(day TEXT NOT NULL,slot INTEGER NOT NULL,target_board_name TEXT,target_board_id TEXT,slot_kind TEXT NOT NULL,status TEXT NOT NULL,selected_asin TEXT,selected_url TEXT,affiliate_url TEXT,replacement_attempts INTEGER NOT NULL DEFAULT 0,job_id TEXT,pinterest_verified INTEGER DEFAULT 0,error TEXT,completed_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,slot))"); c.execute("CREATE TABLE IF NOT EXISTS batch_runs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,started_at TEXT,completed_at TEXT,result_json TEXT,error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,batch_index))"); c.commit(); c.close()
+            c=self._conn(); c.execute("CREATE TABLE IF NOT EXISTS daily_days(day TEXT PRIMARY KEY,status TEXT NOT NULL,success_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_slots(day TEXT NOT NULL,slot INTEGER NOT NULL,target_board_name TEXT,target_board_id TEXT,slot_kind TEXT NOT NULL,status TEXT NOT NULL,selected_asin TEXT,selected_url TEXT,affiliate_url TEXT,replacement_attempts INTEGER NOT NULL DEFAULT 0,job_id TEXT,pinterest_verified INTEGER DEFAULT 0,error TEXT,completed_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,slot))"); c.execute("CREATE TABLE IF NOT EXISTS batch_runs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,started_at TEXT,completed_at TEXT,result_json TEXT,error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,batch_index))")
+            c.execute("CREATE TABLE IF NOT EXISTS scheduler_events(id INTEGER PRIMARY KEY AUTOINCREMENT,day TEXT NOT NULL,batch_requested INTEGER,scheduler_run_id TEXT,scheduled_local_time TEXT,github_delay_seconds INTEGER,github_queued_runs INTEGER,github_active_runs INTEGER,github_load_class TEXT,received_at TEXT NOT NULL)")
+            c.commit(); c.close()
     @staticmethod
     def today_str(): return date.today().isoformat()
     def ensure_day(self,day=None,slots_spec=None):
@@ -36,6 +38,31 @@ class DailyLedger:
         if not d:return {"day":day,"status":"not_started","success_count":0,"slots":[],"batches":[]}
         keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]
         return {"day":d[0],"status":d[1],"success_count":d[2],"updated_at":d[3],"slots":[dict(zip(keys,r))|{"pinterest_verified":bool(r[10])} for r in rows],"batches":[{"batch":r[0],"status":r[1],"started_at":r[2],"completed_at":r[3],"error":r[4]} for r in batches]}
+    def record_scheduler_event(self,day=None,batch_requested=None,scheduler_run_id=None,scheduled_local_time=None,github_delay_seconds=0,github_queued_runs=0,github_active_runs=0,github_load_class="UNKNOWN"):
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn()
+            c.execute("INSERT INTO scheduler_events(day,batch_requested,scheduler_run_id,scheduled_local_time,github_delay_seconds,github_queued_runs,github_active_runs,github_load_class,received_at) VALUES(?,?,?,?,?,?,?,?,?)",(day,batch_requested,scheduler_run_id,scheduled_local_time,int(github_delay_seconds or 0),int(github_queued_runs or 0),int(github_active_runs or 0),github_load_class or "UNKNOWN",now))
+            c.commit(); c.close()
+
+    def latest_scheduler_events(self,day=None,limit=20):
+        day=day or self.today_str()
+        with _lock:
+            c=self._conn(); rows=c.execute("SELECT batch_requested,scheduler_run_id,scheduled_local_time,github_delay_seconds,github_queued_runs,github_active_runs,github_load_class,received_at FROM scheduler_events WHERE day=? ORDER BY id DESC LIMIT ?",(day,int(limit))).fetchall(); c.close()
+        keys=["batch_requested","scheduler_run_id","scheduled_local_time","github_delay_seconds","github_queued_runs","github_active_runs","github_load_class","received_at"]
+        return [dict(zip(keys,r)) for r in rows]
+
+    def next_unfinished_batch(self,day=None,max_batch=SLOT_COUNT//BATCH_SIZE):
+        day=day or self.today_str()
+        with _lock:
+            c=self._conn()
+            for batch in range(1,int(max_batch)+1):
+                first=(batch-1)*BATCH_SIZE+1; last=first+BATCH_SIZE-1
+                statuses=[r[0] for r in c.execute("SELECT status FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? ORDER BY slot",(day,first,last)).fetchall()]
+                if len(statuses)<BATCH_SIZE or any(s!="success" for s in statuses):
+                    c.close(); return batch
+            c.close(); return None
+
     def try_begin_batch(self,day,batch_index,owner):
         now=time.time(); iso=datetime.now(timezone.utc).isoformat()
         with _lock:
