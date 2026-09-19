@@ -87,7 +87,7 @@ async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
         w=int(dims[0] or 0) if len(dims)>0 and dims[0] else 0
         h=int(dims[1] or 0) if len(dims)>1 and dims[1] else 0
         score=int(meta.get("image_score") or 0)
-        ok=bool(ref) and ref not in seen and w>=800 and h>=800 and max(w,h)/max(1,min(w,h))<=2.0 and score>=85
+        ok=bool(ref) and ref not in seen and w>=800 and h>=800 and max(w,h)/max(1,min(w,h))<=2.0
         if ref: seen.add(ref)
         scores[str(i)]=score
         if ok: approved.append(i)
