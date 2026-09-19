@@ -5,7 +5,7 @@ import os,uuid,re,logging,asyncio,hmac,json
 from datetime import datetime,timezone
 from typing import Optional,Dict,Any,List
 from contextlib import asynccontextmanager
-from fastapi import FastAPI,BackgroundTasks,HTTPException,Header,Depends
+from fastapi import FastAPI,BackgroundTasks,HTTPException,Header,Depends,Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel,Field
 from dotenv import load_dotenv
@@ -227,6 +227,18 @@ async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:Bac
  skipped=sum(1 for r in results if r.get("status")=="skipped")
  rejected=sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id"))
  return {"requested":n,"discovered":len(discovered),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"snapshot":balance_meta.get("snapshot")},"pipeline":"existing_/submit_job_pipeline","tag":"desiredplus-20","note":"Discovery used live board pin counts + COMPOSIO_SEARCH_AMAZON + tag injection. Each accepted product uses the existing 5-Pin pipeline."}
+
+@app.get("/amazon/pin-count")
+async def amazon_pin_count_get(count:int=1,token:str="",request:Request=None):
+ """Protected GET trigger for the Railway Pin N bridge; executes the same discovery-submit pipeline."""
+ expected=os.getenv("MCP_BRIDGE_TOKEN","").strip()
+ if not expected or not hmac.compare_digest(token,expected):
+  raise HTTPException(status_code=401,detail="Invalid trigger token")
+ if count<1 or count>MAX_BATCH:raise HTTPException(status_code=400,detail=f"count must be 1..{MAX_BATCH}")
+ class _BG:
+  def add_task(self,fn,*args):asyncio.create_task(fn(*args))
+ body=DiscoverSubmitRequest(count=count,exclude_asins=[])
+ return await amazon_discover_submit(body,_BG(),True)
 
 @app.get("/")
 async def root():return {"service":"Pinterest Autonomous Agent","version":"3.9.0","endpoints":{"health":"GET /health","submit":"POST /submit body: {\"url\": \"<product_url>\"}","status":"GET /status/{job_id}","quota":"GET /quota","amazon_status":"GET /amazon/status","amazon_batch":"POST /amazon/run-batch body: {\"batch\":1|2|3}","batch_submit":"POST /batch-submit body: {\"urls\":[\"<amazon_us_url\",...]}","amazon_discover_submit":"POST /amazon/discover-submit body: {\"count\":N}"},"usage":"Send one product/affiliate URL. System creates 5 unique Pins automatically."}
