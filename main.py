@@ -103,6 +103,7 @@ async def lifespan(app:FastAPI):
  app.state.amazon_enqueue=_enqueue_for_amazon;app.state.amazon_list_boards=_list_boards_for_amazon;app.state.amazon_wait_job=_wait_job
  await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)
  yield
+ await amazon_scheduler.stop_daily_session()
  await amazon_scheduler.stop()
  if registration_task:
   registration_task.cancel()
@@ -114,7 +115,14 @@ if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
 class SubmitResponse(BaseModel):job_id:str;status:str;message:str
 class StatusResponse(BaseModel):job_id:str;status:str;progress:Optional[str]=None;result:Optional[Dict[str,Any]]=None;error:Optional[str]=None;created_at:str;updated_at:str
-class BatchRequest(BaseModel):batch:int=Field(...,ge=1,le=10)
+class BatchRequest:
+ batch:int=Field(...,ge=1,le=10)
+ scheduler_run_id:Optional[str]=None
+ scheduled_local_time:Optional[str]=None
+ github_delay_seconds:int=0
+ github_queued_runs:int=0
+ github_active_runs:int=0
+ github_load_class:str="UNKNOWN"
 class BatchSubmitRequest(BaseModel):
  urls:List[str]=Field(...,min_length=1,max_length=50,description="List of already-resolved Amazon US product/affiliate URLs")
  wait:bool=Field(False,description="If true, wait briefly for job acceptance only; does not wait for full 5-Pin completion")
@@ -170,17 +178,9 @@ async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
  day=daily_ledger.today_str()
  daily_ledger.record_scheduler_event(day=day,batch_requested=body.batch,scheduler_run_id=body.scheduler_run_id,scheduled_local_time=body.scheduled_local_time,github_delay_seconds=body.github_delay_seconds,github_queued_runs=body.github_queued_runs,github_active_runs=body.github_active_runs,github_load_class=body.github_load_class)
- effective_batch=daily_ledger.next_unfinished_batch(day,max_batch=10) or body.batch
- logger.info("Amazon scheduler trigger requested_batch=%s effective_batch=%s github_run=%s delay=%ss queued=%s active=%s load=%s",body.batch,effective_batch,body.scheduler_run_id,body.github_delay_seconds,body.github_queued_runs,body.github_active_runs,body.github_load_class)
- task=asyncio.create_task(amazon_scheduler.run_batch(effective_batch,app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job),name=f"amazon-batch-{effective_batch}")
- async def stream():
-  while not task.done():
-   yield json.dumps({"status":"running","batch":body.batch,"time":datetime.now(timezone.utc).isoformat()})+"\n"
-   try:await asyncio.wait_for(asyncio.shield(task),timeout=25)
-   except asyncio.TimeoutError:continue
-  try:yield json.dumps(task.result(),separators=(",",":"))+"\n"
-  except Exception as e:yield json.dumps({"status":"failed","batch":body.batch,"error":str(e)[:500]})+"\n"
- return StreamingResponse(stream(),media_type="application/x-ndjson")
+ logger.info("Amazon wake trigger requested_batch=%s github_run=%s delay=%ss queued=%s active=%s load=%s",body.batch,body.scheduler_run_id,body.github_delay_seconds,body.github_queued_runs,body.github_active_runs,body.github_load_class)
+ result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=body.batch)
+ return {**result,"scheduler":"railway_owned_daily_session","github_trigger_batch":body.batch,"day":day,"message":"Railway owns the remaining daily batches after this successful wake; later GitHub triggers are idempotent backups."}
 @app.post("/batch-submit")
 async def batch_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
  """Accept a list of already-resolved Amazon US product URLs. Each accepted URL is fed into the existing single-product job pipeline unchanged in behavior."""
