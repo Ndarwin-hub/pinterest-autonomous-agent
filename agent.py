@@ -24,6 +24,8 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from PIL import Image
+
 import httpx
 
 from models import JobStore
@@ -384,6 +386,53 @@ def build_five_seo(product: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
+def _fingerprint_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
+    return (a[0] ^ b[0]).bit_count() + (a[1] ^ b[1]).bit_count()
+
+
+async def _image_fingerprint(url: str) -> Optional[tuple[int, int]]:
+    """Return perceptual aHash+dHash for visual duplicate detection."""
+    try:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code >= 400 or not r.content or len(r.content) > 5 * 1024 * 1024:
+                return None
+        with Image.open(io.BytesIO(r.content)) as im:
+            im = im.convert("L")
+            # aHash: 8x8 average luminance.
+            a = im.resize((8, 8), Image.Resampling.LANCZOS)
+            ap = list(a.getdata())
+            avg = sum(ap) / len(ap)
+            ahash = sum((1 << i) for i, v in enumerate(ap) if v >= avg)
+            # dHash: horizontal gradient over 9x8 pixels.
+            d = im.resize((9, 8), Image.Resampling.LANCZOS)
+            dp = list(d.getdata())
+            dhash = 0
+            bit = 0
+            for y in range(8):
+                for x in range(8):
+                    if dp[y * 9 + x] >= dp[y * 9 + x + 1]:
+                        dhash |= 1 << bit
+                    bit += 1
+            return ahash, dhash
+    except Exception as e:
+        logger.debug(f"Image fingerprint failed for {url}: {e}")
+        return None
+
+
+def _stored_fingerprints(used_urls: set) -> List[tuple[int, int]]:
+    out = []
+    for value in used_urls:
+        if not isinstance(value, str) or not value.startswith("__imgfp__:"):
+            continue
+        try:
+            _, a, d = value.split(":", 2)
+            out.append((int(a, 16), int(d, 16)))
+        except Exception:
+            continue
+    return out
+
+
 async def _url_ok(url: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
@@ -562,29 +611,36 @@ async def get_best_pin_image(
         if f.get("url") and f["url"] not in used_urls:
             candidates.append(f)
 
-    # Score
-    best = None
-    best_score = -1
+    # Score, then enforce visual (not merely URL) uniqueness.
+    ranked = []
     for c in candidates:
         if c.get("url") in used_urls:
             continue
         s = score_candidate(c, product, strategy["key"])
         c["score"] = s
-        if s > best_score:
-            best_score = s
-            best = c
+        ranked.append(c)
+    ranked.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-    if best and best.get("url") and best_score >= 50:
-        if await _url_ok(best["url"]):
-            used_urls.add(best["url"])
-            return {
-                "mode": "url",
-                "value": best["url"],
-                "provider": best.get("provider"),
-                "id": best.get("id"),
-                "score": best_score,
-                "license": best.get("license"),
-            }
+    prior_fingerprints = _stored_fingerprints(used_urls)
+    for candidate in ranked:
+        value = candidate.get("url")
+        if not value or not await _url_ok(value):
+            continue
+        fingerprint = await _image_fingerprint(value)
+        if fingerprint and any(_fingerprint_distance(fingerprint, old) <= 10 for old in prior_fingerprints):
+            logger.info(f"Skipping visually duplicate image for Pin {pin_index}: {value}")
+            continue
+        used_urls.add(value)
+        if fingerprint:
+            used_urls.add(f"__imgfp__:{fingerprint[0]:016x}:{fingerprint[1]:016x}")
+        return {
+            "mode": "url",
+            "value": value,
+            "provider": candidate.get("provider"),
+            "id": candidate.get("id"),
+            "score": candidate.get("score", 0),
+            "license": candidate.get("license"),
+        }
 
     # Emergency pillow
     return pillow_card(product, strategy["key"])
