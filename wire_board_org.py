@@ -1,4 +1,4 @@
-"""Runtime wiring: priority-ranked image sourcing, AI guidance, recovery and 40-call cap."""
+"""Runtime wiring: priority-ranked image sourcing, AI guidance, recovery and 50-call cap."""
 from __future__ import annotations
 import contextvars, logging, re
 from typing import Any, Dict
@@ -6,7 +6,7 @@ from board_org import detect_product_category, preferred_board_name, find_matchi
 from image_quality import choose_candidates, candidate_is_unique, reserve_candidate
 from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_API_KEY, OPENAI_API_KEY
 logger=logging.getLogger("pinterest-agent.wire")
-MAX_COMPOSIO_CALLS=40
+MAX_COMPOSIO_CALLS=50
 MAX_RECOVERY_ROUNDS=1
 # Five Pins x four targeted image-search queries = 20 calls. The old value of 18
 # starved the last Pins of the initial candidate pool under concurrent load.
@@ -35,8 +35,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 raise RuntimeError(f"Adaptive image-search budget exhausted ({MAX_IMAGE_SEARCH_CALLS} calls).")
             b.image_search_invocations+=1
         if slug=="GROK_CREATE_RESPONSE":
-            if b.grok_invocations>=10:
-                raise RuntimeError("Final Grok visual-review budget exhausted safely.")
+            if b.grok_invocations>=1:
+                raise RuntimeError("Grok visual-review budget exhausted safely (one call per product).")
             b.grok_invocations+=1
         b.reserve(slug)
         transport = getattr(agent_mod, "_composio_transport_executor", None)
@@ -192,4 +192,4 @@ def apply_agent_wiring(agent_mod:Any)->None:
             return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":f"{len(published)}/5 Pins published and independently verified; successful Pins preserved and failed Pins reported."}
         finally:_call_budget.reset(token)
     agent_mod.run_composio_tool=budgeted_run; agent_mod.publish_and_verify=strict_publish; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
-    logger.info("Canonical image selection + perceptual diversity + soft quality ranking + fallback + adaptive recovery + 40-call budget + strict board routing/verification wiring applied")
+    logger.info("Canonical image selection + perceptual diversity + soft quality ranking + fallback + adaptive recovery + 50-call budget + strict board routing/verification wiring applied")
