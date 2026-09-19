@@ -10,7 +10,7 @@ PREFERRED_MIN_DIMENSION=1200
 PREFERRED_PORTRAIT_MIN_HEIGHT=1200
 MAX_ASPECT=2.0
 MIN_SCORE=85
-MAX_CANDIDATES_PER_PIN=12
+MAX_CANDIDATES_PER_PIN=20
 MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
@@ -90,10 +90,11 @@ def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
     focus=(strategy.get("focus") or "product photo").strip()
     base=f"{brand} {name}" if brand and brand.lower() not in name.lower() else name
     return [
-        f"{base} official product photo",
-        f"{base} {focus} product image",
-        f"{base} front product photography",
-        f"{base} clean high resolution product photo",
+        f"{base} official product photo high resolution",
+        f"{base} {focus} product image high resolution",
+        f"{base} front product photography 4k",
+        f"{base} alternate product image high resolution",
+        f"{base} manufacturer retailer product gallery image",
     ]
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
     """Search multiple independent query angles, merge all candidates, hard-validate, then rank globally.
@@ -117,7 +118,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     valid=await validate_many(raw)
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
     valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
-    return [c for c in valid if c.get("score",0)>=MIN_SCORE][:MAX_CANDIDATES_PER_PIN]
+    ranked=[c for c in valid if c.get("score",0)>=MIN_SCORE]\n    # Preserve a larger ranked pool so rejected images can be replaced without\n    # repeating the same candidate. Product-page images remain lower priority.\n    return ranked[:MAX_CANDIDATES_PER_PIN]
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
