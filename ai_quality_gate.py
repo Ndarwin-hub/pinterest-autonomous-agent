@@ -1,4 +1,4 @@
-"""Zero-tolerance visual AI gate for Pinterest product Pins."""
+"""Advisory visual-quality review for Pinterest product Pins; deterministic technical validity remains authoritative."""
 from __future__ import annotations
 import asyncio, base64, json, logging, os, re
 from typing import Any, Dict, List, Optional, Callable, Awaitable
@@ -87,12 +87,14 @@ async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
         w=int(dims[0] or 0) if len(dims)>0 and dims[0] else 0
         h=int(dims[1] or 0) if len(dims)>1 and dims[1] else 0
         score=int(meta.get("image_score") or 0)
-        ok=bool(ref) and ref not in seen and w>=800 and h>=800 and max(w,h)/max(1,min(w,h))<=2.0
+        # Technical validity only: image_quality.py owns the actual publication boundary.
+        # Resolution/aspect are advisory signals here, not contradictory hard gates.
+        ok=bool(ref) and ref not in seen and w>=100 and h>=100 and max(w,h)/max(1,min(w,h))<=4.0
         if ref: seen.add(ref)
         scores[str(i)]=score
         if ok: approved.append(i)
         else: reasons.append(f"Pin {i} failed deterministic image safety checks")
-    return {"approved_indexes":approved,"scores":scores,"reason":"; ".join(reasons) if reasons else "All candidates passed deterministic safety checks.","status":"DETERMINISTIC_VALIDATION_PASSED" if approved else "DETERMINISTIC_VALIDATION_FAILED","final_reviewer":"deterministic","tool_failure":False}
+    return {"approved_indexes":approved,"scores":scores,"reason":"; ".join(reasons) if reasons else "All candidates passed deterministic technical validation.","status":"DETERMINISTIC_VALIDATION_PASSED" if len(approved)==len(items) else "DETERMINISTIC_VALIDATION_PARTIAL","final_reviewer":"deterministic","tool_failure":False,"advisory":True}
 
 async def _grok_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not XAI_API_KEY:return None
@@ -122,6 +124,22 @@ async def _composio_grok_one(item:Dict[str,Any],run_tool:Callable[[str,Dict[str,
     return None
 
 
+async def _composio_grok_batch(items:List[Dict[str,Any]],run_tool:Callable[[str,Dict[str,Any],int],Awaitable[Dict[str,Any]]])->Optional[Dict[str,Any]]:
+    """Review the complete five-candidate set in exactly one Composio Grok call."""
+    if not items:return None
+    content=[{"type":"input_text","text":SYSTEM+"\nReview all candidate images together. Return JSON exactly as {approved_indexes:[1,2,...],scores:{\"1\":0,\"2\":0,...},reason:string}. Score each candidate 0-100. Do not treat score as a publication gate; technically usable candidates remain publishable."}]
+    for i,item in enumerate(items,1):
+        content.append({"type":"input_text","text":f"CANDIDATE {i}: "+json.dumps(item.get("metadata") or {},ensure_ascii=False)[:3500]})
+        ref=item.get("image_ref") or ""
+        if ref: content.append({"type":"input_image","image_url":ref})
+    args={"model":XAI_MODEL,"input":[{"role":"user","content":content}],"store":False}
+    try:
+        data=await run_tool("GROK_CREATE_RESPONSE",args,0)
+        return _json(_extract_grok_text(data))
+    except Exception as e:
+        logger.warning("Composio Grok batch visual review failed: %s",e)
+        return None
+
 async def review_batch(items:List[Dict[str,Any]], composio_run:Optional[Callable[[str,Dict[str,Any],int],Awaitable[Dict[str,Any]]]]=None)->Dict[str,Any]:
     # Priority: OpenAI/ChatGPT-compatible reviewer, then Grok, then Gemini.
     if OPENAI_API_KEY:
@@ -130,10 +148,12 @@ async def review_batch(items:List[Dict[str,Any]], composio_run:Optional[Callable
             approved=[i+1 for i,x in enumerate(primary) if bool(x.get("approved")) or int(x.get("score",0))>0]
             return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"openai_chatgpt","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"OpenAI/ChatGPT-compatible visual review completed.","openai":primary}
     if composio_run is not None and not XAI_API_KEY:
-        grok=await asyncio.gather(*(_composio_grok_one(x,composio_run) for x in items))
-        if all(x is not None for x in grok):
-            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) or int(x.get("score",0))>0]
-            return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"grok_composio","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Connected Composio Grok visual review completed.","grok":grok}
+        grok=await _composio_grok_batch(items,composio_run)
+        if isinstance(grok,dict):
+            scores=grok.get("scores") or {}
+            approved=[int(i) for i in (grok.get("approved_indexes") or []) if str(i).isdigit()]
+            approved=[i for i in approved if 1<=i<=len(items)]
+            return {"approved":len(approved)==len(items),"approved_indexes":approved,"scores":scores,"final_reviewer":"grok_composio","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Connected Composio Grok visual review completed in one batch call.","grok":grok,"advisory":True}
     if XAI_API_KEY:
         grok=await asyncio.gather(*(_grok_one(x) for x in items))
         if all(x is not None for x in grok):
