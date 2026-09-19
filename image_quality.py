@@ -1,4 +1,4 @@
-"""Zero-tolerance Pinterest image sourcing and quality selection."""
+"""Priority-ranked Pinterest image sourcing with usable fallback selection."""
 from __future__ import annotations
 import asyncio, logging, os, re
 from typing import Any, Dict, List, Optional, Tuple
@@ -118,7 +118,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     valid=await validate_many(raw)
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
     valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
-    ranked=[c for c in valid if c.get("score",0)>=MIN_SCORE]
+    ranked=valid
     # Preserve a larger ranked pool so rejected images can be replaced without
     # repeating the same candidate. Product-page images remain lower priority.
     return ranked[:MAX_CANDIDATES_PER_PIN]
