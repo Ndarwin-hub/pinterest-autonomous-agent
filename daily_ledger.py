@@ -29,7 +29,7 @@ class DailyLedger:
                 try: age=time.time()-datetime.fromisoformat(updated).timestamp()
                 except Exception: age=SLOT_PROCESSING_LEASE_SEC+1
                 if age>=SLOT_PROCESSING_LEASE_SEC:
-                    c.execute("UPDATE daily_slots SET status='failed_open',error='stale_processing_reclaimed',updated_at=? WHERE day=? AND slot=? AND status='processing'",(datetime.now(timezone.utc).isoformat(),day,slot)); reclaimed+=c.rowcount
+                    c.execute("UPDATE daily_slots SET status='failed_open',error='stale_processing_reclaimed',updated_at=? WHERE day=? AND slot=? AND status='processing'",(datetime.now(timezone.utc).isoformat(),day,slot)); reclaimed += 1 if c.execute("SELECT changes()").fetchone()[0] == 1 else 0
             c.commit(); c.close(); return reclaimed
     def get_day_status(self,day=None):
         day=day or self.today_str()
@@ -64,7 +64,7 @@ class DailyLedger:
             c=self._conn(); c.execute("BEGIN IMMEDIATE"); c.execute("INSERT OR IGNORE INTO daily_status_notifications(day,updated_at) VALUES(?,?)",(day,now))
             row=c.execute(f"SELECT {notified_col},{claim_col} FROM daily_status_notifications WHERE day=?",(day,)).fetchone()
             if row and (row[0] or row[1]): c.commit(); c.close(); return False
-            c.execute(f"UPDATE daily_status_notifications SET {claim_col}=?,updated_at=? WHERE day=? AND {notified_col} IS NULL AND {claim_col} IS NULL",(now,now,day)); ok=c.rowcount==1; c.commit(); c.close(); return ok
+            c.execute(f"UPDATE daily_status_notifications SET {claim_col}=?,updated_at=? WHERE day=? AND {notified_col} IS NULL AND {claim_col} IS NULL",(now,now,day)); ok = c.execute("SELECT changes()").fetchone()[0] == 1; c.commit(); c.close(); return ok
     def finish_daily_notification(self,day=None,kind="started",success=True):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         if kind not in ("started","not_started"): raise ValueError("kind must be started or not_started")
