@@ -1,22 +1,22 @@
 name: Amazon external batches
 on:
-  # Primary clock: explicit UTC times. Nepal is UTC+5:45.
-  # 00:15 UTC = 06:00 Nepal. Extra staggered times provide recovery
-  # opportunities if GitHub delays or drops a scheduled event.
+  # Restore the workflow's established schedule values so the cron triggers
+  # exactly match the existing batch-selection and reconciliation logic.
   schedule:
-    - cron: '15 0 * * *'   # 06:00 Nepal
-    - cron: '25 0 * * *'   # 06:10 Nepal
-    - cron: '35 0 * * *'   # 06:20 Nepal
-    - cron: '45 0 * * *'   # 06:30 Nepal
-    - cron: '55 0 * * *'   # 06:40 Nepal
-    - cron: '5 1 * * *'    # 06:50 Nepal
-    - cron: '15 1 * * *'   # 07:00 Nepal
-    - cron: '25 1 * * *'   # 07:10 Nepal
-    - cron: '35 1 * * *'   # 07:20 Nepal
-    - cron: '45 1 * * *'   # 07:30 Nepal
-    - cron: '55 1 * * *'   # 07:40 Nepal
-    - cron: '5 2 * * *'    # 07:50 Nepal
-    - cron: '15 2 * * *'   # 08:00 Nepal
+    - cron: '8 6 * * *'
+    - cron: '56 6 * * *'
+    - cron: '44 7 * * *'
+    - cron: '32 8 * * *'
+    - cron: '20 9 * * *'
+    - cron: '8 10 * * *'
+    - cron: '56 10 * * *'
+    - cron: '44 11 * * *'
+    - cron: '32 12 * * *'
+    - cron: '20 13 * * *'
+    - cron: '36 13 * * *'
+    - cron: '48 13 * * *'
+    - cron: '0 14 * * *'
+    - cron: '5 14 * * *'
   workflow_dispatch:
     inputs:
       batch:
