@@ -179,7 +179,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     continue
                 s=p["seo"]; im=p["image"]
                 try:
-                    dest_url=(product.get("url") or product.get("affiliate_url") or url); r=await agent_mod.publish_and_verify(board_id,s["title"],s["description"],s["alt_text"],im.get("mode","url"),im.get("value") or im.get("url"),dest_url,job_store,job_id,p["pin_number"])
+                    dest_url=(product.get("url") or product.get("affiliate_url") or url); r=await agent_mod.publish_and_verify(board_id=board_id,title=s["title"],description=s["description"],alt_text=s["alt_text"],image_mode=im.get("mode","url"),image_value=im.get("value") or im.get("url"),link=dest_url,job_store=job_store,job_id=job_id,pin_index=p["pin_number"],strategy_key=p["strategy"].get("key"))
                     published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
                 except Exception as e:
                     errors.append({"pin_number":p["pin_number"],"error":str(e)})
