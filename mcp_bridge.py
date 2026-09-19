@@ -6,7 +6,7 @@ from fastapi import APIRouter,Request
 from fastapi.responses import JSONResponse,Response
 
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip();COMPOSIO_ENTITY_ID=os.getenv("COMPOSIO_ENTITY_ID","").strip();API_SECRET=os.getenv("API_SECRET","").strip();BRIDGE_TOKEN=os.getenv("MCP_BRIDGE_TOKEN","").strip();PUBLIC_DOMAIN=os.getenv("RAILWAY_PUBLIC_DOMAIN","web-production-dae68.up.railway.app").strip();SUBMIT_URL=f"https://{PUBLIC_DOMAIN}/submit";DISCOVER_URL=f"https://{PUBLIC_DOMAIN}/amazon/discover-submit";MCP_TOOLKIT_SLUG="PINTEREST_RAILWAY_BRIDGE";CUSTOM_MCP_TOOLKIT_SLUG="CUSTOM_PINTEREST_RAILWAY_BRIDGE";COMPOSIO_SEARCH_TOOLKIT_SLUG="composio_search";COMPOSIO_BASE="https://backend.composio.dev/api/v3.1";MCP_PATH=f"/mcp/{BRIDGE_TOKEN}" if BRIDGE_TOKEN else "";SMOKE_TEST_URL=os.getenv("COMPOSIO_BRIDGE_SMOKE_TEST_URL","").strip();SMOKE_MARKER="/data/composio_bridge_smoke_test_v2.sha256"
-router=APIRouter();_router_session_id:Optional[str]=None;_router_submit_tool_slug:Optional[str]=None;_router_amazon_tool_slug:Optional[str]=None;_router_session_mcp_url:Optional[str]=None
+router=APIRouter();_router_session_id:Optional[str]=None;_router_submit_tool_slug:Optional[str]=None;_router_health_tool_slug:Optional[str]=None;_router_amazon_tool_slug:Optional[str]=None;_router_session_mcp_url:Optional[str]=None
 TOOL={"name":"PINTEREST_SUBMIT_URL","description":"Submit one exact product/affiliate URL to the autonomous Pinterest workflow. Pass the URL unchanged; do not shorten, rewrite, or replace it.","inputSchema":{"type":"object","properties":{"url":{"type":"string","description":"Exact http(s) product or affiliate URL."}},"required":["url"],"additionalProperties":False}}
 HEALTH_TOOL={"name":"PINTEREST_BRIDGE_HEALTH","description":"Non-publishing bridge health check. Returns a fixed readiness response and does not submit or publish anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}}
 COUNT_TOOL={"name":"PINTEREST_PIN_COUNT","description":"Search, verify and publish N distinct Amazon US products through the Railway Pinterest workflow. N is the number of products, not the number of Pins. Each product uses the existing independent Pin research/image/publish/verification pipeline; publish every usable verified Pin and do not block the batch merely because fewer than five usable Pins are available for a product. Preserve desiredplus-20, reject duplicate ASINs, and use the configured image-quality priority.","inputSchema":{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":50,"description":"Number of distinct Amazon US products to search, verify and publish."}},"required":["count"],"additionalProperties":False}}
@@ -69,14 +69,14 @@ async def ensure_composio_router_session()->Dict[str,Any]:
    session=await _composio_request("POST","/tool_router/session",{"user_id":COMPOSIO_ENTITY_ID,"toolkits":{"enable":[COMPOSIO_SEARCH_TOOLKIT_SLUG,CUSTOM_MCP_TOOLKIT_SLUG]}});sid=str(session.get("session_id") or "")
    if not sid:raise RuntimeError("Composio created a session without a session_id")
    search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute Pinterest Railway tools PINTEREST_SUBMIT_URL, PINTEREST_PIN_COUNT, or PINTEREST_BRIDGE_HEALTH"}],"search_strategy":"tool_search"})
-   submit_slug=None
+   submit_slug=None;health_slug=None
    for result in search.get("results") or []:
     for slug in (result.get("primary_tool_slugs") or [])+(result.get("related_tool_slugs") or []):
      if str(slug).upper().endswith("PINTEREST_SUBMIT_URL"):submit_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
      if submit_slug and health_slug:break
-    if submit_slug:break
-   if not submit_slug:
+    if submit_slug and health_slug:break
+   if not submit_slug or not health_slug:
     for slug,schema in (search.get("tool_schemas") or {}).items():
      if str(slug).upper().endswith("PINTEREST_SUBMIT_URL") or "exact product/affiliate URL" in str(schema.get("description","")):submit_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
@@ -137,6 +137,7 @@ async def mcp_endpoint(request:Request):
   name=params.get("name");args=params.get("arguments") or {}
   try:
    if name==TOOL["name"]:text=await _submit_exact_url(args.get("url",""))
+   elif name==HEALTH_TOOL["name"]:text="PINTEREST_BRIDGE_HEALTH_OK"
    elif name==COUNT_TOOL["name"]:text=json.dumps(await _pin_count(int(args.get("count",0))),separators=(",",":"))
    else:return _error(request_id,-32601,f"Unknown tool: {name}")
    return _result(request_id,{"content":[{"type":"text","text":text}],"isError":False})
