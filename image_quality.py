@@ -118,7 +118,10 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     valid=await validate_many(raw)
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
     valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
-    ranked=[c for c in valid if c.get("score",0)>=MIN_SCORE]\n    # Preserve a larger ranked pool so rejected images can be replaced without\n    # repeating the same candidate. Product-page images remain lower priority.\n    return ranked[:MAX_CANDIDATES_PER_PIN]
+    ranked=[c for c in valid if c.get("score",0)>=MIN_SCORE]
+    # Preserve a larger ranked pool so rejected images can be replaced without
+    # repeating the same candidate. Product-page images remain lower priority.
+    return ranked[:MAX_CANDIDATES_PER_PIN]
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
