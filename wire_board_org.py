@@ -181,7 +181,9 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 try:
                     dest_url=(product.get("url") or product.get("affiliate_url") or url); r=await agent_mod.publish_and_verify(board_id,s["title"],s["description"],s["alt_text"],im.get("mode","url"),im.get("value") or im.get("url"),dest_url,job_store,job_id,p["pin_number"])
                     published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
-                except Exception as e:errors.append({"pin_number":p["pin_number"],"error":str(e)})
+                except Exception as e:
+                    errors.append({"pin_number":p["pin_number"],"error":str(e)})
+                    logger.error("Pin %s publication failed: %s",p["pin_number"],e)
             if not published:raise RuntimeError("No Pins were successfully published and verified.")
             return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":f"{len(published)}/5 Pins published and independently verified; successful Pins preserved and failed Pins reported."}
         finally:_call_budget.reset(token)
