@@ -28,3 +28,14 @@ The Railway service contains the Composio Custom MCP bridge. Its exposed tool is
 
 ## Important
 Do not shorten, rewrite, strip affiliate parameters, substitute another product URL, bypass `/submit`, or unpublish successful Pins when using this command.
+
+
+## Pin N product-count command
+- `Pin N` means N distinct Amazon US products, not N total Pins.
+- Railway discovers N currently buyable Amazon US product-detail listings, rejects duplicate ASINs against the durable publication registry, injects/preserves affiliate tag `desiredplus-20`, and submits each accepted product to the existing Pinterest job pipeline.
+- For each product, the existing image workflow prioritizes the best verified imagery in this order: native 12K/8K/4K imagery when available, then other verified high-quality imagery, then the native product-page image only as the final image-source fallback.
+- Image URLs are verified by fetching the actual image and checking dimensions; the same image URL is not reused within a product's Pin set.
+- A product is not discarded merely because fewer than five usable images are available. Every usable, individually verified Pin is published and retained. The product job is `completed_partial` when at least one verified Pin is published but fewer than five are available; zero verified Pins is failure.
+- Railway waits for the product jobs and returns the actual per-product Pin counts and verification results.
+- The existing manual `Pin + [product URL]` / `PINTEREST_SUBMIT_URL` path is unchanged.
+- The Composio Custom MCP bridge exposes `PINTEREST_PIN_COUNT` for this command.
