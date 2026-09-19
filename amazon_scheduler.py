@@ -24,7 +24,7 @@ class AmazonScheduler:
  def gate_status(self,live_boards=None):
   amazon_source_ready=not is_dormant();ready=amazon_source_ready and SCHEDULER_ENABLED;info=classify_live_boards(live_boards or []);reasons=[]
   if not SCHEDULER_ENABLED:reasons.append("AMAZON_SCHEDULER_ENABLED is false")
-  if not composio:reasons.append("Composio Amazon connection/configuration is not available")
+  if not amazon_source_ready:reasons.append("Composio Amazon connection/configuration is not available")
   if live_boards is not None and not info["scheduler_ready"]:reasons.append(f"Need {REQUIRED_PRIMARY_SLOTS} approved primary boards; have {info['primary_count']}")
   return {"credentials_present":amazon_source_ready,"scheduler_enabled_flag":SCHEDULER_ENABLED,"mode":SCHEDULER_MODE,"source":"amazon_api_primary_composio_fallback" if amazon_credentials_present() else "composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),"blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
  async def start(self,*,enqueue,list_boards,wait_job=None):
