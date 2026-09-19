@@ -9,8 +9,10 @@ def amazon_credentials_present() -> bool:
     return all(os.getenv(k, "").strip() for k in ("AMAZON_CLIENT_ID", "AMAZON_CLIENT_SECRET", "AMAZON_PARTNER_TAG"))
 def amazon_config() -> Dict[str, str]:
     return {"client_id":os.getenv("AMAZON_CLIENT_ID","").strip(),"client_secret":os.getenv("AMAZON_CLIENT_SECRET","").strip(),"partner_tag":os.getenv("AMAZON_PARTNER_TAG","").strip(),"marketplace":os.getenv("AMAZON_MARKETPLACE","www.amazon.com").strip(),"credential_version":os.getenv("AMAZON_CREDENTIAL_VERSION","3.1").strip()}
-def assert_us_marketplace() -> None:
-    if amazon_config()["marketplace"].lower() != "www.amazon.com": raise RuntimeError("Amazon automation requires AMAZON_MARKETPLACE=www.amazon.com")
+def assert_supported_marketplace() -> None:
+    marketplace=amazon_config()["marketplace"].lower().strip()
+    if not marketplace.startswith("www.amazon.") or "." not in marketplace:
+        raise RuntimeError(f"Invalid Amazon marketplace host: {marketplace}")
 def _token_url(version: str) -> str:
     override=os.getenv("AMAZON_TOKEN_URL","").strip()
     if override: return override
@@ -18,7 +20,7 @@ def _token_url(version: str) -> str:
 class AmazonCreatorsClient:
     def __init__(self):
         if not amazon_credentials_present(): raise RuntimeError("Amazon Creators API credentials are not configured")
-        assert_us_marketplace(); self.cfg=amazon_config(); self._token:Optional[str]=None; self._expires=0.0
+        assert_supported_marketplace(); self.cfg=amazon_config(); self._token:Optional[str]=None; self._expires=0.0
     async def _ensure_token(self, client:httpx.AsyncClient)->str:
         if self._token and time.time() < self._expires-60: return self._token
         body={"grant_type":"client_credentials","client_id":self.cfg["client_id"],"client_secret":self.cfg["client_secret"],"scope":os.getenv("AMAZON_OAUTH_SCOPE","creatorsapi::default")}
