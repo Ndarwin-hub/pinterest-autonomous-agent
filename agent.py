@@ -585,64 +585,26 @@ async def get_best_pin_image(
     job_id: str,
     used_urls: set,
 ) -> Dict[str, Any]:
+    """Compatibility entrypoint backed by the single canonical image-selection module.
+
+    Manual/direct agent calls and the production wired workflow therefore share exactly
+    the same candidate validation, ranking, fallback and perceptual-diversity behavior.
+    """
     job_store.update(job_id, progress=f"Pin {pin_index}/5: image search ({strategy['name']})")
-    name = product.get("name") or "product"
-    query = f"{name} {strategy['focus']}"[:100]
-    candidates: List[Dict[str, Any]] = []
-
-    # 1) Product page
-    for img_url in product.get("images") or []:
-        if img_url in used_urls:
-            continue
-        if await _url_ok(img_url):
-            candidates.append({"url": img_url, "provider": "product_page", "license": "product_page"})
-
-    # 2) COMPOSIO_SEARCH_IMAGE — real product photos (priority)
-    for q in (name, query, f"{name} product"):
-        found = await search_composio_images(q, num=8)
-        for f in found:
-            if f.get("url") and f["url"] not in used_urls:
-                candidates.append(f)
-        if len(candidates) >= 6:
-            break
-
-    # 3) Pexels if entity connected
-    for f in await search_pexels(query):
-        if f.get("url") and f["url"] not in used_urls:
-            candidates.append(f)
-
-    # Score, then enforce visual (not merely URL) uniqueness.
-    ranked = []
-    for c in candidates:
-        if c.get("url") in used_urls:
-            continue
-        s = score_candidate(c, product, strategy["key"])
-        c["score"] = s
-        ranked.append(c)
-    ranked.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    prior_fingerprints = _stored_fingerprints(used_urls)
-    for candidate in ranked:
-        value = candidate.get("url")
-        if not value or not await _url_ok(value):
-            continue
-        fingerprint = await _image_fingerprint(value)
-        if fingerprint and any(_fingerprint_distance(fingerprint, old) <= 10 for old in prior_fingerprints):
-            logger.info(f"Skipping visually duplicate image for Pin {pin_index}: {value}")
-            continue
-        used_urls.add(value)
-        if fingerprint:
-            used_urls.add(f"__imgfp__:{fingerprint[0]:016x}:{fingerprint[1]:016x}")
+    from image_quality import choose_best_image
+    selected = await choose_best_image(product, strategy, pin_index, used_urls, globals()["__import__"]("agent"))
+    if selected:
         return {
             "mode": "url",
-            "value": value,
-            "provider": candidate.get("provider"),
-            "id": candidate.get("id"),
-            "score": candidate.get("score", 0),
-            "license": candidate.get("license"),
+            "value": selected.get("url"),
+            "provider": selected.get("provider"),
+            "id": selected.get("id"),
+            "score": selected.get("score", 0),
+            "license": selected.get("license"),
+            "width": selected.get("width"),
+            "height": selected.get("height"),
+            "image_fingerprint": selected.get("_fingerprint"),
         }
-
-    # Emergency pillow
     return pillow_card(product, strategy["key"])
 
 
