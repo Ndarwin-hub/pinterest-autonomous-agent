@@ -115,8 +115,14 @@ if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
 class SubmitResponse(BaseModel):job_id:str;status:str;message:str
 class StatusResponse(BaseModel):job_id:str;status:str;progress:Optional[str]=None;result:Optional[Dict[str,Any]]=None;error:Optional[str]=None;created_at:str;updated_at:str
-class BatchRequest:
+class BatchRequest(BaseModel):
  batch:int=Field(...,ge=1,le=10)
+ scheduler_run_id:Optional[str]=None
+ scheduled_local_time:Optional[str]=None
+ github_delay_seconds:int=0
+ github_queued_runs:int=0
+ github_active_runs:int=0
+ github_load_class:str="UNKNOWN"
  scheduler_run_id:Optional[str]=None
  scheduled_local_time:Optional[str]=None
  github_delay_seconds:int=0
