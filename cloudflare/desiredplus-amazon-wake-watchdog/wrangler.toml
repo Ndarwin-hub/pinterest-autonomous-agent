@@ -1,0 +1,9 @@
+name = "desiredplus-amazon-wake-watchdog"
+main = "src/index.js"
+compatibility_date = "2026-09-20"
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+RAILWAY_BATCH_URL = "https://web-production-dae68.up.railway.app/amazon/run-batch"
