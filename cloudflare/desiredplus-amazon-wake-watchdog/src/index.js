@@ -39,12 +39,12 @@ async function wakeRailway(env, batch, scheduledTime) {
 
 export default {
   async scheduled(controller, env, ctx) {
-    const batch = dueBatch(new Date(controller.scheduledTime));
+    // Cloudflare supplies the scheduled event time even if delivery is delayed; use it as the authoritative checkpoint time.\n    const batch = dueBatch(new Date(controller.scheduledTime));
     if (batch === null) return;
 
     ctx.waitUntil((async () => {
       try {
-        const result = await wakeRailway(env, batch, controller.scheduledTime);
+        if (!env.CLOUDFLARE_WAKE_SECRET) throw new Error("CLOUDFLARE_WAKE_SECRET is not configured in the Worker");\n      const result = await wakeRailway(env, batch, controller.scheduledTime);
         console.log(JSON.stringify({
           event: "railway_wake_sent",
           batch,
