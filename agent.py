@@ -21,11 +21,8 @@ import json
 import logging
 import os
 import re
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
-
-from PIL import Image
 
 import httpx
 
@@ -387,53 +384,6 @@ def build_five_seo(product: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def _fingerprint_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
-    return (a[0] ^ b[0]).bit_count() + (a[1] ^ b[1]).bit_count()
-
-
-async def _image_fingerprint(url: str) -> Optional[tuple[int, int]]:
-    """Return perceptual aHash+dHash for visual duplicate detection."""
-    try:
-        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            if r.status_code >= 400 or not r.content or len(r.content) > 5 * 1024 * 1024:
-                return None
-        with Image.open(io.BytesIO(r.content)) as im:
-            im = im.convert("L")
-            # aHash: 8x8 average luminance.
-            a = im.resize((8, 8), Image.Resampling.LANCZOS)
-            ap = list(a.getdata())
-            avg = sum(ap) / len(ap)
-            ahash = sum((1 << i) for i, v in enumerate(ap) if v >= avg)
-            # dHash: horizontal gradient over 9x8 pixels.
-            d = im.resize((9, 8), Image.Resampling.LANCZOS)
-            dp = list(d.getdata())
-            dhash = 0
-            bit = 0
-            for y in range(8):
-                for x in range(8):
-                    if dp[y * 9 + x] >= dp[y * 9 + x + 1]:
-                        dhash |= 1 << bit
-                    bit += 1
-            return ahash, dhash
-    except Exception as e:
-        logger.debug(f"Image fingerprint failed for {url}: {e}")
-        return None
-
-
-def _stored_fingerprints(used_urls: set) -> List[tuple[int, int]]:
-    out = []
-    for value in used_urls:
-        if not isinstance(value, str) or not value.startswith("__imgfp__:"):
-            continue
-        try:
-            _, a, d = value.split(":", 2)
-            out.append((int(a, 16), int(d, 16)))
-        except Exception:
-            continue
-    return out
-
-
 async def _url_ok(url: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
@@ -586,26 +536,57 @@ async def get_best_pin_image(
     job_id: str,
     used_urls: set,
 ) -> Dict[str, Any]:
-    """Compatibility entrypoint backed by the single canonical image-selection module.
-
-    Manual/direct agent calls and the production wired workflow therefore share exactly
-    the same candidate validation, ranking, fallback and perceptual-diversity behavior.
-    """
     job_store.update(job_id, progress=f"Pin {pin_index}/5: image search ({strategy['name']})")
-    from image_quality import choose_best_image
-    selected = await choose_best_image(product, strategy, pin_index, used_urls, sys.modules[__name__])
-    if selected:
-        return {
-            "mode": "url",
-            "value": selected.get("url"),
-            "provider": selected.get("provider"),
-            "id": selected.get("id"),
-            "score": selected.get("score", 0),
-            "license": selected.get("license"),
-            "width": selected.get("width"),
-            "height": selected.get("height"),
-            "image_fingerprint": selected.get("_fingerprint"),
-        }
+    name = product.get("name") or "product"
+    query = f"{name} {strategy['focus']}"[:100]
+    candidates: List[Dict[str, Any]] = []
+
+    # 1) Product page
+    for img_url in product.get("images") or []:
+        if img_url in used_urls:
+            continue
+        if await _url_ok(img_url):
+            candidates.append({"url": img_url, "provider": "product_page", "license": "product_page"})
+
+    # 2) COMPOSIO_SEARCH_IMAGE — real product photos (priority)
+    for q in (name, query, f"{name} product"):
+        found = await search_composio_images(q, num=8)
+        for f in found:
+            if f.get("url") and f["url"] not in used_urls:
+                candidates.append(f)
+        if len(candidates) >= 6:
+            break
+
+    # 3) Pexels if entity connected
+    for f in await search_pexels(query):
+        if f.get("url") and f["url"] not in used_urls:
+            candidates.append(f)
+
+    # Score
+    best = None
+    best_score = -1
+    for c in candidates:
+        if c.get("url") in used_urls:
+            continue
+        s = score_candidate(c, product, strategy["key"])
+        c["score"] = s
+        if s > best_score:
+            best_score = s
+            best = c
+
+    if best and best.get("url") and best_score >= 50:
+        if await _url_ok(best["url"]):
+            used_urls.add(best["url"])
+            return {
+                "mode": "url",
+                "value": best["url"],
+                "provider": best.get("provider"),
+                "id": best.get("id"),
+                "score": best_score,
+                "license": best.get("license"),
+            }
+
+    # Emergency pillow
     return pillow_card(product, strategy["key"])
 
 
