@@ -18,12 +18,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: cloudflare/desiredplus-amazon-wake-watchdog
-      - name: Configure Railway wake secret
+
+      - name: Install Wrangler
+        run: npm install --global wrangler@latest
+
+      - name: Deploy Worker using temporary Cloudflare account
         run: |
-          echo "Worker deployed. RAILWAY_WAKE_SECRET must be configured as the Worker secret named RAILWAY_WAKE_SECRET."
+          npx wrangler deploy --temporary
+
+      - name: Deployment note
+        run: |
+          echo "Temporary deployment created. Wrangler prints a claim URL in the deployment log."
+          echo "The temporary Cloudflare account must be claimed within 60 minutes."
