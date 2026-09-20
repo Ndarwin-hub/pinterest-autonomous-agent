@@ -1,19 +1,16 @@
-"""Priority-ranked Pinterest image sourcing with usable fallback selection."""
+"""Zero-tolerance Pinterest image sourcing and quality selection."""
 from __future__ import annotations
 import asyncio, logging, os, re
 from typing import Any, Dict, List, Optional, Tuple
-import io
-from PIL import Image
 import httpx
 from PIL import ImageFile
 logger=logging.getLogger("pinterest-agent.image-quality")
-MIN_DIMENSION=100
+MIN_DIMENSION=800
 PREFERRED_MIN_DIMENSION=1200
 PREFERRED_PORTRAIT_MIN_HEIGHT=1200
 MAX_ASPECT=2.0
-MIN_SCORE=0
-PERCEPTUAL_DUPLICATE_DISTANCE=10
-MAX_CANDIDATES_PER_PIN=20
+MIN_SCORE=85
+MAX_CANDIDATES_PER_PIN=12
 MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
@@ -34,10 +31,9 @@ async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
     except Exception:pass
     return None
 def hard_gate(w:int,h:int)->Tuple[bool,str]:
-    if w<=0 or h<=0:return False,f"invalid_dimensions:{w}x{h}"
-    if min(w,h)<MIN_DIMENSION:return False,f"too_small_to_use:{w}x{h}"
+    if min(w,h)<MIN_DIMENSION:return False,f"too_small:{w}x{h}"
     ratio=max(w,h)/max(1,min(w,h))
-    if ratio>MAX_ASPECT:return True,f"usable_extreme_aspect:{w}x{h}"
+    if ratio>MAX_ASPECT:return False,f"bad_aspect:{w}x{h}"
     return True,"ok"
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     d=await inspect_image_url(c.get("url",""))
@@ -61,19 +57,13 @@ def score(c:Dict[str,Any],product:Dict[str,Any],strategy:str)->int:
         if brand and brand in src:s+=12
         toks=[x for x in re.findall(r"[a-z0-9]+",name) if len(x)>3];s+=min(10,sum(1 for x in toks[:5] if x in src))
     elif p=="pexels":s+=8
-    short=min(w,h)
-    if short>=PREFERRED_MIN_DIMENSION:s+=12
-    elif short>=800:s+=7
-    elif short>=400:s+=3
-    elif short>=200:s-=3
-    else:s-=8
+    if min(w,h)>=PREFERRED_MIN_DIMENSION:s+=12
     if .60<=ratio<=.80:s+=14
     elif .80<ratio<=1.05:s+=10
     elif 1.05<ratio<=1.35:s+=7
     elif 1.35<ratio<=1.80:s+=3
-    elif ratio>MAX_ASPECT:s-=8
     if c.get("original"):s+=2
-    return max(1,min(100,s))
+    return min(100,s)
 async def search_pexels(query:str,agent_mod:Any)->List[Dict[str,Any]]:
     if PEXELS_API_KEY:
         try:
@@ -100,65 +90,19 @@ def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
     focus=(strategy.get("focus") or "product photo").strip()
     base=f"{brand} {name}" if brand and brand.lower() not in name.lower() else name
     return [
-        f"{base} official product photo high resolution",
-        f"{base} {focus} product image high resolution",
-        f"{base} front product photography 4k",
-        f"{base} alternate product image high resolution",
-        f"{base} manufacturer retailer product gallery image",
+        f"{base} official product photo",
+        f"{base} {focus} product image",
+        f"{base} front product photography",
+        f"{base} clean high resolution product photo",
     ]
-def _fingerprint_distance(a:Tuple[int,int],b:Tuple[int,int])->int:
-    return (a[0]^b[0]).bit_count()+(a[1]^b[1]).bit_count()
-
-async def image_fingerprint(url:str)->Optional[Tuple[int,int]]:
-    try:
-        async with httpx.AsyncClient(timeout=12,follow_redirects=True) as client:
-            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/fingerprint"})
-            if r.status_code>=400 or not r.content or len(r.content)>MAX_IMAGE_BYTES_TO_INSPECT:return None
-        with Image.open(io.BytesIO(r.content)) as im:
-            im=im.convert("L")
-            a=im.resize((8,8),Image.Resampling.LANCZOS); ap=list(a.getdata()); avg=sum(ap)/len(ap)
-            ah=sum((1<<i) for i,v in enumerate(ap) if v>=avg)
-            d=im.resize((9,8),Image.Resampling.LANCZOS); dp=list(d.getdata()); dh=0; bit=0
-            for y in range(8):
-                for x in range(8):
-                    if dp[y*9+x]>=dp[y*9+x+1]:dh|=1<<bit
-                    bit+=1
-            return ah,dh
-    except Exception:
-        return None
-
-def _stored_fingerprints(used_urls:set)->List[Tuple[int,int]]:
-    out=[]
-    for value in used_urls:
-        if isinstance(value,str) and value.startswith("__imgfp__:"):
-            try:
-                _,a,d=value.split(":",2);out.append((int(a,16),int(d,16)))
-            except Exception:pass
-    return out
-
-def candidate_is_unique(candidate:Dict[str,Any],used_urls:set)->bool:
-    url=str(candidate.get("url") or "")
-    if not url or url in used_urls:return False
-    fp=candidate.get("_fingerprint")
-    if not fp:return True
-    try:
-        fp=(int(fp[0]),int(fp[1])) if not isinstance(fp,str) else (int(fp.split(":",1)[0],16),int(fp.split(":",1)[1],16))
-    except Exception:return True
-    return not any(_fingerprint_distance(fp,old)<=PERCEPTUAL_DUPLICATE_DISTANCE for old in _stored_fingerprints(used_urls))
-
-def reserve_candidate(candidate:Dict[str,Any],used_urls:set)->None:
-    url=candidate.get("url")
-    if url:used_urls.add(url)
-    fp=candidate.get("_fingerprint")
-    if fp:
-        try:
-            if isinstance(fp,str):a,d=fp.split(":",1); token=f"__imgfp__:{a}:{d}"
-            else:token=f"__imgfp__:{int(fp[0]):016x}:{int(fp[1]):016x}"
-            used_urls.add(token)
-        except Exception:pass
-
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
-    """Canonical image-selection path shared by every publishing entrypoint."""
+    """Search multiple independent query angles, merge all candidates, hard-validate, then rank globally.
+
+    The caller's Composio budget limits actual executions. Four targeted Composio image
+    searches are attempted per Pin so the five Pins can compare a broad candidate pool.
+    No candidate is accepted merely because it was found: dimensions/aspect and the
+    minimum score gate still apply before ranking.
+    """
     raw=[]
     for u in product.get("images") or []:
         if u and u not in used_urls:raw.append({"url":u,"provider":"product_page","source":"product page","license":"product_page","original":True})
@@ -166,21 +110,15 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     for query in queries:
         try:raw.extend(await agent_mod.search_composio_images(query,num=10))
         except Exception:pass
-    if not COMPOSIO_API_KEY:raw.extend(await search_pexels(queries[0],agent_mod))
+    if not COMPOSIO_API_KEY:
+        # Only use the direct/credentialed Pexels path when Composio is not the active
+        # image-search route, avoiding duplicate quota use in the normal production path.
+        raw.extend(await search_pexels(queries[0],agent_mod))
     valid=await validate_many(raw)
-    for item in valid:item["score"]=score(item,product,strategy.get("key",""))
-    valid.sort(key=lambda x:(x.get("score",0),x.get("provider")=="product_page",x.get("original",False)),reverse=True)
-    selected=[];seen_fps=[]
-    for item in valid[:MAX_CANDIDATES_PER_PIN]:
-        if not item.get("url") or item["url"] in used_urls:continue
-        fp=await image_fingerprint(item["url"])
-        if fp:
-            if any(_fingerprint_distance(fp,old)<=PERCEPTUAL_DUPLICATE_DISTANCE for old in _stored_fingerprints(used_urls)+seen_fps):continue
-            item["_fingerprint"]=fp;seen_fps.append(fp)
-        selected.append(item)
-    return selected
-
+    for c in valid:c["score"]=score(c,product,strategy.get("key",""))
+    valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
+    return [c for c in valid if c.get("score",0)>=MIN_SCORE][:MAX_CANDIDATES_PER_PIN]
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
-    best=candidates[0];reserve_candidate(best,used_urls);return best
+    best=candidates[0];used_urls.add(best["url"]);return best
