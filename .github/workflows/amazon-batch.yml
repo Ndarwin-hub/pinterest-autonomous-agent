@@ -1,10 +1,6 @@
 name: Amazon external batches
+
 on:
-  # The 10 batch slots remain unchanged. Times below are the established
-  # Nepal local times converted explicitly to UTC for GitHub Actions:
-  # 06:08 NPT=00:23 UTC, 06:56=01:11, 07:44=01:59, 08:32=02:47,
-  # 09:20=03:35, 10:08=04:23, 10:56=05:11, 11:44=05:59,
-  # 12:32=06:47, 13:20=07:35; reconciliation/final checks follow.
   schedule:
     - cron: '23 0 * * *'
     - cron: '11 1 * * *'
@@ -21,22 +17,31 @@ on:
     - cron: '15 8 * * *'
     - cron: '20 8 * * *'
   repository_dispatch:
-    types: [amazon-batch]
+    types:
+      - amazon-batch
   workflow_dispatch:
     inputs:
       batch:
-        description: 'Batch to run'
+        description: Batch to run
         required: true
         type: choice
-        options: ['1','2','3','4','5','6','7','8','9','10']
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+          - '6'
+          - '7'
+          - '8'
+          - '9'
+          - '10'
 
 permissions:
   contents: read
   id-token: write
   actions: read
 
-# Manual-dispatch entrypoint retained for one-shot production batch wakeups.
-# Never cancel an in-flight batch. Allow multiple recovery triggers to queue.
 concurrency:
   group: amazon-external-batch
   cancel-in-progress: false
@@ -46,174 +51,93 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Select batch and measure scheduler workload
+      - name: Select batch
         id: select
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          DISPATCH_BATCH: ${{ inputs.batch }}
+          CLIENT_BATCH: ${{ github.event.client_payload.batch }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-              echo "batch=${{ github.event.client_payload.batch }}" >> "$GITHUB_OUTPUT"
-            else
-              echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
-            fi
-            echo "scheduled_local_time=manual" >> "$GITHUB_OUTPUT"
-            echo "action=run" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            batch="$DISPATCH_BATCH"
+            action="run"
+            local_time="manual"
+          elif [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
+            batch="$CLIENT_BATCH"
+            action="run"
+            local_time="repository-dispatch"
           else
-            case "${{ github.event.schedule }}" in
-              '23 0 * * *') echo "batch=1" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=06:08" >> "$GITHUB_OUTPUT" ;;
-              '11 1 * * *') echo "batch=2" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=06:56" >> "$GITHUB_OUTPUT" ;;
-              '59 1 * * *') echo "batch=3" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=07:44" >> "$GITHUB_OUTPUT" ;;
-              '47 2 * * *') echo "batch=4" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=08:32" >> "$GITHUB_OUTPUT" ;;
-              '35 3 * * *') echo "batch=5" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=09:20" >> "$GITHUB_OUTPUT" ;;
-              '23 4 * * *') echo "batch=6" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=10:08" >> "$GITHUB_OUTPUT" ;;
-              '11 5 * * *') echo "batch=7" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=10:56" >> "$GITHUB_OUTPUT" ;;
-              '59 5 * * *') echo "batch=8" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=11:44" >> "$GITHUB_OUTPUT" ;;
-              '47 6 * * *') echo "batch=9" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=12:32" >> "$GITHUB_OUTPUT" ;;
-              '35 7 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=13:20" >> "$GITHUB_OUTPUT" ;;
-              '51 7 * * *'|'3 8 * * *'|'15 8 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=reconcile" >> "$GITHUB_OUTPUT"; echo "action=run" >> "$GITHUB_OUTPUT" ;;
-              '20 8 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=final-check" >> "$GITHUB_OUTPUT"; echo "action=check" >> "$GITHUB_OUTPUT" ;;
-              *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
-            esac
-            if [[ "${{ github.event.schedule }}" != "20 8 * * *" && "${{ github.event.schedule }}" != "51 7 * * *" && "${{ github.event.schedule }}" != "3 8 * * *" && "${{ github.event.schedule }}" != "15 8 * * *" ]]; then echo "action=run" >> "$GITHUB_OUTPUT"; fi
-          fi
-          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
-          runs_json="$(curl --fail --silent --show-error -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2026-03-10" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs?per_page=100&event=schedule")"
-          queued="$(printf '%s' "$runs_json" | jq '[.workflow_runs[] | select(.status=="queued" or .status=="waiting" or .status=="pending" or .status=="requested")] | length')"
-          active="$(printf '%s' "$runs_json" | jq '[.workflow_runs[] | select(.status=="in_progress")] | length')"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            scheduled_time="manual"
-          else
-            case "${{ github.event.schedule }}" in
-              '23 0 * * *') scheduled_time="06:08" ;;
-              '11 1 * * *') scheduled_time="06:56" ;;
-              '59 1 * * *') scheduled_time="07:44" ;;
-              '47 2 * * *') scheduled_time="08:32" ;;
-              '35 3 * * *') scheduled_time="09:20" ;;
-              '23 4 * * *') scheduled_time="10:08" ;;
-              '11 5 * * *') scheduled_time="10:56" ;;
-              '59 5 * * *') scheduled_time="11:44" ;;
-              '47 6 * * *') scheduled_time="12:32" ;;
-              '35 7 * * *') scheduled_time="13:20" ;;
-              *) scheduled_time="reconcile" ;;
+            case "$EVENT_SCHEDULE" in
+              '23 0 * * *') batch=1; local_time=06:08; action=run ;;
+              '11 1 * * *') batch=2; local_time=06:56; action=run ;;
+              '59 1 * * *') batch=3; local_time=07:44; action=run ;;
+              '47 2 * * *') batch=4; local_time=08:32; action=run ;;
+              '35 3 * * *') batch=5; local_time=09:20; action=run ;;
+              '23 4 * * *') batch=6; local_time=10:08; action=run ;;
+              '11 5 * * *') batch=7; local_time=10:56; action=run ;;
+              '59 5 * * *') batch=8; local_time=11:44; action=run ;;
+              '47 6 * * *') batch=9; local_time=12:32; action=run ;;
+              '35 7 * * *') batch=10; local_time=13:20; action=run ;;
+              '51 7 * * *') batch=10; local_time=reconcile; action=run ;;
+              '3 8 * * *') batch=10; local_time=reconcile; action=run ;;
+              '15 8 * * *') batch=10; local_time=reconcile; action=run ;;
+              '20 8 * * *') batch=10; local_time=final-check; action=check ;;
+              *) echo "Unknown schedule: $EVENT_SCHEDULE" >&2; exit 1 ;;
             esac
           fi
-          if [[ "$scheduled_time" == "manual" || "$scheduled_time" == "reconcile" ]]; then delay=0; else
-            delay="$(python3 - "$scheduled_time" <<'PY'
-import sys
-from datetime import datetime
-from zoneinfo import ZoneInfo
-scheduled=sys.argv[1]; now=datetime.now(ZoneInfo("Asia/Kathmandu"))
-target=datetime.combine(now.date(), datetime.strptime(scheduled,"%H:%M").time(), tzinfo=now.tzinfo)
-print(max(0,int((now-target).total_seconds())))
-PY
-)"
-          fi
-          if (( delay >= 600 || queued >= 8 || active >= 8 )); then load_class="HIGH_LOAD_SUSPECTED"
-          elif (( delay >= 180 || queued >= 3 || active >= 4 )); then load_class="DELAYED"
-          else load_class="NORMAL"; fi
-          echo "queued=$queued" >> "$GITHUB_OUTPUT"
-          echo "active=$active" >> "$GITHUB_OUTPUT"
-          echo "delay=$delay" >> "$GITHUB_OUTPUT"
-          echo "load_class=$load_class" >> "$GITHUB_OUTPUT"
-          echo "GitHub scheduler observation: delay=$delay s queued=$queued active=$active class=$load_class"
+          echo "batch=$batch" >> "$GITHUB_OUTPUT"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "scheduled_local_time=$local_time" >> "$GITHUB_OUTPUT"
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Request GitHub OIDC token
         id: oidc
         shell: bash
         run: |
           set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            -H 'Accept: application/json; api-version=2.0' \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
           token=$(printf '%s' "$response" | jq -r '.value')
           test -n "$token" && test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      - name: Wake Railway and run batch with application-level recovery
-        if: steps.select.outputs.action == 'run'
+      - name: Wake Railway and run batch
+        if: ${{ steps.select.outputs.action == 'run' }}
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
           BATCH: ${{ steps.select.outputs.batch }}
           SCHEDULED_LOCAL_TIME: ${{ steps.select.outputs.scheduled_local_time }}
           GH_STARTED_AT: ${{ steps.select.outputs.started_at }}
-          GH_DELAY: ${{ steps.select.outputs.delay }}
-          GH_QUEUED: ${{ steps.select.outputs.queued }}
-          GH_ACTIVE: ${{ steps.select.outputs.active }}
-          GH_LOAD_CLASS: ${{ steps.select.outputs.load_class }}
           GH_RUN_ID: ${{ github.run_id }}
-          GH_SCHEDULE: ${{ github.event.schedule || 'manual' }}
+          GH_SCHEDULE: ${{ github.event.schedule }}
         shell: bash
         run: |
           set -euo pipefail
-
-          # A scheduled trigger is only the transport layer. The Railway ledger is
-          # the source of truth and makes repeated attempts safe.
+          response_file=$(mktemp)
+          trap 'rm -f "$response_file"' EXIT
           for attempt in 1 2 3; do
             echo "Starting Amazon batch $BATCH, recovery attempt $attempt/3"
-
-            response_file=$(mktemp)
-            trap 'rm -f "$response_file"' EXIT
-
-            curl --fail --silent --show-error --no-buffer \
-              --connect-timeout 20 --max-time 2400 \
-              --retry 5 --retry-delay 10 --retry-max-time 120 \
-              --retry-all-errors \
-              -H "Authorization: Bearer $ID_TOKEN" \
-              -H 'Content-Type: application/json' \
-              -H "X-GitHub-Run-ID: $GH_RUN_ID" \
-              -H "X-GitHub-Schedule: $GH_SCHEDULE" \
-              -H "X-GitHub-Started-At: $GH_STARTED_AT" \
-              -H "X-GitHub-Scheduled-Local-Time: $SCHEDULED_LOCAL_TIME" \
-              -H "X-GitHub-Delay-Seconds: $GH_DELAY" \
-              -H "X-GitHub-Queued-Runs: $GH_QUEUED" \
-              -H "X-GitHub-Active-Runs: $GH_ACTIVE" \
-              -H "X-GitHub-Load-Class: $GH_LOAD_CLASS" \
-              -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch' \
-              --data "{\"batch\":$BATCH,\"scheduler_run_id\":\"$GH_RUN_ID\",\"scheduled_local_time\":\"$SCHEDULED_LOCAL_TIME\",\"github_delay_seconds\":$GH_DELAY,\"github_queued_runs\":$GH_QUEUED,\"github_active_runs\":$GH_ACTIVE,\"github_load_class\":\"$GH_LOAD_CLASS\"}" | tee "$response_file"
-
-            final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
-
-            case "$final_status" in
-              completed|already_completed)
-                echo "Amazon batch terminal status: $final_status"
-                exit 0
-                ;;
+            curl --fail --silent --show-error --no-buffer               --connect-timeout 20 --max-time 2400               --retry 5 --retry-delay 10 --retry-max-time 120 --retry-all-errors               -H "Authorization: Bearer $ID_TOKEN"               -H 'Content-Type: application/json'               -H "X-GitHub-Run-ID: $GH_RUN_ID"               -H "X-GitHub-Schedule: $GH_SCHEDULE"               -H "X-GitHub-Started-At: $GH_STARTED_AT"               -H "X-GitHub-Scheduled-Local-Time: $SCHEDULED_LOCAL_TIME"               -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch'               --data "{\"batch\":$BATCH,\"scheduler_run_id\":\"$GH_RUN_ID\",\"scheduled_local_time\":\"$SCHEDULED_LOCAL_TIME\"}" | tee "$response_file"
+            status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
+            case "$status" in
+              completed|already_completed) exit 0 ;;
               partial_failure|failed|blocked|busy)
-                echo "Amazon batch attempt $attempt returned: $final_status" >&2
-                if [[ "$attempt" -lt 3 ]]; then
-                  sleep 20
-                  continue
-                fi
-                echo "Amazon batch exhausted all in-run recovery attempts." >&2
-                exit 1
-                ;;
+                if [[ "$attempt" -lt 3 ]]; then sleep 20; continue; fi
+                exit 1 ;;
               *)
-                echo "Unknown or missing Amazon batch terminal status: ${final_status:-<empty>}" >&2
-                if [[ "$attempt" -lt 3 ]]; then
-                  sleep 20
-                  continue
-                fi
-                exit 1
-                ;;
+                if [[ "$attempt" -lt 3 ]]; then sleep 20; continue; fi
+                exit 1 ;;
             esac
           done
 
       - name: Final daily STARTED / NOT STARTED check
-        if: steps.select.outputs.action == 'check'
+        if: ${{ steps.select.outputs.action == 'check' }}
+        id: notification
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors \
-            --connect-timeout 20 --max-time 180 \
-            -H "Authorization: Bearer $ID_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -X POST 'https://web-production-dae68.up.railway.app/amazon/notification-check' \
-            -d '{}' | tee /tmp/notification-check.json
-          cat /tmp/notification-check.json
+          curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors             --connect-timeout 20 --max-time 180             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/amazon/notification-check'             -d '{}' | tee /tmp/notification-check.json
