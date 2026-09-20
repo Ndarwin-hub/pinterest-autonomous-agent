@@ -1,12 +1,12 @@
-"""Runtime wiring: priority-ranked image sourcing, AI guidance, recovery and 50-call cap."""
+"""Runtime wiring: zero-tolerance image sourcing, AI approval, recovery and 40-call cap."""
 from __future__ import annotations
 import contextvars, logging, re
 from typing import Any, Dict
 from board_org import detect_product_category, preferred_board_name, find_matching_board, DEFAULT_BOARD_NAME, LEGACY_BOARD_NAMES, LEGACY_BOARD_IDS
-from image_quality import choose_candidates, candidate_is_unique, reserve_candidate
+from image_quality import choose_candidates
 from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_API_KEY, OPENAI_API_KEY
 logger=logging.getLogger("pinterest-agent.wire")
-MAX_COMPOSIO_CALLS=50
+MAX_COMPOSIO_CALLS=40
 MAX_RECOVERY_ROUNDS=1
 # Five Pins x four targeted image-search queries = 20 calls. The old value of 18
 # starved the last Pins of the initial candidate pool under concurrent load.
@@ -35,8 +35,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 raise RuntimeError(f"Adaptive image-search budget exhausted ({MAX_IMAGE_SEARCH_CALLS} calls).")
             b.image_search_invocations+=1
         if slug=="GROK_CREATE_RESPONSE":
-            if b.grok_invocations>=1:
-                raise RuntimeError("Grok visual-review budget exhausted safely (one call per product).")
+            if b.grok_invocations>=10:
+                raise RuntimeError("Final Grok visual-review budget exhausted safely.")
             b.grok_invocations+=1
         b.reserve(slug)
         transport = getattr(agent_mod, "_composio_transport_executor", None)
@@ -126,11 +126,10 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 candidates=await choose_candidates(product,strategy,i,used,agent_mod)
                 if not candidates:
                     generated=await generate_image(product,strategy)
-                    if not generated:
-                        generated=agent_mod.pillow_card(product,strategy["key"])
+                    if not generated:raise RuntimeError(f"Pin {i}: no genuine high-quality image survived and no AI-generation fallback is configured.")
                     candidates=[generated]
                 best=candidates[0]
-                if best.get("url"):reserve_candidate(best,used)
+                if best.get("url"):used.add(best["url"])
                 resources.add(best.get("provider") or "unknown")
                 ref=best.get("url") or (f"data:image/jpeg;base64,{best['value']}" if best.get("value") else "")
                 if not ref:raise RuntimeError(f"Pin {i}: selected image has no usable media.")
@@ -140,7 +139,6 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 review_items=build_review_items(pins,product)
                 job_store.update(job_id,progress="AI visual review" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
                 review=await review_batch(review_items,composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
-                logger.info("AI review summary reviewer=%s status=%s approved=%s tool_failure=%s reason=%s",review.get("final_reviewer"),review.get("status"),review.get("approved_indexes"),review.get("tool_failure"),str(review.get("reason") or "")[:500])
                 failed=failed_indexes(review,len(pins))
                 # Partial approval is sufficient. A fifth rejected/missing Pin never blocks valid Pins.
                 if not failed or review.get("final_reviewer")=="deterministic":
@@ -152,44 +150,39 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     p=pins[idx-1]; pool=p.get("candidate_pool") or []; cursor=int(p.get("candidate_cursor") or 0); next_candidate=None
                     while cursor+1<len(pool):
                         cursor+=1; c=pool[cursor]; u=c.get("url")
-                        if candidate_is_unique(c,used):next_candidate=c;break
+                        if not u or u not in used:next_candidate=c;break
                     p["candidate_cursor"]=cursor
                     if not next_candidate and not refreshed and b.image_search_invocations+3<=MAX_IMAGE_SEARCH_CALLS:
                         extra=await choose_candidates(product,p["strategy"],idx,used,agent_mod); refreshed=True
                         if extra:
                             p["candidate_pool"]=(pool or [])+extra; pool=p["candidate_pool"]; cursor=int(p.get("candidate_cursor") or 0)
                             while cursor+1<len(pool):
-                                cursor+=1; c=pool[cursor]
-                                if candidate_is_unique(c,used):next_candidate=c;break
+                                cursor+=1; c=pool[cursor]; u=c.get("url")
+                                if not u or u not in used:next_candidate=c;break
                             p["candidate_cursor"]=cursor
                     if next_candidate:
                         old=p["image"]; old_url=old.get("url")
                         if old_url:used.discard(old_url)
-                        old_fp=old.get("_fingerprint")
-                        if old_fp:
-                            try:
-                                if isinstance(old_fp,str):a,d=old_fp.split(":",1);used.discard(f"__imgfp__:{a}:{d}")
-                                else:used.discard(f"__imgfp__:{int(old_fp[0]):016x}:{int(old_fp[1]):016x}")
-                            except Exception:pass
                         p["image"]=next_candidate
                         p["image_ref"]=next_candidate.get("url") or ("data:image/jpeg;base64,"+str(next_candidate.get("value") or ""))
                         p["candidate_count"]=len(p.get("candidate_pool") or [])
-                        reserve_candidate(next_candidate,used)
+                        if next_candidate.get("url"):used.add(next_candidate["url"])
                         resources.add(next_candidate.get("provider") or "unknown"); replaced+=1
                 if replaced==0:break
                 recovery_rounds+=1
             published=[]; errors=[]
-            # AI review is advisory only; technically usable candidates remain publishable.
+            approved_indexes=set(int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit())
             for p in pins:
+                if p["pin_number"] not in approved_indexes:
+                    errors.append({"pin_number":p["pin_number"],"error":"Rejected by visual quality reviewer; not published"})
+                    continue
                 s=p["seo"]; im=p["image"]
                 try:
-                    dest_url=(product.get("url") or product.get("affiliate_url") or url); r=await agent_mod.publish_and_verify(board_id=board_id,title=s["title"],description=s["description"],alt_text=s["alt_text"],image_mode=im.get("mode","url"),image_value=im.get("value") or im.get("url"),link=dest_url,job_store=job_store,job_id=job_id,pin_index=p["pin_number"],strategy_key=p["strategy"].get("key"))
+                    dest_url=(product.get("url") or product.get("affiliate_url") or url); r=await agent_mod.publish_and_verify(board_id,s["title"],s["description"],s["alt_text"],im.get("mode","url"),im.get("value") or im.get("url"),dest_url,job_store,job_id,p["pin_number"])
                     published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
-                except Exception as e:
-                    errors.append({"pin_number":p["pin_number"],"error":str(e)})
-                    logger.error("Pin %s publication failed: %s",p["pin_number"],e)
+                except Exception as e:errors.append({"pin_number":p["pin_number"],"error":str(e)})
             if not published:raise RuntimeError("No Pins were successfully published and verified.")
             return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":f"{len(published)}/5 Pins published and independently verified; successful Pins preserved and failed Pins reported."}
         finally:_call_budget.reset(token)
     agent_mod.run_composio_tool=budgeted_run; agent_mod.publish_and_verify=strict_publish; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
-    logger.info("Canonical image selection + perceptual diversity + soft quality ranking + fallback + adaptive recovery + 50-call budget + strict board routing/verification wiring applied")
+    logger.info("Zero-tolerance image sourcing + multi-angle comparison + adaptive recovery + 40-call budget + strict board routing/verification wiring applied")
