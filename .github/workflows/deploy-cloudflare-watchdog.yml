@@ -1,0 +1,29 @@
+name: Deploy Cloudflare Amazon Wake Watchdog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/desiredplus-amazon-wake-watchdog/**"
+      - ".github/workflows/deploy-cloudflare-watchdog.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cloudflare/desiredplus-amazon-wake-watchdog
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/desiredplus-amazon-wake-watchdog
+      - name: Configure Railway wake secret
+        run: |
+          echo "Worker deployed. RAILWAY_WAKE_SECRET must be configured as the Worker secret named RAILWAY_WAKE_SECRET."
