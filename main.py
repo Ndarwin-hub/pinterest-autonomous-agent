@@ -31,6 +31,7 @@ from amazon_client import amazon_credentials_present
 from batch_submit import prepare_batch_items, discover_n_products, MAX_BATCH, validate_and_canonicalize
 from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
+from amazon_watchdog import run as run_amazon_watchdog
 from amazon_boards import REQUIRED_PRIMARY_SLOTS
 from daily_ledger import ledger as daily_ledger
 import publication_guard
@@ -67,6 +68,8 @@ def extract_url(text:str)->str:
 async def lifespan(app:FastAPI):
  logger.info("Pinterest Autonomous Agent v3.9.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
  registration_task=None
+ watchdog_stop=asyncio.Event()
+ watchdog_task=None
  if MCP_PATH:registration_task=asyncio.create_task(register_custom_mcp_with_retry())
  startup_pin_count=int(os.getenv("PIN_COMMAND_ON_START","0") or "0")
  if startup_pin_count>0:
@@ -99,10 +102,16 @@ async def lifespan(app:FastAPI):
    if job.status.value in ("completed","completed_partial","failed"):return {"status":job.status.value,"error":job.error,"result":job.result}
   return {"status":"timeout"}
  app.state.amazon_enqueue=_enqueue_for_amazon;app.state.amazon_list_boards=_list_boards_for_amazon;app.state.amazon_wait_job=_wait_job
+ watchdog_task=asyncio.create_task(run_amazon_watchdog(_enqueue_for_amazon,_list_boards_for_amazon,_wait_job,watchdog_stop),name='amazon-all-batch-watchdog')
  await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)
  yield
  await amazon_scheduler.stop_daily_session()
  await amazon_scheduler.stop()
+ watchdog_stop.set()
+ if watchdog_task:
+  watchdog_task.cancel()
+  try:await watchdog_task
+  except asyncio.CancelledError:pass
  if registration_task:
   registration_task.cancel()
   try:await registration_task
