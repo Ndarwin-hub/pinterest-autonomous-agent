@@ -50,7 +50,7 @@ def verify_manual_oidc(authorization:Optional[str]=Header(None)):
  except Exception as e:logger.warning("GitHub OIDC manual-submit authentication failed: %s",type(e).__name__);raise HTTPException(status_code=401,detail="Invalid scheduler identity")
 
 def verify_batch_secret(authorization:Optional[str]=Header(None),x_scheduler_secret:Optional[str]=Header(None,alias="X-Scheduler-Secret")):
- if x_scheduler_secret and ((AMAZON_BATCH_SECRET and hmac.compare_digest(x_scheduler_secret,AMAZON_BATCH_SECRET)) or (API_SECRET and hmac.compare_digest(x_scheduler_secret,API_SECRET)) or (os.getenv("CLOUDFLARE_WAKE_SECRET","").strip() and hmac.compare_digest(x_scheduler_secret,os.getenv("CLOUDFLARE_WAKE_SECRET","").strip()))):return True
+ if x_scheduler_secret and ((AMAZON_BATCH_SECRET and hmac.compare_digest(x_scheduler_secret,AMAZON_BATCH_SECRET)) or (API_SECRET and hmac.compare_digest(x_scheduler_secret,API_SECRET))):return True
  if not authorization or not authorization.startswith("Bearer "):raise HTTPException(status_code=401,detail="Missing scheduler authentication")
  token=authorization.split(" ",1)[1].strip()
  try:
