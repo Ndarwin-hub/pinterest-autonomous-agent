@@ -18,5 +18,7 @@ UTC checkpoints:
 Each checkpoint has a 5-minute recovery window. Repeated wake requests are safe because
 Railway owns the daily ledger/session and rejects or reuses already-started work.
 
-The Worker secret `RAILWAY_WAKE_SECRET` must match the Railway environment variable
-`CLOUDFLARE_WAKE_SECRET`.
+The Worker secret `CLOUDFLARE_WAKE_SECRET` must match the Railway environment variable
+`CLOUDFLARE_WAKE_SECRET`. The Railway ledger remains the authoritative idempotency layer, so
+GitHub, Cloudflare, and Railway watchdogs can safely converge on the same batch without
+creating duplicate daily batch work.
