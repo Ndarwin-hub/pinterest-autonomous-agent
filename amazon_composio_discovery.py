@@ -85,7 +85,12 @@ async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
 async def discover_category(category:str,exclude_asins:Optional[Set[str]]=None)->Optional[Dict[str,Any]]:
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
  for q in CATEGORY_QUERIES.get(category,[category]):
-  try:candidates += [c for c in (_candidate(x,category) for x in await _search(q,1)) if c and c["asin"] not in excluded]
+  try:
+   for page in (1,2):
+    page_products=await _search(q,page)
+    page_candidates=[c for c in (_candidate(x,category) for x in page_products) if c and c["asin"] not in excluded]
+    candidates += page_candidates
+    if page_candidates: break
   except Exception as e:logger.warning("Composio Amazon search failed for %s: %s",category,e)
  return sorted(candidates,key=lambda x:(-x["score"],x["asin"]))[0] if candidates else None
 async def discover_fifteen(exclude_asins:Optional[Set[str]]=None)->List[Dict[str,Any]]:
