@@ -69,7 +69,7 @@ class DailyLedger:
             c.execute(f"UPDATE daily_status_notifications SET {claim_col}=?,updated_at=? WHERE day=? AND {notified_col} IS NULL AND {claim_col} IS NULL",(now,now,day)); ok = c.execute("SELECT changes()").fetchone()[0] == 1; c.commit(); c.close(); return ok
     def finish_daily_notification(self,day=None,kind="started",success=True):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
-        if kind not in ("started","not_started"): raise ValueError("kind must be started or not_started")
+        if kind not in ("started","not_started","failed"): raise ValueError("kind must be started, not_started or failed")
         claim_col=f"{kind}_claimed_at"; notified_col=f"{kind}_notified_at"
         with _lock:
             c=self._conn()
