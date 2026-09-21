@@ -231,9 +231,11 @@ async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
  day=daily_ledger.today_str()
  daily_ledger.record_scheduler_event(day=day,batch_requested=body.batch,scheduler_run_id=body.scheduler_run_id,scheduled_local_time=body.scheduled_local_time,github_delay_seconds=body.github_delay_seconds,github_queued_runs=body.github_queued_runs,github_active_runs=body.github_active_runs,github_load_class=body.github_load_class)
+ pin_a_source="cloudflare-compat" if (x_scheduler_secret and CLOUDFLARE_WAKE_SECRET and hmac.compare_digest(x_scheduler_secret,CLOUDFLARE_WAKE_SECRET)) else "legacy-scheduler"
+ logger.info("Pin A compatibility activation via existing /amazon/run-batch source=%s requested_batch=%s github_run=%s",pin_a_source,body.batch,body.scheduler_run_id)
  logger.info("Amazon wake trigger requested_batch=%s github_run=%s delay=%ss queued=%s active=%s load=%s",body.batch,body.scheduler_run_id,body.github_delay_seconds,body.github_queued_runs,body.github_active_runs,body.github_load_class)
  result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=body.batch)
- return {**result,"scheduler":"railway_owned_daily_session","github_trigger_batch":body.batch,"day":day,"message":"Railway owns the remaining daily batches after this successful wake; later GitHub triggers are idempotent backups."}
+ return {**result,"pin_a":True,"pin_a_source":pin_a_source,"scheduler":"railway_owned_daily_session","github_trigger_batch":body.batch,"day":day,"message":"Existing scheduler trigger also activates the Pin A layer; Railway owns the remaining daily batches and duplicate prevention."}
 @app.post("/amazon/notification-check")
 async def amazon_notification_check(_:bool=Depends(verify_batch_secret)):
     """Final reconciliation check: sends exactly one daily STARTED or NOT STARTED status notification."""
