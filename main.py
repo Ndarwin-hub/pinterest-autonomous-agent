@@ -86,10 +86,10 @@ async def lifespan(app:FastAPI):
    except Exception as exc:logger.exception("STARTUP PIN %s FAILED: %s",startup_pin_count,exc)
   asyncio.create_task(_run_startup_pin_command(),name=f"startup-pin-{startup_pin_count}")
  else:logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured") if not MCP_PATH else logger.info("MCP bridge enabled at configured protected endpoint")
- async def _enqueue_for_amazon(url:str):
+ async def _enqueue_for_amazon(url:str,target_board_id:str|None=None,target_board_name:str|None=None):
   class _BG:
    def add_task(self,fn,*args):asyncio.create_task(fn(*args))
-  r=await enqueue_job(url,_BG());return {"job_id":r.job_id,"status":r.status,"message":r.message}
+  r=await enqueue_job(url,_BG(),target_board_id=target_board_id,target_board_name=target_board_name);return {"job_id":r.job_id,"status":r.status,"message":r.message}
  async def _list_boards_for_amazon():
   try:
    data=await agent_module.run_composio_tool("PINTEREST_LIST_BOARDS",{});return data.get("items") or data.get("boards") or []
@@ -135,12 +135,12 @@ class BatchSubmitRequest(BaseModel):
 class DiscoverSubmitRequest(BaseModel):
  count:int=Field(...,ge=1,le=50,description="Number of distinct Amazon US products to discover and submit")
  exclude_asins:Optional[List[str]]=Field(default=None,description="Optional ASIN exclude list")
-async def enqueue_job(url_str:str,background_tasks:BackgroundTasks)->SubmitResponse:
+async def enqueue_job(url_str:str,background_tasks:BackgroundTasks,target_board_id:Optional[str]=None,target_board_name:Optional[str]=None)->SubmitResponse:
  async with _enqueue_lock:
   existing=job_store.find_by_url(url_str)
   if existing:return SubmitResponse(job_id=existing.job_id,status=existing.status.value,message="Existing job reused; duplicate Pinterest workflow was not started.")
   if not quota.reserve_job():raise HTTPException(status_code=429,detail={"message":"Monthly safe Pinterest capacity reached; job not started.","quota":quota.snapshot()})
-  job_id=str(uuid.uuid4());job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress="Job accepted — 5-pin workflow queued");job_store.save(job);background_tasks.add_task(run_job,job_id,url_str);return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}")
+  job_id=str(uuid.uuid4());job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress="Job accepted — 5-pin workflow queued",target_board_id=target_board_id,target_board_name=target_board_name);job_store.save(job);background_tasks.add_task(run_job,job_id,url_str);return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}")
 @app.get("/health")
 async def health():return {"status":"ok","service":"pinterest-autonomous-agent","version":"3.9.0","quality_patch_version":QUALITY_PATCH_VERSION,"mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
 @app.get("/quota")
@@ -334,7 +334,8 @@ async def root():return {"service":"Pinterest Autonomous Agent","version":"3.9.0
 async def run_job(job_id:str,url:str):
  try:
   job_store.update(job_id,status=JobStatus.RUNNING,progress="Starting 5-pin workflow")
-  result=await process_pinterest_job(job_id,url,job_store)
+  job=job_store.get(job_id)
+  result=await process_pinterest_job(job_id,url,job_store,target_board_id=(job.target_board_id if job else None),target_board_name=(job.target_board_name if job else None))
   quota.record_job(bool(result.get("pins_published")))
   result["quota"]=quota.snapshot()
   supervisor_status=str(result.get("pin_supervisor_status") or "")
