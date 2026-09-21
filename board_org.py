@@ -242,6 +242,8 @@ def detect_product_category(product: Dict[str, Any]) -> str:
     text = _text(product)
     name = _name_text(product)
     haystack = f"{name} {text}"
+    if re.search(r"\b(iphone|ipad|smartphone|android phone|cell phone|mobile phone|android tablet|tablet|galaxy s|galaxy note|galaxy tab|pixel phone|phone case|iphone case|ipad case|tablet case|screen protector|phone charger|phone charging cable|magsafe|phone holder|phone stand|tablet stand|apple pencil|tablet keyboard|tablet cover|phone battery|replacement phone screen)\b", haystack): return "smartphones_tablets"
+    if re.search(r"\b(desktop pc|desktop computer|personal computer|gaming pc|mini pc|laptop|notebook computer|chromebook|macbook|computer monitor|pc monitor|television|smart tv|led tv|oled tv|4k tv|8k tv|pc case|computer case|motherboard|graphics card|gpu|ram|memory module|ddr4|ddr5|ssd|nvme|hard drive|hdd|pcie|laptop ram|laptop ssd|docking station|laptop dock|computer power supply|power supply unit|psu|cpu cooler|computer keyboard|computer mouse|webcam for computer)\b", haystack): return "pc_tv"
     for category, terms in _FAMILY_RULES:
         for term in terms:
             if _has_term(haystack, term):
