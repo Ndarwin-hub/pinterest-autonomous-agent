@@ -14,6 +14,7 @@ LEGACY_BOARD_IDS = {"987906936951142945", "987906936951144580"}
 PERMANENT_BOARD_IDS = {
     "Automotive & Tools": "987906936951148022",
     "Books & Learning": "987906936951145056",
+    "Baby & Kids": "987906936951153816",
     "Electronics & Gadgets": "987906936951145057",
     "Everything Else": "987906936951147704",
     "Fashion & Lifestyle": "987906936951147683",
