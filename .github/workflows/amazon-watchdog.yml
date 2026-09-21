@@ -1,26 +1,33 @@
 name: Amazon schedule watchdog
 on:
   schedule:
-    - cron: '10 7 * * *'
-      timezone: 'America/New_York'
-    - cron: '50 8 * * *'
-      timezone: 'America/New_York'
-    - cron: '30 10 * * *'
-      timezone: 'America/New_York'
+    - cron: '23 0 * * *'
+    - cron: '11 1 * * *'
+    - cron: '59 1 * * *'
+    - cron: '47 2 * * *'
+    - cron: '35 3 * * *'
+    - cron: '23 4 * * *'
+    - cron: '11 5 * * *'
+    - cron: '59 5 * * *'
+    - cron: '47 6 * * *'
+    - cron: '35 7 * * *'
   workflow_dispatch:
     inputs:
       batch:
         description: 'Batch to verify/recover'
         required: true
         type: choice
-        options: ['1','2','3']
+        options: ['1','2','3','4','5','6','7','8','9','10']
 permissions:
   contents: read
   id-token: write
+concurrency:
+  group: amazon-schedule-watchdog
+  cancel-in-progress: false
 jobs:
   watchdog:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - name: Select expected batch
         id: select
@@ -29,28 +36,33 @@ jobs:
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event.schedule }}" == "10 7 * * *" ]]; then
-            echo "batch=1" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event.schedule }}" == "50 8 * * *" ]]; then
-            echo "batch=2" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event.schedule }}" == "30 10 * * *" ]]; then
-            echo "batch=3" >> "$GITHUB_OUTPUT"
           else
-            echo 'Unknown schedule' >&2; exit 1
+            case "${{ github.event.schedule }}" in
+              '23 0 * * *') echo "batch=1" >> "$GITHUB_OUTPUT" ;;
+              '11 1 * * *') echo "batch=2" >> "$GITHUB_OUTPUT" ;;
+              '59 1 * * *') echo "batch=3" >> "$GITHUB_OUTPUT" ;;
+              '47 2 * * *') echo "batch=4" >> "$GITHUB_OUTPUT" ;;
+              '35 3 * * *') echo "batch=5" >> "$GITHUB_OUTPUT" ;;
+              '23 4 * * *') echo "batch=6" >> "$GITHUB_OUTPUT" ;;
+              '11 5 * * *') echo "batch=7" >> "$GITHUB_OUTPUT" ;;
+              '59 5 * * *') echo "batch=8" >> "$GITHUB_OUTPUT" ;;
+              '47 6 * * *') echo "batch=9" >> "$GITHUB_OUTPUT" ;;
+              '35 7 * * *') echo "batch=10" >> "$GITHUB_OUTPUT" ;;
+              *) echo 'Unknown schedule' >&2; exit 1 ;;
+            esac
           fi
+
       - name: Request GitHub OIDC token
         id: oidc
         shell: bash
         run: |
           set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            -H 'Accept: application/json; api-version=2.0' \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
           token=$(printf '%s' "$response" | jq -r '.value')
           test -n "$token" && test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"
-      - name: Verify or recover expected batch
+
+      - name: Wake/check Railway scheduler
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
           BATCH: ${{ steps.select.outputs.batch }}
@@ -59,23 +71,14 @@ jobs:
           set -euo pipefail
           response_file=$(mktemp)
           trap 'rm -f "$response_file"' EXIT
-          curl --fail --silent --show-error --no-buffer \
-            --connect-timeout 20 --max-time 2400 \
-            --retry 5 --retry-delay 10 --retry-max-time 120 --retry-all-errors \
-            -H "Authorization: Bearer $ID_TOKEN" -H 'Content-Type: application/json' \
-            -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch' \
-            --data "{\"batch\":$BATCH}" | tee "$response_file"
+          curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 6 --retry-delay 10 --retry-max-time 180 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch'             --data "{"batch":$BATCH}" | tee "$response_file"
           final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
           case "$final_status" in
-            completed|running)
-              echo "Watchdog status: $final_status"
-              ;;
-            failed|partial_failure|blocked|busy|dormant)
-              echo "Watchdog detected unhealthy batch status: $final_status" >&2
-              exit 1
+            session_started|already_running|completed|already_completed|running)
+              echo "Watchdog trigger accepted: $final_status"
               ;;
             *)
-              echo "Unknown or missing watchdog status: ${final_status:-<empty>}" >&2
+              echo "Watchdog trigger failed or returned unknown status: ${final_status:-<empty>}" >&2
               exit 1
               ;;
           esac
