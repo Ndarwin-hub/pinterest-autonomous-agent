@@ -116,7 +116,7 @@ class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate 
 class SubmitResponse(BaseModel):job_id:str;status:str;message:str
 class StatusResponse(BaseModel):job_id:str;status:str;progress:Optional[str]=None;result:Optional[Dict[str,Any]]=None;error:Optional[str]=None;created_at:str;updated_at:str
 class BatchRequest(BaseModel):
- batch:int=Field(...,ge=1,le=10)
+ batch:int=Field(1,ge=1,le=10)
  scheduler_run_id:Optional[str]=None
  scheduled_local_time:Optional[str]=None
  github_delay_seconds:int=0
