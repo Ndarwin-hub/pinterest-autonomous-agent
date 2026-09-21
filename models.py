@@ -33,7 +33,7 @@ class JobStore:
   try:
    c=self._connect(); r=c.execute("SELECT job_id,url,status,progress,result,error,created_at,updated_at,target_board_id,target_board_name FROM jobs WHERE job_id=?",(job_id,)).fetchone(); c.close()
    if not r:return None
-   j=Job(r[0],r[1],JobStatus(r[2]),r[3],json.loads(r[4]) if r[4] else None,r[5],r[6],r[7],r[8],r[9]); self._memory[job_id]=j; return j
+   j=Job(job_id=r[0],url=r[1],status=JobStatus(r[2]),progress=r[3],result=json.loads(r[4]) if r[4] else None,error=r[5],created_at=r[6],updated_at=r[7],target_board_id=r[8],target_board_name=r[9]); self._memory[job_id]=j; return j
   except Exception as e: print(f"JobStore get warning: {e}"); return self._memory.get(job_id)
  def find_by_url(self,url:str,completed_within_hours:int=24):
   key=normalize_url(url)
