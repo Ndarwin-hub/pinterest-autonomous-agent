@@ -141,31 +141,12 @@ async def _composio_grok_batch(items:List[Dict[str,Any]],run_tool:Callable[[str,
         return None
 
 async def review_batch(items:List[Dict[str,Any]], composio_run:Optional[Callable[[str,Dict[str,Any],int],Awaitable[Dict[str,Any]]]]=None)->Dict[str,Any]:
-    # Priority: OpenAI/ChatGPT-compatible reviewer, then Grok, then Gemini.
-    if OPENAI_API_KEY:
-        primary=await asyncio.gather(*(_openai_one(x) for x in items))
-        if all(x is not None for x in primary):
-            approved=[i+1 for i,x in enumerate(primary) if bool(x.get("approved")) or int(x.get("score",0))>0]
-            return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"openai_chatgpt","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"OpenAI/ChatGPT-compatible visual review completed.","openai":primary}
-    if composio_run is not None and not XAI_API_KEY:
-        grok=await _composio_grok_batch(items,composio_run)
-        if isinstance(grok,dict):
-            scores=grok.get("scores") or {}
-            approved=[int(i) for i in (grok.get("approved_indexes") or []) if str(i).isdigit()]
-            approved=[i for i in approved if 1<=i<=len(items)]
-            return {"approved":len(approved)==len(items),"approved_indexes":approved,"scores":scores,"final_reviewer":"grok_composio","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Connected Composio Grok visual review completed in one batch call.","grok":grok,"advisory":True}
-    if XAI_API_KEY:
-        grok=await asyncio.gather(*(_grok_one(x) for x in items))
-        if all(x is not None for x in grok):
-            approved=[i+1 for i,x in enumerate(grok) if bool(x.get("approved")) or int(x.get("score",0))>0]
-            return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"grok","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Direct Grok visual review completed.","grok":grok}
-    gem=await _gemini(items)
-    if isinstance(gem,dict):
-        approved=[int(x) for x in gem.get("approved_indexes",[]) if str(x).isdigit()]
-        scores=gem.get("scores") or {}
-        approved=[i for i in approved if int(scores.get(str(i),0))>0]
-        return {"approved":len(approved)==len(items),"approved_indexes":approved,"final_reviewer":"gemini","status":"AI_REVIEW_PASSED" if len(approved)==len(items) else "AI_REVIEW_PARTIAL","tool_failure":False,"reason":"Gemini visual review completed.","gemini":gem}
-    # No reviewer: do not wait or loop; use the existing deterministic image safety gates.
+    """Internal-only review path.
+
+    External visual reviewers are intentionally disabled. Existing local image
+    quality selection, deterministic technical validation, duplicate detection,
+    and publication verification remain authoritative.
+    """
     return await deterministic_review(items)
 
 async def _gemini(items:List[Dict[str,Any]])->Optional[Dict[str,Any]]:
