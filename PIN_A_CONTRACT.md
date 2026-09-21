@@ -1,18 +1,29 @@
 # Pin A Universal Trigger Contract
 
-Pin A is a platform-independent trigger/wake layer implemented through GitHub for the current deployment.
+Pin A is a platform-independent trigger/wake layer. Existing scheduled mechanisms remain in place and may activate Pin A at their normal scheduled times. Pin A can also be invoked independently on demand.
 
-## Purpose
+## Trigger sources
 
-A caller sends one Pin A request. GitHub Actions forwards it to the existing Railway Amazon scheduler. Railway remains the owner of the daily ledger and decides whether the 10-batch automation session is allowed to start.
+Pin A accepts authorized requests from any caller that can satisfy the authentication contract. The caller source is metadata, not a hard-coded allow-list. Examples include:
 
-Pin A does not select individual batches and does not bypass /submit.
+- GitHub / GitHub Actions / GitHub Cron
+- Railway Cron
+- Cloudflare Watchdog
+- Composio
+- ChatGPT, Claude, Grok, Gemini, or other AI agents
+- Future automation platforms
+- Authorized manual/API callers
 
-## Contract
+## Current transport
 
-Logical operation: Pin A
+The canonical Railway endpoint is:
 
-Current transport: GitHub Actions workflow_dispatch, with repository_dispatch reserved for future compatible authentication.
+POST /pin-a
+
+Authentication:
+- X-Pin-A-Secret using an authorized configured scheduler/API secret, or
+- X-Scheduler-Secret using an authorized configured scheduler/API secret, or
+- GitHub Actions OIDC from the authorized repository/main branch for schedule/workflow_dispatch.
 
 Informational headers:
 - X-Pin-A-Source
@@ -20,19 +31,30 @@ Informational headers:
 - X-Pin-A-GitHub-Run-ID
 - X-Pin-A-Event
 
-The source value is informational. Pin A does not maintain a hard-coded source allow-list.
+## Scheduled behavior
 
-## Semantics
+Existing scheduled mechanisms are not replaced. A scheduled trigger continues performing its existing action and also activates Pin A.
 
-One accepted Pin A wake starts the existing Railway daily-session mechanism. That mechanism owns the 10 batches and the daily ledger.
+Current GitHub scheduled Amazon triggers now call Pin A and then continue into the existing /amazon/run-batch path.
 
-Repeated Pin A calls are safe:
-- running cycle -> no second cycle
-- completed cycle -> no restart
-- eligible new cycle -> one new cycle
+Current Railway Cron now calls Pin A and then continues into the existing /amazon/run-batch path.
 
-The existing /submit, Pin [number], image-selection, and other automation paths remain separate.
+Both calls are intentionally idempotent because Railway's scheduler/ledger remains the execution authority.
+
+## Independent manual behavior
+
+Pin A can be invoked at any time without waiting for a scheduled trigger. The GitHub Pin A workflow provides a manual workflow_dispatch entry point, and the Railway /pin-a endpoint provides the stable platform-independent API contract for other authorized callers.
+
+## Execution ownership
+
+Pin A does not own individual batch selection or replace the existing scheduler.
+
+One accepted Pin A wake asks the existing Railway scheduler to start/wake the daily automation session. The Railway scheduler and daily ledger remain the source of truth for which batches are due and for duplicate prevention.
+
+If several scheduled or manual sources trigger Pin A close together, they must converge on the same Railway scheduler session rather than create competing sessions.
+
+The existing /submit workflow, Pin [number], image-selection system, and other automation paths remain separate.
 
 ## Portability
 
-The caller-facing operation is named Pin A rather than being tied to GitHub-specific batch numbers. GitHub is the current transport layer only. A future Railway-native Pin A endpoint can implement the same contract without changing callers.
+Callers should depend on the Pin A logical operation and contract, not on GitHub-specific batch semantics. The layer can therefore be moved or exposed directly from Railway without redesigning the callers.
