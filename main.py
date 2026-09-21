@@ -238,13 +238,15 @@ async def amazon_run_batch(body:BatchRequest,x_scheduler_secret:Optional[str]=He
  return {**result,"pin_a":True,"pin_a_source":pin_a_source,"scheduler":"railway_owned_daily_session","github_trigger_batch":body.batch,"day":day,"message":"Existing scheduler trigger also activates the Pin A layer; Railway owns the remaining daily batches and duplicate prevention."}
 @app.post("/amazon/notification-check")
 async def amazon_notification_check(_:bool=Depends(verify_batch_secret)):
-    """Final reconciliation check: sends exactly one daily STARTED or NOT STARTED status notification."""
+    """Final reconciliation check: sends exactly one daily STARTED, NOT STARTED, or FAILED status notification."""
     day=daily_ledger.today_str()
-    from amazon_alerts import notify_daily_started,notify_daily_not_started
+    from amazon_alerts import notify_daily_started,notify_daily_not_started,notify_daily_failed
     state=daily_ledger.daily_status_state(day)
     if state.get("started"):
-        await notify_daily_started(day,int(state.get("started_trigger_batch") or 0),state.get("started_scheduled_local_time"))
-        return {"status":"already_started","day":day,"notification":"started"}
+        if daily_ledger.is_day_complete(day):
+            return {"status":"complete","day":day,"notification":"none"}
+        await notify_daily_failed(day)
+        return {"status":"failed","day":day,"notification":"failed"}
     await notify_daily_not_started(day)
     return {"status":"not_started","day":day,"notification":"not_started"}
 
