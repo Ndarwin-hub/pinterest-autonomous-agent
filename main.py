@@ -334,8 +334,7 @@ async def root():return {"service":"Pinterest Autonomous Agent","version":"3.9.0
 async def run_job(job_id:str,url:str):
  try:
   job_store.update(job_id,status=JobStatus.RUNNING,progress="Starting 5-pin workflow")
-  job=job_store.get(job_id)
-  result=await process_pinterest_job(job_id,url,job_store,target_board_id=(job.target_board_id if job else None),target_board_name=(job.target_board_name if job else None))
+  result=await process_pinterest_job(job_id,url,job_store)
   quota.record_job(bool(result.get("pins_published")))
   result["quota"]=quota.snapshot()
   supervisor_status=str(result.get("pin_supervisor_status") or "")
