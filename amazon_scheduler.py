@@ -121,7 +121,7 @@ class AmazonScheduler:
   specs,_=build_slot_specs(live)
   if not specs:
    await send_failure_alert(batch=batch_index,reason="daily slot configuration unavailable");return {"status":"blocked","batch":batch_index,"reason":"daily slot configuration unavailable"}
-  day=ledger.ensure_day(slots_spec=specs);ledger.reclaim_stale_processing(day);owner=f"batch-{batch_index}-{uuid.uuid4().hex}";claim=ledger.try_begin_batch(day,batch_index,owner);wait_cycles=0
+  day=ledger.ensure_day(slots_spec=specs);ledger.reclaim_stale_processing(day);logger.info("Amazon batch %s slot states=%s",batch_index,[(s.get("slot"),s.get("status")) for s in ledger.get_day_status(day).get("slots",[]) if int(s.get("slot") or 0) >= (batch_index-1)*BATCH_SIZE+1 and int(s.get("slot") or 0) <= batch_index*BATCH_SIZE]);owner=f"batch-{batch_index}-{uuid.uuid4().hex}";claim=ledger.try_begin_batch(day,batch_index,owner);wait_cycles=0
   while not claim["acquired"] and claim.get("status")=="busy" and wait_cycles<160:
    await asyncio.sleep(15);wait_cycles+=1;claim=ledger.try_begin_batch(day,batch_index,owner)
   if not claim["acquired"]:
