@@ -11,9 +11,13 @@ class DailyLedger:
     def _init(self):
         with _lock:
             c=self._conn(); c.execute("CREATE TABLE IF NOT EXISTS daily_days(day TEXT PRIMARY KEY,status TEXT NOT NULL,success_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_slots(day TEXT NOT NULL,slot INTEGER NOT NULL,target_board_name TEXT,target_board_id TEXT,slot_kind TEXT NOT NULL,status TEXT NOT NULL,selected_asin TEXT,selected_url TEXT,affiliate_url TEXT,replacement_attempts INTEGER NOT NULL DEFAULT 0,job_id TEXT,pinterest_verified INTEGER DEFAULT 0,error TEXT,completed_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,slot))"); c.execute("CREATE TABLE IF NOT EXISTS batch_runs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,started_at TEXT,completed_at TEXT,result_json TEXT,error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,batch_index))")
-            c.execute("CREATE TABLE IF NOT EXISTS scheduler_events(id INTEGER PRIMARY KEY AUTOINCREMENT,day TEXT NOT NULL,batch_requested INTEGER,scheduler_run_id TEXT,scheduled_local_time TEXT,github_delay_seconds INTEGER,github_queued_runs INTEGER,github_active_runs INTEGER,github_load_class TEXT,received_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_status_notifications(day TEXT PRIMARY KEY,started_at TEXT,started_trigger_batch INTEGER,started_scheduled_local_time TEXT,started_claimed_at TEXT,started_notified_at TEXT,not_started_claimed_at TEXT,not_started_notified_at TEXT,failed_claimed_at TEXT,failed_notified_at TEXT,updated_at TEXT NOT NULL)"); for col in ("failed_claimed_at","failed_notified_at"):
-                try: c.execute(f"ALTER TABLE daily_status_notifications ADD COLUMN {col} TEXT")
-                except sqlite3.OperationalError: pass
+            c.execute("CREATE TABLE IF NOT EXISTS scheduler_events(id INTEGER PRIMARY KEY AUTOINCREMENT,day TEXT NOT NULL,batch_requested INTEGER,scheduler_run_id TEXT,scheduled_local_time TEXT,github_delay_seconds INTEGER,github_queued_runs INTEGER,github_active_runs INTEGER,github_load_class TEXT,received_at TEXT NOT NULL)")
+            c.execute("CREATE TABLE IF NOT EXISTS daily_status_notifications(day TEXT PRIMARY KEY,started_at TEXT,started_trigger_batch INTEGER,started_scheduled_local_time TEXT,started_claimed_at TEXT,started_notified_at TEXT,not_started_claimed_at TEXT,not_started_notified_at TEXT,failed_claimed_at TEXT,failed_notified_at TEXT,updated_at TEXT NOT NULL)")
+            for col in ("failed_claimed_at","failed_notified_at"):
+                try:
+                    c.execute(f"ALTER TABLE daily_status_notifications ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError:
+                    pass
             c.commit(); c.close()
     @staticmethod
     def today_str(): return date.today().isoformat()
