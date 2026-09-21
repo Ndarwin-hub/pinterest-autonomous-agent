@@ -79,8 +79,8 @@ async def _openai_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
         return None
 
 async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
-    """Fast local safety gate used immediately when no AI reviewer is executable."""
-    approved=[]; scores={}; reasons=[]; seen=set()
+    """Advisory technical validation; image selection/deduplication remains authoritative."""
+    approved=[]; scores={}; reasons=[]
     for i,item in enumerate(items,1):
         meta=item.get("metadata") or {}; ref=item.get("image_ref") or ""
         dims=meta.get("dimensions") or []
@@ -94,8 +94,7 @@ async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
         dimensions_known = w > 0 and h > 0
         aspect_ok = (max(w,h) / max(1,min(w,h)) <= 4.0) if dimensions_known else True
         size_ok = (w >= 100 and h >= 100) if dimensions_known else True
-        ok=bool(ref) and ref not in seen and size_ok and aspect_ok
-        if ref: seen.add(ref)
+        ok=bool(ref) and size_ok and aspect_ok
         scores[str(i)]=score
         if ok: approved.append(i)
         else: reasons.append(f"Pin {i} failed deterministic image safety checks")
