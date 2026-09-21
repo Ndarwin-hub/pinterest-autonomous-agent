@@ -96,7 +96,11 @@ def _deterministic_validate(items:List[Dict[str,Any]])->Dict[str,Any]:
 def install(wire_module:Any,quality_module:Any)->None:
     original=wire_module.review_batch
     async def review_batch(items:List[Dict[str,Any]],composio_run=None):
-        result=await original(items,composio_run=composio_run)
+        result=await original(items,composio_run=None)
+        # Internal deterministic review is authoritative. No external visual reviewer
+        # (Grok, Gemini, OpenAI, or any other provider) is invoked.
+        if result.get("final_reviewer")=="deterministic":
+            return result
         if result.get("approved"):return result
         # A genuine AI rejection remains a hard stop; only tool-unavailable states fail over.
         if result.get("status")=="AI_REVIEW_REJECTED" or (result.get("tool_failure") is False and result.get("final_reviewer") not in {"grok_composio","none","deterministic"}):
