@@ -661,7 +661,7 @@ async def publish_and_verify(
     }
 
 
-async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> Dict[str, Any]:
+async def process_pinterest_job(job_id: str, url: str, job_store: JobStore, target_board_id: str | None = None, target_board_name: str | None = None) -> Dict[str, Any]:
     logger.info(f"[{job_id}] Start URL={url}")
     url = url.strip()
     m = re.search(r"https?://\S+", url)
@@ -675,7 +675,10 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
 
     product = await research_product(url, job_store, job_id)
     seo_list = build_five_seo(product)
-    board_id = await select_or_create_board(product, job_store, job_id)
+    board_id = target_board_id or await select_or_create_board(product, job_store, job_id)
+    if target_board_id:
+        product["target_board_name"] = target_board_name or ""
+        job_store.update(job_id, progress=f"Using exact scheduled board: {target_board_name or target_board_id}")
 
     used_urls: set = set()
     published: List[Dict[str, Any]] = []
