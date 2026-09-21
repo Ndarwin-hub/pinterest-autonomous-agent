@@ -70,6 +70,12 @@ async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
   data=await composio_router_search_amazon(query,domain,page)
   if isinstance(data,dict) and isinstance(data.get("data"),dict): data=data["data"]
   products=list(data.get("products") or []) if isinstance(data,dict) else []
+  if not products and isinstance(data,dict):
+   for item in (data.get("results") or []):
+    response=item.get("response") if isinstance(item,dict) else None
+    payload=response.get("data") if isinstance(response,dict) else None
+    if isinstance(payload,dict):
+     products.extend(payload.get("products") or [])
   for p in products:
    if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
   return products
