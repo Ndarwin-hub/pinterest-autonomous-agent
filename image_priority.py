@@ -24,6 +24,8 @@ import io
 import os
 from typing import Any, Dict, List, Set
 
+from image_fingerprint import attach_fingerprint, diversity_bonus, is_near_duplicate
+
 import httpx
 
 TARGET_W, TARGET_H = 2160, 3840
@@ -165,16 +167,20 @@ async def _verify_candidates(candidates: List[Dict[str, Any]], used_urls: Set[st
             continue
         item = dict(c)
         item["width"], item["height"], item["_data"] = w, h, data
+        item = attach_fingerprint(item, data)
         verified.append(item)
         seen.add(url)
     return verified
 
 
-def _best(items: List[Dict[str, Any]], minimum_tier: int = 0) -> Dict[str, Any] | None:
+def _best(items: List[Dict[str, Any]], minimum_tier: int = 0, previous: List[Dict[str, Any]] | None = None) -> Dict[str, Any] | None:
     eligible = [x for x in items if _native_tier(x) >= minimum_tier]
     if not eligible:
         return None
-    return max(eligible, key=lambda x: (_pixels(x), _provider_rank(x.get("provider", ""))))
+    previous = previous or []
+    fresh = [x for x in eligible if not is_near_duplicate(x, previous)]
+    pool = fresh or eligible
+    return max(pool, key=lambda x: (diversity_bonus(x, previous), _native_tier(x), _pixels(x), _provider_rank(x.get("provider", ""))))
 
 
 def _to_4k(data: bytes) -> str | None:
@@ -210,6 +216,11 @@ async def _try_existing_ai(agent: Any, product: Dict[str, Any], strategy: Dict[s
 
 
 async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], pin_index: int, job_store: Any, job_id: str, used_urls: Set[str], agent: Any) -> Dict[str, Any]:
+    history = getattr(agent, "_pin_image_fingerprints", None)
+    if history is None:
+        history = {}
+        setattr(agent, "_pin_image_fingerprints", history)
+    previous = history.setdefault(job_id, [])
     job_store.update(job_id, progress=f"Pin {pin_index}/5: Composio 8K/4K image priority ({strategy['name']})")
     name = product.get("name") or "product"
     query = f"{name} {strategy['focus']}"[:160]
@@ -221,13 +232,15 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         if any(_native_tier(x) >= 4 for x in await _verify_candidates(composio, used_urls)):
             break
     composio_verified = await _verify_candidates(composio, used_urls)
-    best_8k = _best(composio_verified, 4)
+    best_8k = _best(composio_verified, 4, previous)
     if best_8k:
         used_urls.add(best_8k["url"])
+        if best_8k.get("_fingerprint"): previous.append(best_8k["_fingerprint"])
         return {"mode": "url", "value": best_8k["url"], "provider": "composio_search_image", "id": best_8k.get("id"), "score": 100, "license": best_8k.get("license"), "resolution_tier": "8K+"}
-    best_4k = _best(composio_verified, 3)
+    best_4k = _best(composio_verified, 3, previous)
     if best_4k:
         used_urls.add(best_4k["url"])
+        if best_4k.get("_fingerprint"): previous.append(best_4k["_fingerprint"])
         return {"mode": "url", "value": best_4k["url"], "provider": "composio_search_image", "id": best_4k.get("id"), "score": 98, "license": best_4k.get("license"), "resolution_tier": "4K+"}
 
     # PRIORITY 3: other genuinely executable external image providers.
@@ -240,9 +253,10 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         pass
     other.extend(await _configured_stock(query))
     other_verified = await _verify_candidates(other, used_urls)
-    best_other = _best(other_verified, 3) or _best(other_verified, 2)
+    best_other = _best(other_verified, 3, previous) or _best(other_verified, 2, previous)
     if best_other:
         used_urls.add(best_other["url"])
+        if best_other.get("_fingerprint"): previous.append(best_other["_fingerprint"])
         return {"mode": "url", "value": best_other["url"], "provider": best_other.get("provider"), "id": best_other.get("id"), "score": 94 if _native_tier(best_other) >= 3 else 88, "license": best_other.get("license"), "resolution_tier": "4K+" if _native_tier(best_other) >= 3 else "high-res"}
 
     # PRIORITY 4: executable AI image path, if actually present.
@@ -259,6 +273,7 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
             b64 = _to_4k(data)
             if b64:
                 used_urls.add(source["url"])
+                if source.get("_fingerprint"): previous.append(source["_fingerprint"])
                 return {"mode": "base64", "value": b64, "provider": f"{source.get('provider')}_4k_upscale", "id": source.get("id"), "score": 86, "license": source.get("license"), "resolution_tier": "4K_upscaled"}
 
     # PRIORITY 6: native product-page imagery, only after priorities 1-5 fail.
@@ -269,9 +284,10 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         w, h, data = await _probe_dimensions(url)
         if w and h:
             native.append({"url": url, "provider": "product_page", "width": w, "height": h, "_data": data, "license": "product_page"})
-    native_best = _best(native, 0)
+    native_best = _best(native, 0, previous)
     if native_best:
         used_urls.add(native_best["url"])
+        if native_best.get("_fingerprint"): previous.append(native_best["_fingerprint"])
         tier = _native_tier(native_best)
         return {"mode": "url", "value": native_best["url"], "provider": "product_page", "score": 80, "license": "product_page", "resolution_tier": "native" if tier < 3 else ("8K+" if tier == 4 else "4K+")}
 
