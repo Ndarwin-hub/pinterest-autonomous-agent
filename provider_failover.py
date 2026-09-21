@@ -101,7 +101,7 @@ def install(wire_module:Any,quality_module:Any)->None:
         result=await original(items,composio_run=composio_run)
         if result.get("approved"):return result
         # A genuine AI rejection remains a hard stop; only tool-unavailable states fail over.
-        if result.get("status")=="AI_REVIEW_REJECTED" or (result.get("tool_failure") is False and result.get("final_reviewer") not in {"grok_composio","none"}):
+        if result.get("status")=="AI_REVIEW_REJECTED" or (result.get("tool_failure") is False and result.get("final_reviewer") not in {"grok_composio","none","deterministic"}):
             return result
         if composio_run is not None and result.get("final_reviewer") in {"grok_composio","none"}:
             gem=await asyncio.gather(*(_gemini_composio_one(x,composio_run) for x in items))
