@@ -23,15 +23,34 @@ BOARD_SCOPES={
 }
 
 def ordered_primary_boards(live_items:List[Dict[str,Any]])->List[Dict[str,Any]]:
-    by_name={str(b.get("name") or "").strip():dict(b) for b in live_items if str(b.get("id") or "") and str(b.get("name") or "").strip()}
-    # Pinterest's board-list feed is the live serial source. Newly-created boards
-    # may take time to appear in that feed, so canonical configured boards are
-    # merged temporarily and sorted by the same A-Z board presentation order.
+    live=[]
+    seen=set()
+    for b in live_items:
+        name=str(b.get("name") or "").strip()
+        bid=str(b.get("id") or "")
+        if not name or not bid or name not in BOARD_SCOPES or name==DEFAULT_BOARD_NAME:
+            continue
+        if bid in LEGACY_BOARD_IDS or name in LEGACY_BOARD_NAMES or bid in seen:
+            continue
+        seen.add(bid)
+        live.append(dict(b))
+    # Preserve the exact order returned by Pinterest for boards that are live.
+    # If a just-created board is temporarily absent from the list index, insert it
+    # at the position implied by the current A-Z board list; once Pinterest returns
+    # it, its live position becomes authoritative automatically.
+    missing=[]
+    live_names={str(b.get("name") or "").strip() for b in live}
     for name,bid in PERMANENT_BOARD_IDS.items():
-        if name!=DEFAULT_BOARD_NAME and name not in by_name:
-            by_name[name]={"id":bid,"name":name,"_fresh_configured":True}
-    boards=[b for name,b in by_name.items() if name in BOARD_SCOPES and name!=DEFAULT_BOARD_NAME and str(b.get("id") or "") not in LEGACY_BOARD_IDS and name not in LEGACY_BOARD_NAMES]
-    return sorted(boards,key=lambda b:(str(b.get("name") or "").casefold(),str(b.get("id") or "")))
+        if name!=DEFAULT_BOARD_NAME and name in BOARD_SCOPES and name not in live_names:
+            missing.append({"id":bid,"name":name,"_fresh_configured":True})
+    for fresh in sorted(missing,key=lambda x:x["name"].casefold()):
+        pos=len(live)
+        for i,current in enumerate(live):
+            if fresh["name"].casefold() < str(current.get("name") or "").casefold():
+                pos=i
+                break
+        live.insert(pos,fresh)
+    return live
 
 CATEGORY_SLOTS=[]
 BOARD_SEARCH_PROFILES={name:{"keywords":[scope]} for name,scope in BOARD_SCOPES.items()}
