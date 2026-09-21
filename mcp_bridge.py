@@ -75,23 +75,27 @@ async def ensure_composio_router_session()->Dict[str,Any]:
   try:
    session=await _composio_request("POST","/tool_router/session",{"user_id":COMPOSIO_ENTITY_ID,"toolkits":{"enable":[COMPOSIO_SEARCH_TOOLKIT_SLUG,CUSTOM_MCP_TOOLKIT_SLUG]}});sid=str(session.get("session_id") or "")
    if not sid:raise RuntimeError("Composio created a session without a session_id")
-   search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute Pinterest Railway tools PINTEREST_SUBMIT_URL, PINTEREST_PIN_COUNT, or PINTEREST_BRIDGE_HEALTH"}],"search_strategy":"tool_search"})
-   submit_slug=None;health_slug=None
+   search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute Pinterest Railway bridge tools including PINTEREST_SUBMIT_URL, PINTEREST_PIN_COUNT, PINTEREST_BRIDGE_HEALTH, and the universal PINTEREST_PIN_A scheduler wake"}],"search_strategy":"tool_search"})
+   submit_slug=None;health_slug=None;pin_a_slug=None;count_slug=None
    for result in search.get("results") or []:
     for slug in (result.get("primary_tool_slugs") or [])+(result.get("related_tool_slugs") or []):
      if str(slug).upper().endswith("PINTEREST_SUBMIT_URL"):submit_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
-     if submit_slug and health_slug:break
-    if submit_slug and health_slug:break
+     if str(slug).upper().endswith("PINTEREST_PIN_A"):pin_a_slug=str(slug)
+     if str(slug).upper().endswith("PINTEREST_PIN_COUNT"):count_slug=str(slug)
+     if submit_slug and health_slug and pin_a_slug and count_slug:break
+    if submit_slug and health_slug and pin_a_slug and count_slug:break
    if not submit_slug or not health_slug:
     for slug,schema in (search.get("tool_schemas") or {}).items():
      if str(slug).upper().endswith("PINTEREST_SUBMIT_URL") or "exact product/affiliate URL" in str(schema.get("description","")):submit_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
-     if submit_slug and health_slug:break
+     if str(slug).upper().endswith("PINTEREST_PIN_A"):pin_a_slug=str(slug)
+     if str(slug).upper().endswith("PINTEREST_PIN_COUNT"):count_slug=str(slug)
+     if submit_slug and health_slug and pin_a_slug and count_slug:break
    if not submit_slug:raise RuntimeError("Composio session search did not expose PINTEREST_SUBMIT_URL")
    _router_session_id=sid;_router_submit_tool_slug=submit_slug;_router_health_tool_slug=health_slug;_router_session_mcp_url=(session.get("mcp") or {}).get("url")
    print(f"Composio Railway Tool Router session ready; Pinterest bridge tool discovered as {_router_submit_tool_slug}")
-   return {"ready":True,"session_id":sid,"tool_slug":submit_slug,"health_tool_slug":health_slug,"mcp_url":_router_session_mcp_url}
+   return {"ready":True,"session_id":sid,"tool_slug":submit_slug,"health_tool_slug":health_slug,"pin_a_tool_slug":pin_a_slug,"count_tool_slug":count_slug,"mcp_url":_router_session_mcp_url}
   except Exception as exc:
    last_error=str(exc);print(f"Composio Tool Router session attempt {attempt} failed: {last_error[:500]}");await asyncio.sleep(min(2**attempt,15))
  return {"ready":False,"reason":last_error[:1000] or "Tool Router session creation failed"}
