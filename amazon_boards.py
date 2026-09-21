@@ -1,4 +1,6 @@
-"""Canonical serial Pinterest-board scheduler map and exact product scopes."""
+"""Canonical serial Pinterest-board scheduler map and exact product scopes.
+Final board-cycle architecture: live Pinterest order, five-board batches, exact scopes, Everything Else fallback.
+"""
 from __future__ import annotations
 from typing import Any,Dict,List,Optional,Tuple
 from board_org import LEGACY_BOARD_IDS,LEGACY_BOARD_NAMES,PERMANENT_BOARD_IDS,DEFAULT_BOARD_NAME
