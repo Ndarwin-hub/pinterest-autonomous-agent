@@ -160,16 +160,21 @@ class AmazonScheduler:
  async def _process_slot(self,slot,enqueue,wait_job,day):
   n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0);exclude=set()
   while attempts<MAX_REPLACEMENTS_PER_SLOT:
+   logger.info("Amazon slot %s discovery attempt=%s category=%s",n,attempts+1,CATEGORY_SLOTS[n-1][0] if 1<=n<=len(CATEGORY_SLOTS) else "global")
    if 1<=n<=len(CATEGORY_SLOTS):candidate=await discover_category(CATEGORY_SLOTS[n-1][0],exclude_asins=exclude)
    else:candidate=await discover_global(exclude_asins=exclude)
-   if not candidate:ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
-   exclude.add(candidate["asin"]);url=candidate["affiliate_url"];ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
-   try:result=await enqueue(url)
-   except Exception as e:attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,error=str(e)[:500]);continue
+   if not candidate:
+    logger.warning("Amazon slot %s produced no fresh candidate",n);ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
+   exclude.add(candidate["asin"]);url=candidate["affiliate_url"];logger.info("Amazon slot %s selected asin=%s",n,candidate["asin"]);ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
+   try:
+    result=await enqueue(url);logger.info("Amazon slot %s enqueue accepted job_id=%s status=%s",n,result.get("job_id"),result.get("status"))
+   except Exception as e:attempts+=1;logger.exception("Amazon slot %s enqueue failed",n);ledger.mark_slot(n,status="failed_open",day=day,error=str(e)[:500]);continue
    job_id=result.get("job_id")
-   if result.get("status")=="completed" and pinterest_any_verified(result):ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
+   if result.get("status")=="completed" and pinterest_any_verified(result):logger.info("Amazon slot %s completed inline with verified Pin",n);ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
    if wait_job and job_id:
+    logger.info("Amazon slot %s waiting for job_id=%s",n,job_id)
     final=await wait_job(job_id)
+    logger.info("Amazon slot %s job_id=%s finished status=%s",n,job_id,final.get("status"))
     final_result=final.get("result") or {}
     if final.get("status") in ("completed","completed_partial") and pinterest_any_verified(final_result):
      ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
