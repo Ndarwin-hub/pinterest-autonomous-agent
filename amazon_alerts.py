@@ -6,19 +6,9 @@ logger=logging.getLogger("pinterest-agent.amazon_alerts")
 RECIPIENT="ndarwin1414@gmail.com"
 
 async def send_failure_alert(*,batch:int,reason:str,details:str="") -> bool:
-    try:
-        from agent import run_composio_tool
-        subject=f"Pinterest Amazon automation alert — batch {batch}"
-        body=(f"Amazon Pinterest automation reported a failure or blocked run.\n\n"
-              f"Batch: {batch}\nTime (UTC): {datetime.now(timezone.utc).isoformat()}\n"
-              f"Reason: {reason}\n\nDetails:\n{details[:4000]}\n\n"
-              "Source: browserless Composio Amazon discovery / Railway scheduler.")
-        await run_composio_tool("GMAIL_SEND_EMAIL",{"recipient_email":RECIPIENT,"subject":subject,"body":body,"is_html":False})
-        logger.info("Amazon failure alert sent for batch %s",batch)
-        return True
-    except Exception as exc:
-        logger.error("Amazon failure alert could not be sent: %s",exc)
-        return False
+    """Compatibility shim: batch-level email alerts are disabled."""
+    logger.info("Suppressed batch-level failure alert for batch %s: %s",batch,reason)
+    return True
 
 async def _send_daily_status(day:str,kind:str) -> bool:
     from daily_ledger import ledger
@@ -61,3 +51,29 @@ async def notify_daily_not_started(day:str) -> bool:
     if ledger.daily_status_state(day).get("started"):
         return await _send_daily_status(day,"started")
     return await _send_daily_status(day,"not_started")
+
+
+async def notify_daily_failed(day:str) -> bool:
+    from daily_ledger import ledger
+    if ledger.is_day_complete(day):
+        return True
+    if not ledger.claim_daily_notification(day,"failed"):
+        return True
+    try:
+        from agent import run_composio_tool
+        state=ledger.daily_status_state(day)
+        status=ledger.get_day_status(day)
+        subject="Pinterest Amazon automation — FAILED"
+        body=(f"Pinterest Amazon automation — FAILED\n\n"
+              "The daily scheduler reached its final scheduled check without completing the required daily run.\n\n"
+              f"Checked (UTC): {datetime.now(timezone.utc).isoformat()}\n"
+              f"Successful slots: {status.get('success_count',0)}/50\n"
+              f"Started (UTC): {state.get('started_at')}\n\n"
+              "This is the only daily failure notification. Batch retry/failure emails are disabled.")
+        await run_composio_tool("GMAIL_SEND_EMAIL",{"recipient_email":RECIPIENT,"subject":subject,"body":body,"is_html":False})
+        ledger.finish_daily_notification(day,"failed",True)
+        return True
+    except Exception as exc:
+        ledger.finish_daily_notification(day,"failed",False)
+        logger.error("Daily automation failed notification could not be sent: %s",exc)
+        return False
