@@ -13,6 +13,8 @@ LEGACY_BOARD_NAMES = {"General Pins", "Stuff to buy", "Product Pins"}
 LEGACY_BOARD_IDS = {"987906936951142945", "987906936951144580"}
 PERMANENT_BOARD_IDS = {
     "Automotive & Tools": "987906936951148022",
+    "Appliances & Home": "987906936951153832",
+    "Beauty & Personal Care": "987906936951153833",
     "Books & Learning": "987906936951145056",
     "Baby & Kids": "987906936951153816",
     "Electronics & Gadgets": "987906936951145057",
@@ -50,9 +52,11 @@ CATEGORY_BOARD_MAP = {
     "electronics": "Electronics & Gadgets",
     "health": "Health & Fitness",
     "home": "Home, Kitchen & Dining",
+    "appliances": "Appliances & Home",
     "books": "Books & Learning",
     "games": "Sports, Games & Toys",
     "fashion": "Fashion & Lifestyle",
+    "beauty": "Beauty & Personal Care",
     "travel": "Travel & Camping",
     "pets": "Pet Supplies",
     "automotive": "Automotive & Tools",
