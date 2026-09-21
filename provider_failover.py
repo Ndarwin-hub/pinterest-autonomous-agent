@@ -93,7 +93,7 @@ def _deterministic_validate(items:List[Dict[str,Any]])->Dict[str,Any]:
         if not title or not desc:failures.append(f"Pin {i}: missing title/description")
     if failures:
         return {"approved":False,"final_reviewer":"deterministic","status":"DETERMINISTIC_VALIDATION_FAILED","tool_failure":False,"reason":"Deterministic safety validation failed: "+"; ".join(failures),"deterministic_failures":failures}
-    return {"approved":True,"final_reviewer":"deterministic","status":"AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED","tool_failure":True,"reason":"Visual AI reviewers were unavailable, but every candidate passed the existing hard image-quality and required-copy gates.","deterministic_validation":"passed"}
+    return {"approved":True,"approved_indexes":list(range(1,len(items)+1)),"final_reviewer":"deterministic","status":"AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED","tool_failure":True,"reason":"Visual AI reviewers were unavailable, but every candidate passed the existing hard image-quality and required-copy gates.","deterministic_validation":"passed"}
 
 def install(wire_module:Any,quality_module:Any)->None:
     original=wire_module.review_batch
