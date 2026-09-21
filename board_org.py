@@ -26,6 +26,8 @@ PERMANENT_BOARD_IDS = {
     "Office & Productivity": "987906936951148020",
     "Pet Supplies": "987906936951148021",
     "Travel & Camping": "987906936951147708",
+    "PC's, Laptops & TV's": "987906936951153890",
+    "Smartphones & Tablets": "987906936951153891",
 }
 BOARD_NAME_ALIASES = {
     "Games, Toys & Sports": "Sports, Games & Toys",
@@ -39,7 +41,7 @@ SECTION_IDS = {
     "health_beauty_personal": "3856309112490652608",
 }
 CATEGORY_BOARD_MAP = {
-    "electronics_smartphones": "Electronics & Gadgets",
+    "electronics_smartphones": "Smartphones & Tablets",
     "electronics_pc_home": "Electronics & Gadgets",
     "electronics_root": "Electronics & Gadgets",
     "health_baby_kids": "Health & Fitness",
@@ -47,9 +49,11 @@ CATEGORY_BOARD_MAP = {
     "health_root": "Health & Fitness",
     "beauty": "Health & Fitness",
     "kids": "Health & Fitness",
-    "smartphones": "Electronics & Gadgets",
-    "pcs": "Electronics & Gadgets",
+    "smartphones": "Smartphones & Tablets",
+    "pcs": "PC's, Laptops & TV's",
     "electronics": "Electronics & Gadgets",
+    "pc_tv": "PC's, Laptops & TV's",
+    "smartphones_tablets": "Smartphones & Tablets",
     "health": "Health & Fitness",
     "home": "Home, Kitchen & Dining",
     "appliances": "Appliances & Home",
@@ -178,6 +182,24 @@ _FAMILY_RULES = [
         "paperback", "hardcover", "textbook", "novel", "cookbook", "self-help",
         "self help", "audiobook",
     )),
+    ("pc_tv", (
+        "desktop pc", "desktop computer", "personal computer", "gaming pc", "mini pc", "all-in-one pc",
+        "laptop", "notebook computer", "chromebook", "macbook", "computer monitor", "pc monitor",
+        "monitor", "television", "smart tv", "led tv", "oled tv", "4k tv", "8k tv", "tv", "tvs",
+        "pc case", "computer case", "motherboard", "cpu", "processor", "graphics card", "gpu", "ram",
+        "memory module", "ddr4", "ddr5", "ssd", "nvme", "hard drive", "hdd", "pcie", "desktop memory",
+        "laptop ram", "laptop ssd", "docking station", "laptop dock", "computer power supply",
+        "power supply unit", "psu", "pc cooling", "cpu cooler", "computer keyboard", "computer mouse",
+        "webcam for computer", "computer speakers",
+    )),
+    ("smartphones_tablets", (
+        "iphone", "ipad", "smartphone", "android phone", "cell phone", "mobile phone", "android tablet",
+        "tablet", "galaxy s", "galaxy note", "galaxy tab", "pixel phone", "oneplus", "phone case",
+        "iphone case", "ipad case", "tablet case", "screen protector", "screen guard", "screen film",
+        "tempered glass phone", "phone charger", "phone charging cable", "usb-c phone cable", "magsafe",
+        "wireless phone charger", "phone holder", "phone stand", "tablet stand", "stylus", "apple pencil",
+        "tablet keyboard", "tablet cover", "phone battery", "replacement phone screen",
+    )),
     ("electronics_root", (
         "airpods", "earbuds", "earbud", "headphones", "headphone", "wireless earbuds",
         "bluetooth earbuds", "true wireless", "kindle", "e-reader", "e reader",
@@ -269,7 +291,7 @@ def resolve_pinterest_destination(product: Dict[str, Any]) -> Dict[str, Any]:
     info = classify_with_confidence(product)
     category = info["category"]
     board_name = CATEGORY_BOARD_MAP.get(category, DEFAULT_BOARD_NAME)
-    section_id = SECTION_IDS.get(category)
+    section_id = SECTION_IDS.get(category) if category not in ("pc_tv", "smartphones_tablets") else None
     board_id = PERMANENT_BOARD_IDS.get(board_name)
     return {
         "category": category,
@@ -278,7 +300,7 @@ def resolve_pinterest_destination(product: Dict[str, Any]) -> Dict[str, Any]:
         "section_id": section_id,
         "section_name": {
             "electronics_smartphones": "Smartphones & Tablets",
-            "electronics_pc_home": "PCs, Laptops & Home Electronics",
+            "electronics_pc_home": "PC's, Laptops & TV's",
             "health_baby_kids": "Baby & Kids",
             "health_beauty_personal": "Beauty & Personal Care",
         }.get(category),
