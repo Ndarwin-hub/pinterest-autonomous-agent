@@ -56,7 +56,7 @@ jobs:
             -H "X-Pin-A-Request-ID: $request_id" \
             -H "X-Pin-A-GitHub-Run-ID: $GITHUB_RUN_ID" \
             -H "X-Pin-A-Event: $GITHUB_EVENT_NAME" \
-            -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch' \
+            -X POST 'https://web-production-dae68.up.railway.app/pin-a' \
             --data "{\"batch\":1,\"scheduler_run_id\":\"pin-a:$request_id\",\"scheduled_local_time\":\"pin-a\",\"github_delay_seconds\":0,\"github_queued_runs\":0,\"github_active_runs\":0,\"github_load_class\":\"PIN_A\"}")
 
           printf '%s\n' "$response"
