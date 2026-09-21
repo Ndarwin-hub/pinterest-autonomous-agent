@@ -178,9 +178,13 @@ def _best(items: List[Dict[str, Any]], minimum_tier: int = 0, previous: List[Dic
     if not eligible:
         return None
     previous = previous or []
+    # Hard rule: never reuse a near-duplicate just because it has better resolution.
+    # If this source has no visually fresh candidate, return None so another
+    # source/query can be searched instead of publishing the same-looking image.
     fresh = [x for x in eligible if not is_near_duplicate(x, previous)]
-    pool = fresh or eligible
-    return max(pool, key=lambda x: (diversity_bonus(x, previous), _native_tier(x), _pixels(x), _provider_rank(x.get("provider", ""))))
+    if not fresh:
+        return None
+    return max(fresh, key=lambda x: (diversity_bonus(x, previous), _native_tier(x), _pixels(x), _provider_rank(x.get("provider", ""))))
 
 
 def _to_4k(data: bytes) -> str | None:
@@ -227,7 +231,7 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
 
     # PRIORITY 1 + 2: Composio Image Search, with real downloaded dimensions.
     composio: List[Dict[str, Any]] = []
-    for q in (name, f"{name} product", query):
+    for q in (name, f"{name} product", query, f"{name} front view", f"{name} side view", f"{name} lifestyle", f"{name} detail"):
         composio.extend(await _composio_image_search(q, num=20))
         if any(_native_tier(x) >= 4 for x in await _verify_candidates(composio, used_urls)):
             break
@@ -303,8 +307,10 @@ def install(agent: Any) -> None:
     async def wrapped(product: Dict[str, Any], strategy: Dict[str, Any], pin_index: int, job_store: Any, job_id: str, used_urls: Set[str]):
         try:
             return await get_best_pin_image(product, strategy, pin_index, job_store, job_id, used_urls, agent)
-        except Exception:
-            return await original(product, strategy, pin_index, job_store, job_id, used_urls)
+        except Exception as exc:
+            # Never silently bypass the diversity selector with the legacy selector.
+            job_store.update(job_id, progress=f"Pin {pin_index}/5: diversity selector error: {type(exc).__name__}")
+            raise
 
     agent.get_best_pin_image = wrapped
     agent._image_priority_installed = True
