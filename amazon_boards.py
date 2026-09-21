@@ -7,15 +7,15 @@ from board_org import LEGACY_BOARD_IDS,LEGACY_BOARD_NAMES,PERMANENT_BOARD_IDS,DE
 # intentionally share several parent boards; requiring 10+ primary boards could
 # incorrectly block a valid 15-slot run.
 CATEGORY_SLOTS=[
- ("Electronics","Electronics & Gadgets"),("Clothing/Shoes","Fashion & Lifestyle"),("Beauty","Health & Fitness"),
+ ("Electronics","Electronics & Gadgets"),("Clothing/Shoes","Fashion & Lifestyle"),("Beauty","Beauty & Personal Care"),
  ("Home & Kitchen","Home, Kitchen & Dining"),("Health & Household","Health & Fitness"),("Toys & Games","Sports, Games & Toys"),
- ("Sports & Outdoors","Health & Fitness"),("Baby","Baby & Kids"),("Pet Supplies","Pet Supplies"),("Appliances","Home, Kitchen & Dining"),
+ ("Sports & Outdoors","Health & Fitness"),("Baby","Baby & Kids"),("Pet Supplies","Pet Supplies"),("Appliances","Appliances & Home"),
  ("Cell Phones & Accessories","Electronics & Gadgets"),("Computers & Accessories","Electronics & Gadgets"),("Video Games","Sports, Games & Toys"),("Musical Instruments","Electronics & Gadgets")]
 REQUIRED_PRIMARY_SLOTS=len({board_name for _,board_name in CATEGORY_SLOTS})
 APPROVED_PRIMARY_BOARD_IDS={bid for name,bid in PERMANENT_BOARD_IDS.items() if name!=DEFAULT_BOARD_NAME}
 BOARD_SEARCH_PROFILES={
- "Health & Fitness":{"keywords":["fitness equipment","whey protein powder","reusable ice packs"]},"Electronics & Gadgets":{"keywords":["surge protector power strip"]},
- "Home, Kitchen & Dining":{"keywords":["Stanley Quencher tumbler","countertop ice maker"]},"Sports, Games & Toys":{"keywords":["LCD writing tablet kids","gaming headset"]},
+ "Health & Fitness":{"keywords":["fitness equipment","whey protein powder","reusable ice packs"]},"Beauty & Personal Care":{"keywords":["Mighty Patch","skincare","beauty products"]},"Electronics & Gadgets":{"keywords":["surge protector power strip"]},
+ "Home, Kitchen & Dining":{"keywords":["Stanley Quencher tumbler"]},"Appliances & Home":{"keywords":["countertop ice maker","home appliances"]},"Sports, Games & Toys":{"keywords":["LCD writing tablet kids","gaming headset"]},
  "Fashion & Lifestyle":{"keywords":["running shoes"]},"Pet Supplies":{"keywords":["cat litter"]},"Baby & Kids":{"keywords":["baby wipes"]},
  "Automotive & Tools":{"keywords":["automotive tools"]},"Office & Productivity":{"keywords":["desk accessories"]},"Books & Learning":{"keywords":["bestselling paperback"]},
  "Everything Else":{"keywords":["popular new releases"]}}
