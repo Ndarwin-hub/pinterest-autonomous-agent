@@ -25,7 +25,9 @@ class DailyLedger:
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
             c=self._conn(); c.execute("INSERT OR IGNORE INTO daily_days(day,status,success_count,updated_at) VALUES(?,?,0,?)",(day,"in_progress",now))
-            for s in slots_spec or []: c.execute("INSERT OR IGNORE INTO daily_slots(day,slot,target_board_name,target_board_id,slot_kind,status,updated_at) VALUES(?,?,?,?,?,?,?)",(day,int(s["slot"]),s.get("target_board_name"),s.get("target_board_id"),s.get("slot_kind","board"),"pending",now))
+            for spec in slots_spec or []:
+                c.execute("INSERT OR IGNORE INTO daily_slots(day,slot,target_board_name,target_board_id,slot_kind,status,updated_at) VALUES(?,?,?,?,?,?,?)",(day,int(spec["slot"]),spec.get("target_board_name"),spec.get("target_board_id"),spec.get("slot_kind","board"),"pending",now))
+                c.execute("UPDATE daily_slots SET target_board_name=?,target_board_id=?,slot_kind=?,updated_at=? WHERE day=? AND slot=? AND status IN ('pending','failed_open','exhausted','processing')",(spec.get("target_board_name"),spec.get("target_board_id"),spec.get("slot_kind","board"),now,day,int(spec["slot"])))
             c.commit(); c.close(); return day
     def reclaim_stale_processing(self,day=None):
         day=day or self.today_str(); cutoff=time.time()-SLOT_PROCESSING_LEASE_SEC
