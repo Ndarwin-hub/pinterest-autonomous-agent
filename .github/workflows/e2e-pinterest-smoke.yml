@@ -34,7 +34,7 @@ jobs:
             echo "$response"
             status=$(printf '%s' "$response" | jq -r '.status')
             if [[ "$status" == "completed" ]]; then
-              verified=$(printf '%s' "$response" | jq -r '.result.verified_pins // 0')
+              verified=$(printf '%s' "$response" | jq -r '(.result.verified_pins // (.result.pins | length) // 0)')
               published=$(printf '%s' "$response" | jq -r '.result.pins_published // 0')
               test "$verified" -ge 5
               test "$published" -ge 5
