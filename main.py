@@ -227,7 +227,7 @@ async def pin_a_trigger(
     return {**result,"pin_a":True,"source":source,"request_id":request_id,"scheduler":"railway_owned_daily_session","message":"Pin A wake accepted; Railway scheduler/ledger owns batch execution and duplicate prevention."}
 
 @app.post("/amazon/run-batch")
-async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)):
+async def amazon_run_batch(body:BatchRequest,x_scheduler_secret:Optional[str]=Header(None,alias="X-Scheduler-Secret"),_:bool=Depends(verify_batch_secret)):
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
  day=daily_ledger.today_str()
  daily_ledger.record_scheduler_event(day=day,batch_requested=body.batch,scheduler_run_id=body.scheduler_run_id,scheduled_local_time=body.scheduled_local_time,github_delay_seconds=body.github_delay_seconds,github_queued_runs=body.github_queued_runs,github_active_runs=body.github_active_runs,github_load_class=body.github_load_class)
