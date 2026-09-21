@@ -24,7 +24,14 @@ async def _submit_exact_url(url:str)->str:
  if not value.startswith(("http://","https://")):raise ValueError("url must be an http(s) URL")
  data=await _post_json(SUBMIT_URL,{"url":value},timeout=30)
  return f"Railway accepted the exact URL. job_id={data.get('job_id')}; status={data.get('status')}; message={data.get('message')}"
-async def _pin_a(source:str="composio",request_id:Optional[str]=None)->Dict[str,Any]:\n source=(source or "composio").strip()[:200]\n request_id=(request_id or __import__("uuid").uuid4().__str__()).strip()[:200]\n async with httpx.AsyncClient(timeout=30.0,follow_redirects=False) as client:\n  response=await client.post(f"https://{PUBLIC_DOMAIN}/pin-a",headers={**_headers(),"X-Pin-A-Secret":API_SECRET,"X-Pin-A-Source":source,"X-Pin-A-Request-ID":request_id,"Content-Type":"application/json"},json={"source":source,"request_id":request_id})\n if response.status_code>=400:raise RuntimeError(f"Railway Pin A endpoint returned HTTP {response.status_code}: {response.text[:1000]}")\n return response.json()\n\nasync def _pin_count(count:int)->Dict[str,Any]:
+async def _pin_a(source:str="composio",request_id:Optional[str]=None)->Dict[str,Any]:
+ source=(source or "composio").strip()[:200]
+ request_id=(request_id or __import__("uuid").uuid4().__str__()).strip()[:200]
+ async with httpx.AsyncClient(timeout=30.0,follow_redirects=False) as client:
+  response=await client.post(f"https://{PUBLIC_DOMAIN}/pin-a",headers={**_headers(),"X-Pin-A-Secret":API_SECRET,"X-Pin-A-Source":source,"X-Pin-A-Request-ID":request_id,"Content-Type":"application/json"},json={"source":source,"request_id":request_id})
+ if response.status_code>=400:raise RuntimeError(f"Railway Pin A endpoint returned HTTP {response.status_code}: {response.text[:1000]}")
+ return response.json()
+async def _pin_count(count:int)->Dict[str,Any]:
  n=int(count)
  if n<1 or n>50:raise ValueError("count must be between 1 and 50")
  launch=await _post_json(DISCOVER_URL,{"count":n},timeout=90)
@@ -176,4 +183,5 @@ async def register_custom_mcp_with_retry()->bool:
     return True
   except Exception as exc:print(f"Composio Custom MCP registration attempt {attempt} failed: {type(exc).__name__}")
   await asyncio.sleep(min(2**attempt,15))
- return False\nPIN_A_TOOL={"name":"PINTEREST_PIN_A","description":"Activate the universal Pin A scheduler wake. Railway scheduler and daily ledger remain the single execution authority and prevent duplicate sessions.","inputSchema":{"type":"object","properties":{"source":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":False}}
+ return False
+PIN_A_TOOL={"name":"PINTEREST_PIN_A","description":"Activate the universal Pin A scheduler wake. Railway scheduler and daily ledger remain the single execution authority and prevent duplicate sessions.","inputSchema":{"type":"object","properties":{"source":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":False}}
