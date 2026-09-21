@@ -49,20 +49,33 @@ def _candidate(raw:Dict[str,Any],category:str)->Optional[Dict[str,Any]]:
  bought=_bought(raw.get("bought_last_month")); rating=float(raw.get("rating") or 0); reviews=int(raw.get("reviews") or 0); deal=50000 if "deal" in bt else 0
  return {"asin":asin,"affiliate_url":link,"product_url":link,"title":title,"category":category,"price":price,"rating":rating,"reviews":reviews,"bought_last_month":raw.get("bought_last_month"),"score":bought*1000+reviews+rating*100+deal-int(raw.get("position") or 999),"source":"composio_amazon","raw":raw}
 async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
- from mcp_bridge import composio_router_search_amazon
  domain="amazon.com"
+ # Primary: direct Composio search-tool execution. Search tools are auth-free and
+ # this path avoids Tool Router session hangs while preserving the same provider.
  try:
-  data=await composio_router_search_amazon(query,domain,page)
+  from agent import run_composio_tool
+  data=await run_composio_tool("COMPOSIO_SEARCH_AMAZON",{"query":query,"amazon_domain":domain,"page":page},retries=2)
+  if isinstance(data,dict) and isinstance(data.get("data"),dict):
+   data=data["data"]
+  products=list(data.get("products") or []) if isinstance(data,dict) else []
+  if products:
+   for p in products:
+    if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
+   return products
+  logger.warning("Direct Composio Amazon search returned no products domain=%s query=%s page=%s; trying Tool Router fallback",domain,query,page)
  except Exception as e:
-  logger.warning("Composio Amazon Tool Router search failed domain=%s query=%s: %s",domain,query,e)
+  logger.warning("Direct Composio Amazon search failed domain=%s query=%s page=%s: %s; trying Tool Router fallback",domain,query,page,e)
+ try:
+  from mcp_bridge import composio_router_search_amazon
+  data=await composio_router_search_amazon(query,domain,page)
+  if isinstance(data,dict) and isinstance(data.get("data"),dict): data=data["data"]
+  products=list(data.get("products") or []) if isinstance(data,dict) else []
+  for p in products:
+   if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
+  return products
+ except Exception as e:
+  logger.warning("Composio Amazon Tool Router fallback failed domain=%s query=%s page=%s: %s",domain,query,page,e)
   return []
- if isinstance(data,dict) and isinstance(data.get("data"),dict):
-  data=data["data"]
- products=list(data.get("products") or []) if isinstance(data,dict) else []
- for p in products:
-  if isinstance(p,dict):
-   p.setdefault("_amazon_domain",domain)
- return products
 async def discover_category(category:str,exclude_asins:Optional[Set[str]]=None)->Optional[Dict[str,Any]]:
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
  for q in CATEGORY_QUERIES.get(category,[category]):
