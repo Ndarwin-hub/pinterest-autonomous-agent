@@ -145,7 +145,8 @@ async def mcp_endpoint(request:Request):
   try:
    if name==TOOL["name"]:text=await _submit_exact_url(args.get("url",""))
    elif name==HEALTH_TOOL["name"]:text="PINTEREST_BRIDGE_HEALTH_OK"
-   elif name==PIN_A_TOOL["name"]:text=json.dumps(await _pin_a(args.get("source","composio"),args.get("request_id")),separators=(",",":"))\n   elif name==COUNT_TOOL["name"]:text=json.dumps(await _pin_count(int(args.get("count",0))),separators=(",",":"))
+   elif name==PIN_A_TOOL["name"]:text=json.dumps(await _pin_a(args.get("source","composio"),args.get("request_id")),separators=(",",":"))
+   elif name==COUNT_TOOL["name"]:text=json.dumps(await _pin_count(int(args.get("count",0))),separators=(",",":"))
    else:return _error(request_id,-32601,f"Unknown tool: {name}")
    return _result(request_id,{"content":[{"type":"text","text":text}],"isError":False})
   except Exception as exc:return _result(request_id,{"content":[{"type":"text","text":str(exc)}],"isError":True})
