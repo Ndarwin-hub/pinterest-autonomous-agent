@@ -131,9 +131,9 @@ class DailyLedger:
     def next_pending_slot(self,day=None,slot_min=1,slot_max=SLOT_COUNT):
         day=day or self.today_str()
         with _lock:
-            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? AND status IN ('pending','failed_open') ORDER BY slot LIMIT 1",(day,slot_min,slot_max)).fetchone(); c.close()
+            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? AND status IN ('pending','failed_open','exhausted') ORDER BY slot LIMIT 1",(day,slot_min,slot_max)).fetchone(); c.close()
         if not row:return None
-        keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]; return dict(zip(keys,row))
+        keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]; d=dict(zip(keys,row)); d["replacement_attempts"]=0 if d.get("status")=="exhausted" else d.get("replacement_attempts"); return d
     def mark_slot(self,slot,*,status,day=None,selected_asin=None,selected_url=None,affiliate_url=None,job_id=None,pinterest_verified=False,error=None,inc_replacement=False):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
