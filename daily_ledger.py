@@ -127,7 +127,7 @@ class DailyLedger:
         with _lock:
             c=self._conn(); c.execute("BEGIN IMMEDIATE"); row=c.execute("SELECT status FROM daily_slots WHERE day=? AND slot=?",(day,slot)).fetchone()
             if not row or row[0] not in ("pending","failed_open"): c.commit(); c.close(); return False
-            cur=c.execute("UPDATE daily_slots SET status='processing',updated_at=? WHERE day=? AND slot=? AND status IN ('pending','failed_open')",(now,day,slot)); ok=cur.rowcount==1; c.commit(); c.close(); return ok
+            cur=c.execute("UPDATE daily_slots SET status='processing',updated_at=? WHERE day=? AND slot=? AND status IN ('pending','failed_open','exhausted')",(now,day,slot)); ok=cur.rowcount==1; c.commit(); c.close(); return ok
     def next_pending_slot(self,day=None,slot_min=1,slot_max=SLOT_COUNT):
         day=day or self.today_str()
         with _lock:
