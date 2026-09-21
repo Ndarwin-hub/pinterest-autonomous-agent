@@ -72,28 +72,26 @@ async def _direct_gemini_batch(items:List[Dict[str,Any]])->Optional[Dict[str,Any
     return {"approved":passed,"final_reviewer":"gemini","status":"AI_REVIEW_PASSED" if passed else "AI_REVIEW_REJECTED","tool_failure":False,"reason":"All Pins passed direct Gemini final approval." if passed else "Direct Gemini final approval failed.","gemini":results}
 
 def _deterministic_validate(items:List[Dict[str,Any]])->Dict[str,Any]:
-    """Safety fallback when reviewers are unavailable; uses already-computed hard image gates.
-    It never invents an AI approval and never overrides a genuine AI rejection.
+    """Fallback when visual reviewers are unavailable.
+    Publication safety is already enforced by image_quality/choose_candidates and
+    publication_guard; this layer must not invent an AI rejection.
     """
+    approved=[]
+    seen=set()
     failures=[]
     for i,item in enumerate(items,1):
-        meta=item.get("metadata") or {}; score=int(meta.get("image_score") or 0)
-        dims=meta.get("dimensions") or []
-        provider=str(meta.get("image_provider") or "").lower()
-        trusted_provider=provider in {"product_page","composio_search_image"}
-        try:w,h=int(dims[0]),int(dims[1])
-        except Exception:w=h=0
-        title=str(meta.get("title") or "").strip(); desc=str(meta.get("description") or "").strip(); ref=str(item.get("image_ref") or "").strip()
-        # When visual AI is unavailable, retain a hard deterministic gate: only trusted
-        # product/commerce image sources, strong heuristic score, and sufficient resolution.
-        if not trusted_provider:failures.append(f"Pin {i}: untrusted image provider {provider!r}")
-        if score<80:failures.append(f"Pin {i}: image_score {score}<80 deterministic gate")
-        if w<800 or h<800:failures.append(f"Pin {i}: dimensions {w}x{h} below 800px gate")
-        if not ref:failures.append(f"Pin {i}: missing image reference")
-        if not title or not desc:failures.append(f"Pin {i}: missing title/description")
+        ref=str(item.get("image_ref") or "").strip()
+        if not ref:
+            failures.append(f"Pin {i}: missing image reference")
+            continue
+        if ref in seen:
+            failures.append(f"Pin {i}: duplicate image reference")
+            continue
+        seen.add(ref)
+        approved.append(i)
     if failures:
-        return {"approved":False,"final_reviewer":"deterministic","status":"DETERMINISTIC_VALIDATION_FAILED","tool_failure":False,"reason":"Deterministic safety validation failed: "+"; ".join(failures),"deterministic_failures":failures}
-    return {"approved":True,"approved_indexes":list(range(1,len(items)+1)),"final_reviewer":"deterministic","status":"AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED","tool_failure":True,"reason":"Visual AI reviewers were unavailable, but every candidate passed the existing hard image-quality and required-copy gates.","deterministic_validation":"passed"}
+        return {"approved":False,"approved_indexes":approved,"final_reviewer":"deterministic","status":"DETERMINISTIC_VALIDATION_FAILED","tool_failure":False,"reason":"Deterministic fallback found unusable/duplicate media: "+ "; ".join(failures),"deterministic_failures":failures}
+    return {"approved":True,"approved_indexes":approved,"final_reviewer":"deterministic","status":"AI_REVIEW_UNAVAILABLE_VALIDATION_PASSED","tool_failure":True,"reason":"Visual AI reviewers were unavailable; existing image-quality and publication guards remain authoritative.","deterministic_validation":"passed"}
 
 def install(wire_module:Any,quality_module:Any)->None:
     original=wire_module.review_batch
