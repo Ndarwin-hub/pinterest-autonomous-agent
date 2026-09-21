@@ -4,7 +4,7 @@ import asyncio,logging,os,uuid,json
 from datetime import datetime,timezone
 from typing import Any,Awaitable,Callable,Dict,List
 from amazon_client import amazon_credentials_present
-from amazon_boards import build_slot_specs,REQUIRED_PRIMARY_SLOTS,classify_live_boards,CATEGORY_SLOTS
+from amazon_boards import build_slot_specs,REQUIRED_PRIMARY_SLOTS,classify_live_boards,BOARD_SCOPES
 from amazon_discovery import MAX_REPLACEMENTS_PER_SLOT,discover_for_board,discover_global,is_dormant
 from amazon_composio_discovery import discover_category
 from daily_ledger import ledger,SLOT_COUNT,BATCH_SIZE
@@ -128,19 +128,8 @@ class AmazonScheduler:
    if claim.get("status") not in ("completed","running"):await send_failure_alert(batch=batch_index,reason=str(claim.get("status")),details=str(claim))
    return {"status":claim["status"],"batch":batch_index,"result_json":claim.get("result_json"),"active_batch":claim.get("active_batch")}
   self.status.update({"current_batch":batch_index,"dormant_reason":None});first=(batch_index-1)*BATCH_SIZE+1;last=first+BATCH_SIZE-1;successes=0;attempted=0;errors=[]
-  balance_meta={"available":False,"message":"Board balancing could not be verified because current Pinterest counts were unavailable."}
   slot_order=list(range(first,last+1))
-  try:
-   from board_balance import extract_board_rows,balance_state
-   rows=extract_board_rows(live);balance_meta=balance_state(rows)
-   if balance_meta.get("available"):
-    name_to_count={r["name"]:r.get("pin_count") for r in (balance_meta.get("ranked_dedicated") or [])}
-    def _slot_fill_key(slot_no):
-     if 1<=slot_no<=len(CATEGORY_SLOTS):
-      bname=CATEGORY_SLOTS[slot_no-1][1];c=name_to_count.get(bname);return (c is None,c if c is not None else 10**9,slot_no)
-     return (True,10**9,slot_no)
-    slot_order=sorted(slot_order,key=_slot_fill_key)
-  except Exception as e:logger.warning("Board balance reorder skipped: %s",e)
+  balance_meta={"available":False,"message":"Serial Pinterest board order is authoritative; board-count balancing is disabled."}
   try:
    for slot_no in slot_order:
     slot=ledger.next_pending_slot(day,slot_no,slot_no)
@@ -160,14 +149,15 @@ class AmazonScheduler:
  async def _process_slot(self,slot,enqueue,wait_job,day):
   n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0);exclude=set()
   while attempts<MAX_REPLACEMENTS_PER_SLOT:
-   logger.info("Amazon slot %s discovery attempt=%s category=%s",n,attempts+1,CATEGORY_SLOTS[n-1][0] if 1<=n<=len(CATEGORY_SLOTS) else "global")
-   if 1<=n<=len(CATEGORY_SLOTS):candidate=await discover_category(CATEGORY_SLOTS[n-1][0],exclude_asins=exclude)
-   else:candidate=await discover_global(exclude_asins=exclude)
+   target_board_name=str(slot.get("target_board_name") or "Everything Else")
+   target_board_id=str(slot.get("target_board_id") or "")
+   logger.info("Amazon slot %s discovery attempt=%s board_serial=%s board=%s",n,attempts+1,slot.get("board_serial"),target_board_name)
+   candidate=await discover_for_board(target_board_name,exclude_asins=exclude)
    if not candidate:
     logger.warning("Amazon slot %s produced no fresh candidate",n);ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
-   exclude.add(candidate["asin"]);url=candidate["affiliate_url"];logger.info("Amazon slot %s selected asin=%s",n,candidate["asin"]);ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
+   exclude.add(candidate["asin"]);url=candidate["affiliate_url"];logger.info("Amazon slot %s selected asin=%s board=%s",n,candidate["asin"],target_board_name);ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate["asin"],selected_url=url,affiliate_url=url,inc_replacement=True)
    try:
-    result=await enqueue(url);logger.info("Amazon slot %s enqueue accepted job_id=%s status=%s",n,result.get("job_id"),result.get("status"))
+    result=await enqueue(url,target_board_id,target_board_name);logger.info("Amazon slot %s enqueue accepted board=%s job_id=%s status=%s",n,target_board_name,result.get("job_id"),result.get("status"))
    except Exception as e:attempts+=1;logger.exception("Amazon slot %s enqueue failed",n);ledger.mark_slot(n,status="failed_open",day=day,error=str(e)[:500]);continue
    job_id=result.get("job_id")
    if result.get("status")=="completed" and pinterest_any_verified(result):logger.info("Amazon slot %s completed inline with verified Pin",n);ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
