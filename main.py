@@ -179,6 +179,53 @@ async def amazon_manual_submit(body:BatchSubmitRequest,background_tasks:Backgrou
   results.append(entry)
  return {"requested":len(body.urls),"accepted":sum(1 for r in results if r.get("job_id")),"skipped":sum(1 for r in results if r.get("status")=="skipped"),"rejected":sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id")),"results":results,"pipeline":"existing_/submit_job_pipeline","affiliate_tag":"desiredplus-20"}
 
+@app.post("/pin-a")
+async def pin_a_trigger(
+    body: Optional[Dict[str,Any]]=None,
+    authorization: Optional[str]=Header(None),
+    x_pin_a_secret: Optional[str]=Header(None,alias="X-Pin-A-Secret"),
+    x_scheduler_secret: Optional[str]=Header(None,alias="X-Scheduler-Secret"),
+    x_pin_a_source: Optional[str]=Header(None,alias="X-Pin-A-Source"),
+    x_pin_a_request_id: Optional[str]=Header(None,alias="X-Pin-A-Request-ID"),
+):
+    """Universal Pin A wake endpoint. Existing schedulers and independent callers may invoke it.
+    Authentication is source-agnostic: an authorized shared secret or GitHub OIDC is accepted.
+    The existing Railway scheduler/ledger remains the single owner of batch execution.
+    """
+    authorized=False
+    for candidate, expected in (
+        (x_pin_a_secret, API_SECRET),
+        (x_pin_a_secret, CLOUDFLARE_WAKE_SECRET),
+        (x_pin_a_secret, AMAZON_BATCH_SECRET),
+        (x_scheduler_secret, API_SECRET),
+        (x_scheduler_secret, CLOUDFLARE_WAKE_SECRET),
+        (x_scheduler_secret, AMAZON_BATCH_SECRET),
+    ):
+        if candidate and expected and hmac.compare_digest(candidate, expected):
+            authorized=True
+            break
+    if not authorized:
+        if authorization and authorization.startswith("Bearer "):
+            token=authorization.split(" ",1)[1].strip()
+            try:
+                key=_jwks.get_signing_key_from_jwt(token).key
+                claims=jwt.decode(token,key,algorithms=["RS256"],issuer=GITHUB_ISSUER,audience=GITHUB_AUDIENCE,options={"require":["iss","sub","aud","exp","repository"]})
+                if claims.get("repository")==GITHUB_REPO and claims.get("ref")=="refs/heads/main" and claims.get("event_name") in ("schedule","workflow_dispatch"):
+                    authorized=True
+            except Exception as e:
+                logger.warning("Pin A GitHub OIDC authentication failed: %s",type(e).__name__)
+    if not authorized:
+        raise HTTPException(status_code=401,detail="Invalid or missing Pin A authentication")
+    source=(x_pin_a_source or ((body or {}).get("source") if isinstance(body,dict) else None) or "unknown").strip()[:200]
+    request_id=(x_pin_a_request_id or ((body or {}).get("request_id") if isinstance(body,dict) else None) or str(uuid.uuid4())).strip()[:200]
+    day=daily_ledger.today_str()
+    daily_ledger.record_scheduler_event(day=day,batch_requested=1,scheduler_run_id=f"pin-a:{request_id}",scheduled_local_time="pin-a",github_delay_seconds=0,github_queued_runs=0,github_active_runs=0,github_load_class="PIN_A")
+    logger.info("Pin A accepted source=%s request_id=%s",source,request_id)
+    if SCHEDULER_MODE!="external":
+        return {"status":"ignored","source":source,"request_id":request_id,"reason":"Amazon scheduler is not in external mode"}
+    result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=1)
+    return {**result,"pin_a":True,"source":source,"request_id":request_id,"scheduler":"railway_owned_daily_session","message":"Pin A wake accepted; Railway scheduler/ledger owns batch execution and duplicate prevention."}
+
 @app.post("/amazon/run-batch")
 async def amazon_run_batch(body:BatchRequest,_:bool=Depends(verify_batch_secret)):
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
