@@ -38,7 +38,7 @@ import image_diversity_guard
 publication_guard.install(agent_module)
 image_diversity_guard.install(agent_module)
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO"),format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-logger=logging.getLogger("pinterest-agent");job_store=JobStore();_enqueue_lock=asyncio.Lock();API_SECRET=os.getenv("API_SECRET","").strip();AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip();GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent";GITHUB_ISSUER="https://token.actions.githubusercontent.com";GITHUB_AUDIENCE=f"https://github.com/{GITHUB_REPO}";_jwks=PyJWKClient("https://token.actions.githubusercontent.com/.well-known/jwks",cache_keys=True)
+logger=logging.getLogger("pinterest-agent");job_store=JobStore();_enqueue_lock=asyncio.Lock();API_SECRET=os.getenv("API_SECRET","").strip();AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip();CLOUDFLARE_WAKE_SECRET=os.getenv("CLOUDFLARE_WAKE_SECRET","").strip();GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent";GITHUB_ISSUER="https://token.actions.githubusercontent.com";GITHUB_AUDIENCE=f"https://github.com/{GITHUB_REPO}";_jwks=PyJWKClient("https://token.actions.githubusercontent.com/.well-known/jwks",cache_keys=True)
 def verify_secret(x_api_secret:Optional[str]=Header(None)):
  if API_SECRET and x_api_secret!=API_SECRET:raise HTTPException(status_code=401,detail="Invalid or missing API secret")
  return True
@@ -52,7 +52,7 @@ def verify_manual_oidc(authorization:Optional[str]=Header(None)):
  except Exception as e:logger.warning("GitHub OIDC manual-submit authentication failed: %s",type(e).__name__);raise HTTPException(status_code=401,detail="Invalid scheduler identity")
 
 def verify_batch_secret(authorization:Optional[str]=Header(None),x_scheduler_secret:Optional[str]=Header(None,alias="X-Scheduler-Secret")):
- if x_scheduler_secret and ((AMAZON_BATCH_SECRET and hmac.compare_digest(x_scheduler_secret,AMAZON_BATCH_SECRET)) or (API_SECRET and hmac.compare_digest(x_scheduler_secret,API_SECRET))):return True
+ if x_scheduler_secret and ((AMAZON_BATCH_SECRET and hmac.compare_digest(x_scheduler_secret,AMAZON_BATCH_SECRET)) or (API_SECRET and hmac.compare_digest(x_scheduler_secret,API_SECRET)) or (CLOUDFLARE_WAKE_SECRET and hmac.compare_digest(x_scheduler_secret,CLOUDFLARE_WAKE_SECRET))):return True
  if not authorization or not authorization.startswith("Bearer "):raise HTTPException(status_code=401,detail="Missing scheduler authentication")
  token=authorization.split(" ",1)[1].strip()
  try:
