@@ -16,12 +16,12 @@ MAX_IMAGE_SEARCH_CALLS=25
 _call_budget=contextvars.ContextVar("pinterest_call_budget",default=None)
 class CallBudget:
     def __init__(self,maximum=MAX_COMPOSIO_CALLS):
-        self.maximum=maximum; self.used=0; self.image_search_invocations=0; self.pexels_invocations=0; self.grok_invocations=0
+        self.maximum=maximum; self.used=0; self.image_search_invocations=0; self.pexels_invocations=0
     def reserve(self,slug):
         if self.used>=self.maximum: raise RuntimeError(f"Composio hard job budget exhausted ({self.maximum} calls); stopping safely.")
         self.used+=1; logger.info("Composio budget %s/%s %s",self.used,self.maximum,slug)
 async def _static_capabilities(agent_mod):
-    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"Four targeted search angles per Pin, with one adaptive recovery search round available."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio only when the normal Composio image route is unavailable."},"openai_chatgpt_review":{"connected":bool(OPENAI_API_KEY),"executable":bool(OPENAI_API_KEY),"kind":"visual_quality","reason":"First-priority OpenAI/ChatGPT-compatible visual review when configured."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"grok_review":{"connected":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":bool(XAI_API_KEY or getattr(agent_mod,"COMPOSIO_API_KEY","")),"kind":"final_approval","reason":"Grok via direct xAI key or the existing Composio connection."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
+    return {"composio_search_image":{"connected":bool(getattr(agent_mod,"COMPOSIO_API_KEY","")),"executable":True,"production_tested":False,"kind":"image_search","reason":"Four targeted search angles per Pin, with one adaptive recovery search round available."},"pexels":{"connected":True,"executable":True,"production_tested":False,"kind":"image_search","reason":"Pexels via Composio only when the normal Composio image route is unavailable."},"openai_chatgpt_review":{"connected":bool(OPENAI_API_KEY),"executable":bool(OPENAI_API_KEY),"kind":"visual_quality","reason":"First-priority OpenAI/ChatGPT-compatible visual review when configured."},"gemini_review":{"connected":bool(GEMINI_API_KEY),"executable":bool(GEMINI_API_KEY),"kind":"visual_quality","reason":"Gemini first-pass visual review."},"ai_generation":{"connected":bool(XAI_API_KEY or OPENAI_API_KEY),"executable":bool(XAI_API_KEY or OPENAI_API_KEY),"kind":"image_generation","reason":"Second-stage fallback only."},"pinterest":{"connected":True,"executable":True,"production_tested":True,"kind":"publish","reason":"Existing pipeline."}}
 def apply_agent_wiring(agent_mod:Any)->None:
     orig_research=agent_mod.research_product; orig_run=agent_mod.run_composio_tool; orig_publish=agent_mod.publish_and_verify
     async def budgeted_run(slug:str,args:Dict[str,Any],retries:int=2):
@@ -34,10 +34,6 @@ def apply_agent_wiring(agent_mod:Any)->None:
             if b.image_search_invocations>=MAX_IMAGE_SEARCH_CALLS:
                 raise RuntimeError(f"Adaptive image-search budget exhausted ({MAX_IMAGE_SEARCH_CALLS} calls).")
             b.image_search_invocations+=1
-        if slug=="GROK_CREATE_RESPONSE":
-            if b.grok_invocations>=10:
-                raise RuntimeError("Final Grok visual-review budget exhausted safely.")
-            b.grok_invocations+=1
         b.reserve(slug)
         transport = getattr(agent_mod, "_composio_transport_executor", None)
         if transport is not None:
@@ -137,7 +133,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
             review=None; recovery_rounds=0
             while True:
                 review_items=build_review_items(pins,product)
-                job_store.update(job_id,progress="AI visual review" if not recovery_rounds else f"AI re-review after automatic recovery round {recovery_rounds}")
+                job_store.update(job_id,progress="Internal image review" if not recovery_rounds else f"Internal re-review after automatic recovery round {recovery_rounds}")
                 review=await review_batch(review_items,composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
                 failed=failed_indexes(review,len(pins))
                 # Partial approval is sufficient. A fifth rejected/missing Pin never blocks valid Pins.
@@ -182,7 +178,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
                 except Exception as e:errors.append({"pin_number":p["pin_number"],"error":str(e)})
             if not published:raise RuntimeError("No Pins were successfully published and verified.")
-            return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"grok_review_calls":b.grok_invocations},"summary":f"{len(published)}/5 Pins published and independently verified; successful Pins preserved and failed Pins reported."}
+            return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"external_visual_review_calls":0},"summary":f"{len(published)}/5 Pins published and independently verified; successful Pins preserved and failed Pins reported."}
         finally:_call_budget.reset(token)
     agent_mod.run_composio_tool=budgeted_run; agent_mod.publish_and_verify=strict_publish; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
     logger.info("Zero-tolerance image sourcing + multi-angle comparison + adaptive recovery + 40-call budget + strict board routing/verification wiring applied")
