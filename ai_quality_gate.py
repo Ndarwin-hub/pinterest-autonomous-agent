@@ -87,9 +87,14 @@ async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
         w=int(dims[0] or 0) if len(dims)>0 and dims[0] else 0
         h=int(dims[1] or 0) if len(dims)>1 and dims[1] else 0
         score=int(meta.get("image_score") or 0)
-        # Technical validity only: image_quality.py owns the actual publication boundary.
-        # Resolution/aspect are advisory signals here, not contradictory hard gates.
-        ok=bool(ref) and ref not in seen and w>=100 and h>=100 and max(w,h)/max(1,min(w,h))<=4.0
+        # Technical validity only: image_quality.py owns image selection and quality scoring.
+        # This reviewer must never reject a usable image merely because a candidate's
+        # metadata omitted dimensions; URLs/base64 are valid media references by themselves.
+        # When dimensions are known, enforce only the hard structural bounds.
+        dimensions_known = w > 0 and h > 0
+        aspect_ok = (max(w,h) / max(1,min(w,h)) <= 4.0) if dimensions_known else True
+        size_ok = (w >= 100 and h >= 100) if dimensions_known else True
+        ok=bool(ref) and ref not in seen and size_ok and aspect_ok
         if ref: seen.add(ref)
         scores[str(i)]=score
         if ok: approved.append(i)
