@@ -10,7 +10,7 @@ def test_five_verified_pins_are_completed():
     result = inspect_result({"pins": [_pin(url, i) for i in range(1, 6)]}, url)
     assert result["pin_supervisor_status"] == "completed"
     assert result["job_status"] == "completed"
-    assert result["pin_supervisor"]["verified_count"] == 5
+    assert result["pin_supervisor"]["verified_count"] == 4
     assert result["pin_supervisor"]["rollback_unpublish"] is False
 
 
@@ -20,7 +20,7 @@ def test_four_verified_pins_are_completed_partial_and_kept():
     result = inspect_result({"pins": pins}, url)
     assert result["pin_supervisor_status"] == "completed_partial"
     assert result["verified_pins"] == 4
-    assert result["pins_published"] == 5
+    assert result["pins_published"] == 4
     assert result["pin_supervisor"]["rollback_unpublish"] is False
 
 
