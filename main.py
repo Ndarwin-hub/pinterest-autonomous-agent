@@ -1,5 +1,5 @@
 """Autonomous Pinterest Agent - Railway service.
-The existing /submit URL->5-pin workflow is unchanged; Amazon automation is additive and now uses browserless Composio discovery.
+The existing /submit URL workflow is unchanged in routing; its shared product workflow now targets four Pins, and Amazon automation remains additive.
 """
 import os,uuid,re,logging,asyncio,hmac,json
 from datetime import datetime,timezone
@@ -29,6 +29,7 @@ from models import JobStore,JobStatus,Job
 from published_registry import registry,extract_asin
 from amazon_client import amazon_credentials_present
 from batch_submit import prepare_batch_items, discover_n_products, MAX_BATCH, validate_and_canonicalize
+from pin_config import PINS_PER_PRODUCT
 from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
 from amazon_boards import REQUIRED_PRIMARY_SLOTS
@@ -110,7 +111,7 @@ async def lifespan(app:FastAPI):
   try:await registration_task
   except asyncio.CancelledError:pass
  logger.info("Shutting down...")
-app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates 5 unique Pins with multi-provider images, publishes and verifies.",version="3.9.0",lifespan=lifespan)
+app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates four unique Pins with multi-provider images, publishes and verifies.",version="3.9.0",lifespan=lifespan)
 if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
 class SubmitResponse(BaseModel):job_id:str;status:str;message:str
@@ -131,7 +132,7 @@ class BatchRequest(BaseModel):
  github_load_class:str="UNKNOWN"
 class BatchSubmitRequest(BaseModel):
  urls:List[str]=Field(...,min_length=1,max_length=50,description="List of already-resolved Amazon US product/affiliate URLs")
- wait:bool=Field(False,description="If true, wait briefly for job acceptance only; does not wait for full 5-Pin completion")
+ wait:bool=Field(False,description="If true, wait briefly for job acceptance only; does not wait for full product Pin completion")
 class DiscoverSubmitRequest(BaseModel):
  count:int=Field(...,ge=1,le=50,description="Number of distinct Amazon US products to discover and submit")
  exclude_asins:Optional[List[str]]=Field(default=None,description="Optional ASIN exclude list")
@@ -140,7 +141,7 @@ async def enqueue_job(url_str:str,background_tasks:BackgroundTasks,target_board_
   existing=job_store.find_by_url(url_str)
   if existing:return SubmitResponse(job_id=existing.job_id,status=existing.status.value,message="Existing job reused; duplicate Pinterest workflow was not started.")
   if not quota.reserve_job():raise HTTPException(status_code=429,detail={"message":"Monthly safe Pinterest capacity reached; job not started.","quota":quota.snapshot()})
-  job_id=str(uuid.uuid4());job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress="Job accepted — 5-pin workflow queued",target_board_id=target_board_id,target_board_name=target_board_name);job_store.save(job);background_tasks.add_task(run_job,job_id,url_str);return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message="Job accepted. 5 Pins will be researched, imaged, published and verified. Poll /status/{job_id}")
+  job_id=str(uuid.uuid4());job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress="Job accepted — 5-pin workflow queued",target_board_id=target_board_id,target_board_name=target_board_name);job_store.save(job);background_tasks.add_task(run_job,job_id,url_str);return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message=f"Job accepted. {PINS_PER_PRODUCT} Pins will be researched, imaged, published and verified. Poll /status/{{job_id}}")
 @app.get("/health")
 async def health():return {"status":"ok","service":"pinterest-autonomous-agent","version":"3.9.0","quality_patch_version":QUALITY_PATCH_VERSION,"mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
 @app.get("/quota")
