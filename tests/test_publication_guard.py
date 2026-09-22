@@ -38,13 +38,13 @@ def test_success_is_reused_without_second_claim(tmp_path: Path):
     assert owner == "job-1"
 
 
-def test_hard_five_pin_ceiling(tmp_path: Path):
+def test_hard_four_pin_ceiling(tmp_path: Path):
     guard = PublicationGuard(tmp_path / "guard.db")
     url = "https://www.amazon.com/example/dp/B000000001?tag=desiredplus-20"
-    for i in range(1, 6):
+    for i in range(1, 5):
         state, _, _ = guard.claim(url, i, f"strategy-{i}", f"job-{i}")
         assert state == "new"
-    state, _, _ = guard.claim(url, 6, "extra", "job-extra")
+    state, _, _ = guard.claim(url, 5, "extra", "job-extra")
     assert state == "limit"
 
 
