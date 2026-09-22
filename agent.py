@@ -1,7 +1,7 @@
 """
 Autonomous multi-pin Pinterest affiliate agent (v3.1 hardening).
 
-Preserves working: Composio Pinterest publish/verify, 5 strategies, exact URL, Railway jobs.
+Preserves working: Composio Pinterest publish/verify, 4 strategies, exact URL, Railway jobs.
 
 Image priority:
 1) Product page images
@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 import httpx
 
 from models import JobStore
+from pin_config import PINS_PER_PRODUCT
 
 logger = logging.getLogger("pinterest-agent.core")
 
@@ -43,10 +44,9 @@ DEFAULT_BOARD_NAME = "Product Pins"
 
 STRATEGIES = [
     {"id": 1, "key": "hero", "name": "Product Hero", "focus": "product-focused hero shot"},
-    {"id": 2, "key": "problem", "name": "Problem / Solution", "focus": "solving everyday listening fatigue"},
+    {"id": 2, "key": "problem", "name": "Problem / Solution", "focus": "solving the customer's everyday problem"},
     {"id": 3, "key": "benefit", "name": "Key Benefit", "focus": "key product benefit highlight"},
     {"id": 4, "key": "usecase", "name": "Audience / Use Case", "focus": "real world use case lifestyle"},
-    {"id": 5, "key": "discovery", "name": "Discovery / Inspiration", "focus": "inspiration discovery shopping"},
 ]
 
 
@@ -341,7 +341,7 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
     return product
 
 
-def build_five_seo(product: Dict[str, Any]) -> List[Dict[str, str]]:
+def build_four_seo(product: Dict[str, Any]) -> List[Dict[str, str]]:
     name = (product.get("name") or "Product").strip()
     desc = (product.get("description") or "").strip()
     site = product.get("site") or ""
@@ -363,10 +363,9 @@ def build_five_seo(product: Dict[str, Any]) -> List[Dict[str, str]]:
         {"title": f"Looking for better sound? {short_name[:45]}"[:100], "description": f"{body}"[:500], "angle": "problem"},
         {"title": f"Why choose {short_name[:55]}"[:100], "description": f"{body}"[:500], "angle": "benefit"},
         {"title": f"Built for daily use: {short_name[:50]}"[:100], "description": f"{body}"[:500], "angle": "usecase"},
-        {"title": f"Discover {short_name[:60]}"[:100], "description": (f"{body} Available via {site}." if site else body)[:500], "angle": "discovery"},
     ]
     out = []
-    for i, t in enumerate(templates):
+    for i, t in enumerate(templates[:PINS_PER_PRODUCT]):
         kw = keywords[i : i + 5] or keywords[:5]
         d = t["description"]
         if kw:
@@ -536,7 +535,7 @@ async def get_best_pin_image(
     job_id: str,
     used_urls: set,
 ) -> Dict[str, Any]:
-    job_store.update(job_id, progress=f"Pin {pin_index}/5: image search ({strategy['name']})")
+    job_store.update(job_id, progress=f"Pin {pin_index}/{PINS_PER_PRODUCT}: image search ({strategy['name']})")
     name = product.get("name") or "product"
     query = f"{name} {strategy['focus']}"[:100]
     candidates: List[Dict[str, Any]] = []
@@ -626,7 +625,7 @@ async def publish_and_verify(
     job_id: str,
     pin_index: int,
 ) -> Dict[str, Any]:
-    job_store.update(job_id, progress=f"Publishing Pin {pin_index}/5")
+    job_store.update(job_id, progress=f"Publishing Pin {pin_index}/{PINS_PER_PRODUCT}")
     if image_mode == "base64":
         media_source = {"source_type": "image_base64", "content_type": "image/jpeg", "data": image_value}
     else:
@@ -674,7 +673,7 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
     capabilities = await probe_capabilities()
 
     product = await research_product(url, job_store, job_id)
-    seo_list = build_five_seo(product)
+    seo_list = build_four_seo(product)
     scheduled_job = job_store.get(job_id)
     target_board_id = scheduled_job.target_board_id if scheduled_job else None
     target_board_name = scheduled_job.target_board_name if scheduled_job else None
@@ -688,7 +687,7 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
     errors: List[Dict[str, Any]] = []
     resources_used: set = set()
 
-    for i, strategy in enumerate(STRATEGIES):
+    for i, strategy in enumerate(STRATEGIES[:PINS_PER_PRODUCT]):
         pin_no = i + 1
         try:
             image = await get_best_pin_image(product, strategy, pin_no, job_store, job_id, used_urls)
@@ -732,11 +731,11 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
         "category": product.get("category"),
         "capabilities": capabilities,
         "resources_used": sorted(resources_used),
-        "pins_planned": 5,
+        "pins_planned": PINS_PER_PRODUCT,
         "pins_published": len(published),
         "board_id": board_id,
         "pins": published,
         "errors": errors,
         "note": "Destination links are the exact original URL. Multi-AI text tools require Composio connections on the same entity as COMPOSIO_ENTITY_ID.",
-        "summary": f"{len(published)}/5 pins published",
+        "summary": f"{len(published)}/{PINS_PER_PRODUCT} pins published",
     }
