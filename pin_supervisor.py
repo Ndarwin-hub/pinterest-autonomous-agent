@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 from urllib.parse import urlsplit, urlunsplit
+from pin_config import PINS_PER_PRODUCT
 
 VERSION = "pin-supervisor-v2"
 
@@ -28,7 +29,7 @@ def _pins(result: Any) -> List[Dict[str, Any]]:
 def inspect_result(result: Dict[str, Any], requested_url: str) -> Dict[str, Any]:
     """Classify the completed publication attempt by the actual Pin results.
 
-    5/5 is completed, 1-4/5 is completed_partial, and 0/5 is failed.
+    4/4 is completed, 1-3/4 is completed_partial, and 0/4 is failed.
     Successfully published Pins are retained; there is no rollback/unpublish
     operation in this supervisor.
     """
@@ -56,7 +57,7 @@ def inspect_result(result: Dict[str, Any], requested_url: str) -> Dict[str, Any]
             failures.append(f"Pin {index}: {', '.join(reasons)}")
 
     verified_count = len(valid_verified)
-    if verified_count == 5:
+    if verified_count == PINS_PER_PRODUCT:
         status = "completed"
     elif verified_count > 0:
         status = "completed_partial"
@@ -67,9 +68,9 @@ def inspect_result(result: Dict[str, Any], requested_url: str) -> Dict[str, Any]
     out["pin_supervisor"] = {
         "version": VERSION,
         "status": status,
-        "success_contract": "5_pins_published_and_individually_verified_for_completed",
+        "success_contract": f"{PINS_PER_PRODUCT}_pins_published_and_individually_verified_for_completed",
         "verified_count": verified_count,
-        "planned_count": 5,
+        "planned_count": PINS_PER_PRODUCT,
         "failures": failures,
         "rollback_unpublish": False,
     }
@@ -88,7 +89,7 @@ def capability_contract() -> Dict[str, Any]:
         "delegates": "only actually executable configured providers",
         "publication_executor": "existing_pinterest_pipeline",
         "railway_role": "background_executor_and_scheduler",
-        "completion_contract": "5_completed; 1_to_4_completed_partial; 0_failed",
+        "completion_contract": f"{PINS_PER_PRODUCT}_completed; 1_to_{PINS_PER_PRODUCT - 1}_completed_partial; 0_failed",
         "successful_pins_are_kept": True,
         "unpublish_on_partial": False,
         "manual_submit_preserved": True,
