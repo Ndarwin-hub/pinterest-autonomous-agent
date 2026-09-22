@@ -345,10 +345,10 @@ def resolve_board_with_balance(
 def apply_virtual_increment(
     balance: Dict[str, Any],
     board_name: str,
-    pins_per_product: int = 5,
+    pins_per_product: int = 4,
 ) -> Dict[str, Any]:
     """
-    After assigning a product (expected +5 pins), recalculate ranking for the next selection.
+    After assigning a product (expected +4 Pins), recalculate ranking for the next selection.
     Does not mutate live Pinterest — only the in-run planning snapshot.
     """
     if not balance.get("available"):
