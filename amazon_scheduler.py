@@ -205,11 +205,7 @@ class AmazonScheduler:
    target_board_name=str(slot.get("target_board_name") or "Everything Else")
    target_board_id=str(slot.get("target_board_id") or "")
    logger.info("Amazon slot %s discovery attempt=%s board_serial=%s board=%s",n,attempts+1,slot.get("board_serial"),target_board_name)
-   candidate=None
-   if recovery and slot.get("selected_url"):
-    candidate={"asin":slot.get("selected_asin"),"affiliate_url":slot.get("selected_url")}
-   else:
-    candidate=await discover_for_board(target_board_name,exclude_asins=exclude)
+   candidate=await discover_for_board(target_board_name,exclude_asins=exclude)
    if not candidate:
     logger.warning("Amazon slot %s produced no fresh candidate",n);ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
    exclude.add(candidate.get("asin") or "")
