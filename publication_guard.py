@@ -15,6 +15,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+from pin_config import PINS_PER_PRODUCT
 
 logger = logging.getLogger("pinterest-agent.publication-guard")
 _LOCK = threading.Lock()
@@ -76,7 +77,7 @@ class PublicationGuard:
                 "SELECT COUNT(*) FROM pin_publications WHERE url_key=? AND state IN ('claimed','success')",
                 (key,),
             ).fetchone()[0]
-            if count >= 5:
+            if count >= PINS_PER_PRODUCT:
                 conn.commit()
                 conn.close()
                 return "limit", None, None
@@ -134,7 +135,7 @@ def install(agent_module):
 
         if state == "limit":
             raise RuntimeError(
-                f"Publication blocked: five Pins already claimed/published for {normalize_url(link)}"
+                f"Publication blocked: {PINS_PER_PRODUCT} Pins already claimed/published for {normalize_url(link)}"
             )
 
         if state == "claimed":
