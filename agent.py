@@ -660,6 +660,19 @@ async def publish_and_verify(
     }
 
 
+def is_pinterest_block_error(error: Any) -> bool:
+    text = str(error or "").lower()
+    markers = (
+        "pinterest rate limit exceeded",
+        "you've hit a block (pins)",
+        "you have hit a block (pins)",
+        "combat spam",
+        "rate limit block",
+        "too many requests",
+    )
+    return any(m in text for m in markers)
+
+
 async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> Dict[str, Any]:
     logger.info(f"[{job_id}] Start URL={url}")
     url = url.strip()
@@ -720,7 +733,15 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
             )
         except Exception as e:
             logger.error(f"Pin {pin_no} failed: {e}")
-            errors.append({"pin_number": pin_no, "strategy": strategy["name"], "error": str(e)})
+            error_text = str(e)
+            errors.append({"pin_number": pin_no, "strategy": strategy["name"], "error": error_text})
+            if is_pinterest_block_error(error_text):
+                logger.warning(
+                    "Pinterest circuit-breaker condition detected after Pin %s; "
+                    "stopping remaining Pins for this product to avoid repeated CREATE_PIN attempts.",
+                    pin_no,
+                )
+                break
 
     if not published:
         raise RuntimeError(f"All pins failed. First error: {errors[0]['error'] if errors else 'unknown'}")
