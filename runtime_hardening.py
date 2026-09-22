@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, Optional
+from pin_config import PINS_PER_PRODUCT
 
 logger = logging.getLogger("pinterest-agent.runtime-hardening")
 
@@ -129,7 +130,7 @@ def install(agent_mod: Any) -> str:
     ) -> dict:
         from board_org import current_section_id
 
-        job_store.update(job_id, progress=f"Publishing Pin {pin_index}/5")
+        job_store.update(job_id, progress=f"Publishing Pin {pin_index}/{PINS_PER_PRODUCT}")
         if image_mode == "base64":
             media_source = {
                 "source_type": "image_base64",
