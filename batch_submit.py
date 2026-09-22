@@ -1,6 +1,6 @@
 """Thin multi-product ingest that feeds the existing single-URL /submit pipeline.
 
-Additive only. Does not replace, bypass, or weaken the 5-Pin quality gates.
+Additive only. Does not replace, bypass, or weaken the shared product-Pin quality gates.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from amazon_url import (
     resolve_amazon_product_url,
 )
 from published_registry import registry
+from pin_config import PINS_PER_PRODUCT
 
 logger = logging.getLogger("pinterest-agent.batch_submit")
 
@@ -316,7 +317,7 @@ async def discover_n_products(
         )
         # Recalculate expected balance after this assignment (+5 pins)
         if board_name and balance.get("available"):
-            balance = apply_virtual_increment(balance, board_name, pins_per_product=5)
+            balance = apply_virtual_increment(balance, board_name, pins_per_product=PINS_PER_PRODUCT)
             targets = discovery_board_order(balance)
             plan = []
             for t in targets:
