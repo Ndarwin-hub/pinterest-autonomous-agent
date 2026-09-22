@@ -91,13 +91,19 @@ class DailyLedger:
         return [dict(zip(keys,r)) for r in rows]
 
     def next_unfinished_batch(self,day=None,max_batch=SLOT_COUNT//BATCH_SIZE):
+        """Return the next batch with actionable normal work.
+
+        Deferred/exhausted slots are terminal for the normal pass and are handled
+        by the final recovery pass after Batch 10. This prevents one Pinterest-side
+        block from holding later batches hostage.
+        """
         day=day or self.today_str()
         with _lock:
             c=self._conn()
             for batch in range(1,int(max_batch)+1):
                 first=(batch-1)*BATCH_SIZE+1; last=first+BATCH_SIZE-1
                 statuses=[r[0] for r in c.execute("SELECT status FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? ORDER BY slot",(day,first,last)).fetchall()]
-                if len(statuses)<BATCH_SIZE or any(s!="success" for s in statuses):
+                if len(statuses)<BATCH_SIZE or any(s in ("pending","failed_open","processing") for s in statuses):
                     c.close(); return batch
             c.close(); return None
 
@@ -133,9 +139,22 @@ class DailyLedger:
     def next_pending_slot(self,day=None,slot_min=1,slot_max=SLOT_COUNT):
         day=day or self.today_str()
         with _lock:
-            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? AND status IN ('pending','failed_open','exhausted') ORDER BY slot LIMIT 1",(day,slot_min,slot_max)).fetchone(); c.close()
+            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? AND status IN ('pending','failed_open') ORDER BY slot LIMIT 1",(day,slot_min,slot_max)).fetchone(); c.close()
         if not row:return None
-        keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]; d=dict(zip(keys,row)); d["replacement_attempts"]=0 if d.get("status")=="exhausted" else d.get("replacement_attempts"); return d
+        keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]; d=dict(zip(keys,row)); return d
+    def claim_recovery_slot(self,day,slot):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("BEGIN IMMEDIATE")
+            cur=c.execute("UPDATE daily_slots SET status='processing',updated_at=? WHERE day=? AND slot=? AND status IN ('deferred','exhausted')",(now,day,slot))
+            ok=cur.rowcount==1; c.commit(); c.close(); return ok
+    def next_recovery_slot(self,day=None):
+        day=day or self.today_str()
+        with _lock:
+            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND status IN ('deferred','exhausted') ORDER BY slot LIMIT 1",(day,)).fetchone(); c.close()
+        if not row:return None
+        keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]
+        return dict(zip(keys,row))
     def mark_slot(self,slot,*,status,day=None,selected_asin=None,selected_url=None,affiliate_url=None,job_id=None,pinterest_verified=False,error=None,inc_replacement=False):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
