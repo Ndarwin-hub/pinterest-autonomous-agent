@@ -10,15 +10,16 @@ from amazon_composio_discovery import discover_category
 from daily_ledger import ledger,SLOT_COUNT,BATCH_SIZE
 from published_registry import registry
 from amazon_alerts import send_failure_alert,notify_daily_started
+from pin_config import PINS_PER_PRODUCT
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
 SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(48*60)));SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes");SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
 EnqueueFn=Callable[[str],Awaitable[Dict[str,Any]]];ListBoardsFn=Callable[[],Awaitable[List[Dict[str,Any]]]];WaitJobFn=Callable[[str],Awaitable[Dict[str,Any]]]
 def pinterest_any_verified(result:Dict[str,Any])->bool:
  pins=result.get("pins") if isinstance(result,dict) else None
  return isinstance(pins,list) and any(isinstance(p,dict) and bool(p.get("verified")) and bool(p.get("pin_id")) and bool(p.get("destination_url")) for p in pins)
-def pinterest_five_verified(result:Dict[str,Any])->bool:
+def pinterest_target_verified(result:Dict[str,Any])->bool:
  pins=result.get("pins") if isinstance(result,dict) else None
- return isinstance(pins,list) and len(pins)==5 and all(isinstance(p,dict) and bool(p.get("verified")) for p in pins)
+ return isinstance(pins,list) and len(pins)==PINS_PER_PRODUCT and all(isinstance(p,dict) and bool(p.get("verified")) for p in pins)
 class AmazonScheduler:
  def __init__(self):
   self._task=None;self._stop=asyncio.Event();self._daily_task=None;self._daily_stop=asyncio.Event();self._daily_day=None
