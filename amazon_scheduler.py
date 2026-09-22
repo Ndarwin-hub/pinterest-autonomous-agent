@@ -182,7 +182,15 @@ class AmazonScheduler:
     if not ledger.claim_slot(day,slot_no):continue
     attempted+=1;ok=await self._process_slot(slot,enqueue,wait_job,day)
     if ok:successes+=1
-    else:errors.append({"slot":slot_no,"status":"failed_or_exhausted"})
+    else:errors.append({"slot":slot_no,"status":"failed_or_deferred"})
+    if self.pinterest_circuit_wait_seconds()>0:
+     # Do not spend more Pinterest CREATE_PIN attempts in this batch after a block.
+     for remaining in slot_order[slot_order.index(slot_no)+1:]:
+      pending=ledger.next_pending_slot(day,remaining,remaining)
+      if pending:
+       ledger.claim_slot(day,remaining)
+       ledger.mark_slot(remaining,status="deferred",day=day,error="pinterest_circuit_breaker_active")
+     break
    status="completed" if attempted>0 and successes>=attempted and not errors else ("partial_failure" if successes>0 else "failed")
    result={"status":status,"day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted,"source":"composio_amazon","board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"slot_order":slot_order,"snapshot":balance_meta.get("snapshot")}}
    ledger.complete_batch(day,batch_index,owner,status=status,result_json=json.dumps(result,separators=(",",":")))
