@@ -66,7 +66,9 @@ class AmazonScheduler:
      logger.info("Final recovery attempting deferred/exhausted slot %s.",slot["slot"])
      ok=await self._process_slot(slot,enqueue,wait_job,day,recovery=True)
      if not ok:
-      ledger.mark_slot(int(slot["slot"]),status="exhausted",day=day,error="final_recovery_exhausted")
+      current=ledger.next_recovery_slot(day)
+      if not current or int(current.get("slot") or -1)!=int(slot["slot"]) or current.get("status")!="deferred":
+       ledger.mark_slot(int(slot["slot"]),status="exhausted",day=day,error="final_recovery_exhausted")
     if ledger.is_day_complete(day): break
     try:
      await asyncio.wait_for(self._daily_stop.wait(),timeout=SLOT_INTERVAL_SEC)
