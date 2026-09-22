@@ -232,7 +232,7 @@ def install_identity(agent_mod) -> str:
         brand = (product.get("brand") or _brand_from_name(name) or "").strip()
         ptype = _infer_ptype(name, category)
         phrases = _phrases(ptype)
-        angles = ["hero","problem","benefit","usecase","discovery"]
+        angles = ["hero","problem","benefit","usecase"]
         out = []
         used = set()
         for i, angle in enumerate(angles):
@@ -259,7 +259,7 @@ def install_identity(agent_mod) -> str:
         return out
 
     agent_mod.research_product = _research
-    agent_mod.build_five_seo = _seo
+    agent_mod.build_four_seo = _seo
     agent_mod._quality_identity_installed = True
     agent_mod.QUALITY_PATCH_VERSION = QUALITY_PATCH_VERSION
     logger.info("QUALITY identity installed version=%s (before wire)", QUALITY_PATCH_VERSION)
