@@ -146,7 +146,7 @@ class DailyLedger:
         now=datetime.now(timezone.utc).isoformat()
         with _lock:
             c=self._conn(); c.execute("BEGIN IMMEDIATE")
-            cur=c.execute("UPDATE daily_slots SET status='processing',updated_at=? WHERE day=? AND slot=? AND status IN ('deferred','exhausted')",(now,day,slot))
+            cur=c.execute("UPDATE daily_slots SET status='processing',updated_at=? WHERE day=? AND slot=? AND status IN ('deferred','partial','exhausted')",(now,day,slot))
             ok=cur.rowcount==1; c.commit(); c.close(); return ok
     def next_recovery_slot(self,day=None):
         day=day or self.today_str()
