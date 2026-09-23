@@ -109,7 +109,9 @@ async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set
         if not u or u in used_urls:continue
         sig=await _visual_signature(u)
         if sig is None:
-            selected.append(c); continue
+            selected.append(c)
+            if len(selected)>=MAX_CANDIDATES_PER_PIN:break
+            continue
         distances=[_visual_distance(sig,s) for s in used_sigs+selected_sigs]
         if distances and min(distances)<0.12:continue
         c["visual_distance"]=round(min(distances),4) if distances else 1.0
@@ -169,11 +171,11 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         raw.extend(await search_pexels(queries[0],agent_mod))
     valid=await validate_many(raw)
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
-    valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls and c.get("score",0)>=MIN_SCORE]
+    valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls]
     valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
     diverse=await _remove_visual_duplicates(valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
     if diverse:return diverse[:MAX_CANDIDATES_PER_PIN]
-    return valid[:1]
+    return []
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
