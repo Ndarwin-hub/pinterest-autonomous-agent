@@ -1,7 +1,7 @@
 """Perceptual image fingerprinting and visual-diversity selection.
 
 Purpose:
-- reject exact/near-identical image variants within a product's five Pins;
+- reject exact/near-identical image variants within a product's four Pins;
 - prefer genuinely different views/angles/compositions of the same product;
 - never treat merely similar products as duplicate images.
 """
