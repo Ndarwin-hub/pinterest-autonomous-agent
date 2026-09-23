@@ -32,8 +32,8 @@ def install(agent_module):
         if image.get("mode") == "url" and canonical in prior:
             raise RuntimeError("Image diversity gate blocked a repeated media URL.")
         fp=checked.get("_fingerprint")
-        history=getattr(agent_module,"_pin_image_fingerprints",{}).get(job_id,[])
-        if fp and any(similarity(fp,old)>=0.93 for old in history):
+        history=getattr(agent_module,"_pin_image_fingerprints",{}).get(job_id,[])\n        prior_history=history[:-1] if history and fp and similarity(fp,history[-1]) >= 0.999 else history
+        if fp and any(similarity(fp,old)>=0.93 for old in prior_history):
             raise RuntimeError("Image diversity gate blocked a visually duplicated asset.")
         if fp: history.append(fp)
         if image.get("mode") == "url": used_urls.add(value)
