@@ -162,6 +162,15 @@ class DailyLedger:
             c.execute("UPDATE daily_slots SET status=?,selected_asin=COALESCE(?,selected_asin),selected_url=COALESCE(?,selected_url),affiliate_url=COALESCE(?,affiliate_url),replacement_attempts=?,job_id=COALESCE(?,job_id),pinterest_verified=?,error=?,completed_at=CASE WHEN ? IN ('success','exhausted') THEN ? ELSE completed_at END,updated_at=? WHERE day=? AND slot=?",(status,selected_asin,selected_url,affiliate_url,attempts,job_id,1 if pinterest_verified else 0,error,status,now,now,day,slot))
             if status=="success" and old_status!="success": c.execute("UPDATE daily_days SET success_count=success_count+1,updated_at=? WHERE day=?",(now,day))
             c.execute("UPDATE daily_days SET status='complete',updated_at=? WHERE day=? AND success_count>=?",(now,day,SLOT_COUNT)); c.commit(); c.close()
+    def historical_selected_asins(self,exclude_day=None):
+        """ASINs selected by prior daily allocations; prevents a new day from resuming old work."""
+        exclude_day=exclude_day or self.today_str()
+        with _lock:
+            c=self._conn()
+            rows=c.execute("SELECT DISTINCT selected_asin FROM daily_slots WHERE day<>? AND selected_asin IS NOT NULL AND selected_asin<>''",(exclude_day,)).fetchall()
+            c.close()
+        return {str(r[0]).upper() for r in rows if r and r[0]}
+
     def is_day_complete(self,day=None):
         s=self.get_day_status(day); return s.get("status")=="complete" or int(s.get("success_count",0))>=SLOT_COUNT
 ledger=DailyLedger()
