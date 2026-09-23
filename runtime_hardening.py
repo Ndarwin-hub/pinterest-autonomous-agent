@@ -152,13 +152,40 @@ def install(agent_mod: Any) -> str:
         if section_id:
             args["board_section_id"] = str(section_id)
 
-        data = await agent_mod.run_composio_tool("PINTEREST_CREATE_PIN", args, retries=2)
-        pin_id = str(
-            data.get("id")
-            or data.get("pin_id")
-            or (data.get("data") or {}).get("id")
-            or ""
-        )
+        async with _PIN_CREATE_LOCK:
+            data = None
+            last_error = None
+            for attempt in range(4):
+                try:
+                    data = await agent_mod.run_composio_tool("PINTEREST_CREATE_PIN", args, retries=0)
+                    pin_id_candidate = str(
+                        data.get("id")
+                        or data.get("pin_id")
+                        or (data.get("data") or {}).get("id")
+                        or ""
+                    )
+                    if pin_id_candidate:
+                        break
+                    msg=str(data)
+                    if "rate limit" not in msg.lower() and "block (pins)" not in msg.lower() and "combat spam" not in msg.lower():
+                        if attempt < 2:
+                            await asyncio.sleep(3*(attempt+1))
+                            continue
+                    raise RuntimeError(f"PINTEREST_CREATE_PIN unsuccessful: {data}")
+                except Exception as exc:
+                    last_error=exc
+                    msg=str(exc).lower()
+                    if "rate limit" not in msg and "block (pins)" not in msg and "combat spam" not in msg:
+                        if attempt < 2:
+                            await asyncio.sleep(3*(attempt+1))
+                            continue
+                        raise
+                    if attempt >= len(_RATE_BACKOFF_SECONDS):
+                        raise
+                    await asyncio.sleep(_RATE_BACKOFF_SECONDS[attempt])
+            else:
+                raise RuntimeError(f"PINTEREST_CREATE_PIN unsuccessful after adaptive retry: {last_error}")
+            pin_id = pin_id_candidate
         if not pin_id:
             raise RuntimeError(f"Pin created but no ID: {json.dumps(data)[:400]}")
 
