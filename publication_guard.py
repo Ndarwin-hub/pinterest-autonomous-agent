@@ -101,6 +101,15 @@ class PublicationGuard:
             conn.commit()
             conn.close()
 
+    def release_for_repair(self, url: str):
+        """Release prior logical Pin claims only after an explicit repair flow deletes the old Pins."""
+        key = normalize_url(url)
+        with _LOCK:
+            conn = self._conn()
+            conn.execute("DELETE FROM pin_publications WHERE url_key=?", (key,))
+            conn.commit()
+            conn.close()
+
     def count_success(self, url: str) -> int:
         with _LOCK:
             conn = self._conn()
