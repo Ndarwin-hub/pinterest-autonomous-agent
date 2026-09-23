@@ -2,7 +2,7 @@ name: Pin A live smoke test
 on:
   push:
     paths:
-      - .github/workflows/pin-a-live-smoke.yml
+      - README.md
 permissions:
   id-token: write
   contents: read
