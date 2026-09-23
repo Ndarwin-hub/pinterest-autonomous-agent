@@ -36,22 +36,9 @@ def ordered_primary_boards(live_items:List[Dict[str,Any]])->List[Dict[str,Any]]:
             continue
         seen.add(bid)
         live.append(dict(b))
-    # Preserve the exact order returned by Pinterest for boards that are live.
-    # If a just-created board is temporarily absent from the list index, insert it
-    # at the position implied by the current A-Z board list; once Pinterest returns
-    # it, its live position becomes authoritative automatically.
-    missing=[]
-    live_names={str(b.get("name") or "").strip() for b in live}
-    for name,bid in PERMANENT_BOARD_IDS.items():
-        if name!=DEFAULT_BOARD_NAME and name in BOARD_SCOPES and name not in live_names:
-            missing.append({"id":bid,"name":name,"_fresh_configured":True})
-    for fresh in sorted(missing,key=lambda x:x["name"].casefold()):
-        pos=len(live)
-        for i,current in enumerate(live):
-            if fresh["name"].casefold() < str(current.get("name") or "").casefold():
-                pos=i
-                break
-        live.insert(pos,fresh)
+    # Live Pinterest availability is authoritative. Do not synthesize missing boards:
+    # an unavailable board is skipped and the daily 50-product allocation continues
+    # through the remaining eligible boards and the permanent fallback.
     return live
 
 CATEGORY_SLOTS=[]
@@ -68,7 +55,7 @@ def classify_live_boards(live_items:List[Dict[str,Any]])->Dict[str,Any]:
         "unknown_non_legacy":[],
         "primary_count":len(primary),
         "required_primary_slots":REQUIRED_PRIMARY_SLOTS,
-        "scheduler_ready":len(primary)>=REQUIRED_PRIMARY_SLOTS and all(str(b.get("id") or "") for b in primary),
+        "scheduler_ready":bool(primary) and all(str(b.get("id") or "") for b in primary),
         "missing_primary_slots":max(0,REQUIRED_PRIMARY_SLOTS-len(primary)),
         "serial_order":[b["name"] for b in primary],
         "board_scopes":BOARD_SCOPES,
@@ -77,7 +64,10 @@ def classify_live_boards(live_items:List[Dict[str,Any]])->Dict[str,Any]:
 def build_slot_specs(live_items:List[Dict[str,Any]])->Tuple[Optional[List[Dict[str,Any]]],Dict[str,Any]]:
     info=classify_live_boards(live_items)
     if not info["scheduler_ready"]:
-        return None,info
+        # If no primary board is live, the permanent Everything Else fallback is still
+        # a valid execution target; otherwise continue with only currently live boards.
+        info["scheduler_ready"]=True
+        info["primary_count"]=0
     cycle=info["primary_boards"]+[{"id":PERMANENT_BOARD_IDS[DEFAULT_BOARD_NAME],"name":DEFAULT_BOARD_NAME}]
     specs=[]
     for slot in range(1,51):
