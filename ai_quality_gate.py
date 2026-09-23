@@ -79,33 +79,62 @@ async def _openai_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
         return None
 
 async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
-    """Independent internal image reviewer. External AI is optional and never authoritative."""
-    from image_quality import inspect_image_content, validate_base64_image
-    approved=[]; scores={}; reasons=[]
+    """Mandatory internal reviewer using only downloaded image bytes and product metadata."""
+    from image_quality import inspect_image_content, validate_base64_image, _fetch_image_bytes, inspect_image_bytes
+    from image_fingerprint import fingerprint, similarity
+    approved=[]; scores={}; reasons=[]; seen_fps=[]
+    async def load(ref):
+        if ref.startswith("data:image/"):
+            try:
+                _,b64=ref.split(",",1); import base64
+                raw=base64.b64decode(b64,validate=True); return raw, inspect_image_bytes(raw)
+            except Exception:return None,None
+        raw=await _fetch_image_bytes(ref) if ref.startswith(("http://","https://")) else None
+        return (raw,inspect_image_bytes(raw)) if raw else (None,None)
+    async def trusted_fps(urls):
+        out=[]
+        for u in (urls or [])[:6]:
+            raw=await _fetch_image_bytes(str(u))
+            fp=fingerprint(raw) if raw else None
+            if fp: out.append(fp)
+        return out
     for i,item in enumerate(items,1):
         meta=item.get("metadata") or {}; ref=str(item.get("image_ref") or "").strip()
-        dims=meta.get("dimensions") or []
-        w=int(dims[0] or 0) if len(dims)>0 and dims[0] else 0
-        h=int(dims[1] or 0) if len(dims)>1 and dims[1] else 0
-        score=int(meta.get("image_score") or 0)
-        ok=bool(ref)
-        if ok and w and h:
-            ok = min(w,h) >= 800 and max(w,h)/max(1,min(w,h)) <= 2.5
-        if ok:
-            if ref.startswith("data:image/"):
-                try:
-                    _,b64=ref.split(",",1)
-                    ok = bool(await validate_base64_image(b64))
-                except Exception:
-                    ok=False
-            elif ref.startswith(("http://","https://")):
-                ok = bool(await inspect_image_content(ref))
-            else:
-                ok=False
+        raw,checked=await load(ref)
+        ok=bool(checked)
+        reason=[]
+        if not ok: reason.append("invalid/corrupt/blank/transparent/low-information image bytes")
+        fp=(checked or {}).get("_fingerprint") if checked else None
+        if ok and fp and any(similarity(fp,old)>=0.93 for old in seen_fps):
+            ok=False; reason.append("visual duplicate of another candidate")
+        if fp: seen_fps.append(fp)
+        provider=str(meta.get("image_provider") or "").lower()
+        product_name=str(meta.get("product") or "").lower()
+        brand=str(meta.get("brand") or "").lower()
+        source=str(meta.get("image_source") or "").lower()
+        trusted=await trusted_fps(meta.get("trusted_image_urls") or [])
+        relevance=0.0
+        if fp and trusted: relevance=max(similarity(fp,t) for t in trusted)
+        tokens={x for x in re.findall(r"[a-z0-9]+",product_name) if len(x)>=4}
+        source_tokens={x for x in re.findall(r"[a-z0-9]+",source) if len(x)>=4}
+        textual=sum(1 for x in list(tokens)[:12] if x in source_tokens)
+        trusted_provider=provider in {"product_page","amazon_direct","amazon_product"}
+        if ok and trusted and not trusted_provider and relevance < 0.30 and textual < 1 and not brand:
+            ok=False; reason.append("no sufficient exact-product relevance evidence")
+        elif ok and trusted and not trusted_provider and relevance < 0.22 and textual < 1:
+            ok=False; reason.append("weak product-image similarity")
+        score=0
+        if checked:
+            w,h=int(checked.get("width") or 0),int(checked.get("height") or 0)
+            score=min(100,50 + min(25,int(max(w,h)/240)) + min(15,int(float(checked.get("entropy") or 0)*2)) + (10 if float(checked.get("opaque_ratio") or 0)>=0.98 else 0))
+            if relevance: score=max(0,min(100,int(score*0.75+relevance*25)))
         scores[str(i)]=score
         if ok: approved.append(i)
-        else: reasons.append(f"Pin {i} failed internal image-content validation")
-    return {"approved_indexes":approved,"scores":scores,"reason":"; ".join(reasons) if reasons else "All candidates passed independent internal image-content validation.","status":"DETERMINISTIC_VALIDATION_PASSED" if len(approved)==len(items) else "DETERMINISTIC_VALIDATION_PARTIAL","final_reviewer":"deterministic","tool_failure":False,"advisory":False}
+        else: reasons.append(f"Pin {i}: " + (", ".join(reason) if reason else "internal validation failed"))
+    return {"approved_indexes":approved,"scores":scores,
+            "reason":"; ".join(reasons) if reasons else "All candidates passed mandatory byte-level internal validation and visual-dedup/relevance checks.",
+            "status":"DETERMINISTIC_VALIDATION_PASSED" if len(approved)==len(items) else "DETERMINISTIC_VALIDATION_PARTIAL",
+            "final_reviewer":"deterministic","tool_failure":False,"advisory":False}
 async def _grok_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not XAI_API_KEY:return None
     ref=item.get("image_ref"); content=[{"type":"text","text":SYSTEM+"\nReview this candidate. Return {approved:boolean,score:0-100,reason:string}. Score the candidate 0-100. Do not treat the score as a publication gate."}]
