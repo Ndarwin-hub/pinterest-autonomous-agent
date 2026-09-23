@@ -24,7 +24,7 @@ import io
 import os
 from typing import Any, Dict, List, Set
 
-from image_fingerprint import attach_fingerprint, diversity_bonus, is_near_duplicate
+from image_fingerprint import attach_fingerprint, diversity_bonus, is_near_duplicate, known_fingerprints, similarity
 
 import httpx
 
@@ -225,6 +225,7 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         history = {}
         setattr(agent, "_pin_image_fingerprints", history)
     previous = history.setdefault(job_id, [])
+    previous_all = list(previous) + known_fingerprints()
     job_store.update(job_id, progress=f"Pin {pin_index}/4: Composio 8K/4K image priority ({strategy['name']})")
     name = product.get("name") or "product"
     query = f"{name} {strategy['focus']}"[:160]
@@ -236,12 +237,12 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         if any(_native_tier(x) >= 4 for x in await _verify_candidates(composio, used_urls)):
             break
     composio_verified = await _verify_candidates(composio, used_urls)
-    best_8k = _best(composio_verified, 4, previous)
+    best_8k = _best(composio_verified, 4, previous_all)
     if best_8k:
         used_urls.add(best_8k["url"])
         if best_8k.get("_fingerprint"): previous.append(best_8k["_fingerprint"])
         return {"mode": "url", "value": best_8k["url"], "provider": "composio_search_image", "id": best_8k.get("id"), "score": 100, "license": best_8k.get("license"), "resolution_tier": "8K+"}
-    best_4k = _best(composio_verified, 3, previous)
+    best_4k = _best(composio_verified, 3, previous_all)
     if best_4k:
         used_urls.add(best_4k["url"])
         if best_4k.get("_fingerprint"): previous.append(best_4k["_fingerprint"])
@@ -257,7 +258,7 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         pass
     other.extend(await _configured_stock(query))
     other_verified = await _verify_candidates(other, used_urls)
-    best_other = _best(other_verified, 3, previous) or _best(other_verified, 2, previous)
+    best_other = _best(other_verified, 3, previous_all) or _best(other_verified, 2, previous_all)
     if best_other:
         used_urls.add(best_other["url"])
         if best_other.get("_fingerprint"): previous.append(best_other["_fingerprint"])
@@ -265,6 +266,18 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
 
     # PRIORITY 4: executable AI image path, if actually present.
     ai = await _try_existing_ai(agent, product, strategy)
+    if ai:
+        try:
+            from image_quality import validate_base64_image, inspect_image_content
+            checked = await validate_base64_image(str(ai.get("value") or "")) if ai.get("mode") == "base64" else await inspect_image_content(str(ai.get("value") or ""))
+            if checked:
+                ai = dict(ai); ai.update(checked, content_gate="passed", image_bytes_validated=True)
+                if ai.get("_fingerprint") and any(similarity(ai["_fingerprint"], old) >= 0.93 for old in previous_all):
+                    ai = None
+            else:
+                ai = None
+        except Exception:
+            ai = None
     if ai:
         return ai
 
@@ -288,7 +301,7 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         w, h, data = await _probe_dimensions(url)
         if w and h:
             native.append({"url": url, "provider": "product_page", "width": w, "height": h, "_data": data, "license": "product_page"})
-    native_best = _best(native, 0, previous)
+    native_best = _best(native, 0, previous_all)
     if native_best:
         used_urls.add(native_best["url"])
         if native_best.get("_fingerprint"): previous.append(native_best["_fingerprint"])
@@ -309,7 +322,7 @@ def install(agent: Any) -> None:
             return await get_best_pin_image(product, strategy, pin_index, job_store, job_id, used_urls, agent)
         except Exception as exc:
             # Never silently bypass the diversity selector with the legacy selector.
-            job_store.update(job_id, progress=f"Pin {pin_index}/5: diversity selector error: {type(exc).__name__}")
+            job_store.update(job_id, progress=f"Pin {pin_index}/4: diversity selector error: {type(exc).__name__}")
             raise
 
     agent.get_best_pin_image = wrapped
