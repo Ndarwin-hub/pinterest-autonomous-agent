@@ -320,7 +320,10 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         w, h, data = await _probe_dimensions(url)
         if w and h:
             native.append({"url": url, "provider": "product_page", "width": w, "height": h, "_data": data, "license": "product_page"})
-    native_best = _best(native, 0, previous_all)
+    # Repair fallback: product-page images are independently byte/dimension validated.
+    # Use only this job's prior images for diversity here; historical fingerprints can
+    # belong to the deleted Pins being repaired and otherwise over-block valid sources.
+    native_best = _best(native, 0, previous)
     if native_best:
         used_urls.add(native_best["url"])
         if native_best.get("_fingerprint"): previous.append(native_best["_fingerprint"])
