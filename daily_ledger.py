@@ -32,11 +32,15 @@ class DailyLedger:
     def reclaim_stale_processing(self,day=None):
         day=day or self.today_str(); cutoff=time.time()-SLOT_PROCESSING_LEASE_SEC
         with _lock:
-            c=self._conn(); rows=c.execute("SELECT slot,updated_at FROM daily_slots WHERE day=? AND status='processing'",(day,)).fetchall(); reclaimed=0
-            for slot,updated in rows:
+            c=self._conn(); rows=c.execute("SELECT slot,updated_at,job_id FROM daily_slots WHERE day=? AND status='processing'",(day,)).fetchall(); reclaimed=0
+            for slot,updated,job_id in rows:
                 try: age=time.time()-datetime.fromisoformat(updated).timestamp()
                 except Exception: age=SLOT_PROCESSING_LEASE_SEC+1
-                if age>=SLOT_PROCESSING_LEASE_SEC:
+                # A processing slot with no external job ID cannot have reached the
+                # publish phase. Reclaim it immediately after a scheduler restart;
+                # this prevents a deployment/restart from marooning a slot for 45m.
+                stale_without_job = not str(job_id or "").strip()
+                if stale_without_job or age>=SLOT_PROCESSING_LEASE_SEC:
                     c.execute("UPDATE daily_slots SET status='failed_open',error='stale_processing_reclaimed',updated_at=? WHERE day=? AND slot=? AND status='processing'",(datetime.now(timezone.utc).isoformat(),day,slot)); reclaimed += 1 if c.execute("SELECT changes()").fetchone()[0] == 1 else 0
             c.commit(); c.close(); return reclaimed
     def get_day_status(self,day=None):
