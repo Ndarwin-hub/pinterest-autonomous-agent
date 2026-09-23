@@ -12,6 +12,8 @@ on:
         required: false
         default: 'manual-image-replacement'
         type: string
+  repository_dispatch:
+    types: [repair_pinterest_images]
 
 permissions:
   contents: read
@@ -26,19 +28,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Validate repair payload
+      - name: Resolve repair payload
         shell: bash
         env:
-          ITEMS_JSON: ${{ inputs.items_json }}
+          DISPATCH_ITEMS: ${{ github.event.client_payload.items_json }}
+          DISPATCH_LABEL: ${{ github.event.client_payload.request_label }}
+          MANUAL_ITEMS: ${{ inputs.items_json }}
+          MANUAL_LABEL: ${{ inputs.request_label }}
         run: |
           set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            ITEMS_JSON="$DISPATCH_ITEMS"
+            REQUEST_LABEL="$DISPATCH_LABEL"
+          else
+            ITEMS_JSON="$MANUAL_ITEMS"
+            REQUEST_LABEL="$MANUAL_LABEL"
+          fi
+          test -n "$ITEMS_JSON"
+          test -n "$REQUEST_LABEL"
           printf '%s' "$ITEMS_JSON" | jq -e '
             (.items | type == "array") and
             (.items | length >= 1 and length <= 5) and
             all(.[]; (.url | type == "string") and (.pin_ids | type == "array" and length >= 1) and
               (.target_board_id | type == "string") and (.target_board_name | type == "string"))
           ' >/dev/null
-          echo "$ITEMS_JSON" | jq -c '{count:(.items|length), products:[.items[]|{url,pins:(.pin_ids|length),target_board_name}]}'
+          printf '%s' "$ITEMS_JSON" > /tmp/items.json
+          printf '%s' "$REQUEST_LABEL" > /tmp/request_label
+          echo "Repair payload validated."
 
       - name: Request GitHub OIDC token
         shell: bash
@@ -51,11 +67,10 @@ jobs:
 
       - name: Delete old Pins and enqueue exact replacements
         shell: bash
-        env:
-          ITEMS_JSON: ${{ inputs.items_json }}
-          REQUEST_LABEL: ${{ inputs.request_label }}
         run: |
           set -euo pipefail
+          ITEMS_JSON=$(cat /tmp/items.json)
+          REQUEST_LABEL=$(cat /tmp/request_label)
           response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 900             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-one-batch'             -H "X-Pin-A-Request-ID: repair-${GITHUB_RUN_ID}-${REQUEST_LABEL}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$ITEMS_JSON")
           printf '%s
 ' "$response"
