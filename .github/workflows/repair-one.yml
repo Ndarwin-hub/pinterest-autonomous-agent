@@ -25,10 +25,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          payload=$(printf '%s' "$payload" | jq --argjson i "$INDEX" '{items:[.items[$i]]}')
-          INDEX='${{ inputs.index }}'
-          case "$INDEX" in 0|1|2|3|4|5|6|7|8|9) ;; *) echo 'index must be 0-9'; exit 2 ;; esac
-          payload=$(printf '%s' "$payload" | jq --argjson i "$INDEX" '{items:[.items[$i]]}')
           response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
           token=$(printf '%s' "$response" | jq -r '.value')
           test -n "$token" && test "$token" != "null"
@@ -52,7 +48,10 @@ jobs:
               {"url":"https://www.amazon.com/Straw-Tumbler-ProTour-Quencher-Stanley/dp/B0F5WKJY6K?tag=desiredplus-20","pin_ids":["987906868284388371","987906868284388368","987906868284388367","987906868284388366"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"}
             ]
           }'
-          response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-recent-40'             -H "X-Pin-A-Request-ID: repair-40-${GITHUB_RUN_ID}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$payload")
+          INDEX='${{ inputs.index }}'
+          case "$INDEX" in 0|1|2|3|4|5|6|7|8|9) ;; *) echo 'index must be 0-9'; exit 2 ;; esac
+          payload=$(printf '%s' "$payload" | jq --argjson i "$INDEX" '{items:[.items[$i]]}')
+          response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-one'             -H "X-Pin-A-Request-ID: repair-40-${GITHUB_RUN_ID}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$payload")
           printf '%s\n' "$response"
           accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
           test "$accepted" -eq 1
