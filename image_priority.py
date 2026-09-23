@@ -229,6 +229,12 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
     job_store.update(job_id, progress=f"Pin {pin_index}/4: Composio 8K/4K image priority ({strategy['name']})")
     name = product.get("name") or "product"
     asin = str(product.get("asin") or "").strip()
+    if not asin:
+        try:
+            from amazon_url import extract_asin_from_url
+            asin = str(extract_asin_from_url(str(product.get("url") or product.get("affiliate_url") or "")) or "").strip()
+        except Exception:
+            asin = ""
     query = f"{name} {strategy['focus']}"[:160]
 
     # PRIORITY 1 + 2: Composio Image Search, with real downloaded dimensions.
