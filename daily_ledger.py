@@ -130,6 +130,31 @@ class DailyLedger:
             if row: c.execute("UPDATE batch_runs SET status='running',owner=?,started_at=?,completed_at=NULL,result_json=NULL,error=NULL,updated_at=? WHERE day=? AND batch_index=?",(owner,iso,iso,day,batch_index))
             else: c.execute("INSERT INTO batch_runs(day,batch_index,status,owner,started_at,updated_at) VALUES(?,?,?,?,?,?)",(day,batch_index,"running",owner,iso,iso))
             c.commit(); c.close(); return {"acquired":True,"status":"running"}
+    def reclaim_stale_batches(self,day=None):
+        """Release batch ownership left behind by a crashed/restarted Railway executor."""
+        day=day or self.today_str(); cutoff=time.time()-BATCH_LEASE_SEC; now_iso=datetime.now(timezone.utc).isoformat(); reclaimed=[]
+        with _lock:
+            c=self._conn()
+            rows=c.execute("SELECT batch_index,owner,started_at FROM batch_runs WHERE day=? AND status='running'",(day,)).fetchall()
+            for batch,owner,started in rows:
+                try: age=time.time()-datetime.fromisoformat(started).timestamp() if started else BATCH_LEASE_SEC+1
+                except Exception: age=BATCH_LEASE_SEC+1
+                if age>=BATCH_LEASE_SEC:
+                    c.execute("UPDATE batch_runs SET status='failed',error='stale_batch_lease_reclaimed',updated_at=? WHERE day=? AND batch_index=? AND status='running'",(now_iso,day,int(batch)))
+                    if c.execute("SELECT changes()").fetchone()[0]==1: reclaimed.append(int(batch))
+            c.commit(); c.close()
+        return reclaimed
+
+    def close_day(self,day=None,reason="daily_session_finished"):
+        """Close today's allocation after the normal pass and bounded final recovery.
+        Closed means no new executor should restart the same day's session; historical
+        unfinished/failed slots remain queryable and recoverable as history."""
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn()
+            c.execute("UPDATE daily_days SET status='closed',updated_at=? WHERE day=? AND status='in_progress'",(now,day))
+            c.commit(); c.close()
+
     def complete_batch(self,day,batch_index,owner,status="completed",result_json=None,error=None):
         now=datetime.now(timezone.utc).isoformat()
         with _lock:
@@ -155,7 +180,7 @@ class DailyLedger:
     def next_recovery_slot(self,day=None):
         day=day or self.today_str()
         with _lock:
-            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND status IN ('deferred','exhausted') ORDER BY slot LIMIT 1",(day,)).fetchone(); c.close()
+            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND status IN ('deferred','partial','exhausted') ORDER BY slot LIMIT 1",(day,)).fetchone(); c.close()
         if not row:return None
         keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]
         return dict(zip(keys,row))
@@ -176,5 +201,5 @@ class DailyLedger:
         return {str(r[0]).upper() for r in rows if r and r[0]}
 
     def is_day_complete(self,day=None):
-        s=self.get_day_status(day); return s.get("status")=="complete" or int(s.get("success_count",0))>=SLOT_COUNT
+        s=self.get_day_status(day); return s.get("status") in ("complete","closed") or int(s.get("success_count",0))>=SLOT_COUNT
 ledger=DailyLedger()
