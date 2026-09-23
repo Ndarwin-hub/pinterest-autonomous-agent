@@ -119,12 +119,23 @@ def apply_agent_wiring(agent_mod:Any)->None:
             used=set(); pins=[]; resources=set()
             for i,strategy in enumerate(agent_mod.STRATEGIES[:PINS_PER_PRODUCT],1):
                 candidates=await choose_candidates(product,strategy,i,used,agent_mod)
+                # Shared image engine is the same for /submit and Amazon jobs; no path may
+                # bypass the content gate or re-enable the old Pillow placeholder fallback.
                 if not candidates:
                     generated=await generate_image(product,strategy)
+                    if generated:
+                        try:
+                            from image_quality import validate_base64_image
+                            checked=await validate_base64_image(str(generated.get("value") or ""))
+                            if checked:
+                                generated=dict(generated)
+                                generated.update(checked,content_gate="passed")
+                            else:
+                                generated=None
+                        except Exception:
+                            generated=None
                     if not generated:
-                        fallback=getattr(agent_mod,"pillow_card",None)
-                        generated=fallback(product,strategy.get("key","")) if fallback else None
-                    if not generated:raise RuntimeError(f"Pin {i}: no usable image source survived.")
+                        raise RuntimeError(f"Pin {i}: no trustworthy image source survived; publication is fail-closed.")
                     candidates=[generated]
                 best=candidates[0]
                 if best.get("url"):used.add(best["url"])
