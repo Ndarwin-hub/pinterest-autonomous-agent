@@ -225,7 +225,7 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         history = {}
         setattr(agent, "_pin_image_fingerprints", history)
     previous = history.setdefault(job_id, [])
-    job_store.update(job_id, progress=f"Pin {pin_index}/5: Composio 8K/4K image priority ({strategy['name']})")
+    job_store.update(job_id, progress=f"Pin {pin_index}/4: Composio 8K/4K image priority ({strategy['name']})")
     name = product.get("name") or "product"
     query = f"{name} {strategy['focus']}"[:160]
 
@@ -295,8 +295,8 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         tier = _native_tier(native_best)
         return {"mode": "url", "value": native_best["url"], "provider": "product_page", "score": 80, "license": "product_page", "resolution_tier": "native" if tier < 3 else ("8K+" if tier == 4 else "4K+")}
 
-    # PRIORITY 7: existing emergency fallback, unchanged.
-    return agent.pillow_card(product, strategy["key"])
+    # Fail closed: a Pillow placeholder is not a product image.
+    raise RuntimeError(f"No trustworthy image source survived for Pin {pin_index}.")
 
 
 def install(agent: Any) -> None:
