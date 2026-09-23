@@ -95,7 +95,11 @@ async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=N
     queries=BOARD_SEARCH_PROFILES.get(board_name,[f"new {board_name}",board_name])
     from board_org import detect_product_category
     all_candidates=[]
-    for q in queries:
+    # Search the highest-priority query tier first and stop as soon as a usable
+    # candidate exists. This preserves new/current-first selection while avoiding
+    # serially querying every generic fallback before one product can run.
+    prioritized=sorted(queries,key=_query_priority)
+    for q in prioritized:
         try:
             for page in (1,2):
                 products=await _search(q,page)
@@ -109,10 +113,11 @@ async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=N
                     c["target_board_name"]=board_name
                     c["_discovery_query"]=q
                     all_candidates.append(c)
+            if all_candidates and _query_priority(q)==0:
+                break
         except Exception as e:
             logger.warning("Exact board discovery failed board=%s query=%s: %s",board_name,q,e)
     if all_candidates:
-        # Deduplicate ASINs across overlapping queries/pages before ranking.
         unique={}
         for c in all_candidates:
             unique.setdefault(c["asin"],c)
