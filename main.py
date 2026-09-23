@@ -109,7 +109,7 @@ async def lifespan(app:FastAPI):
    if job.status.value in ("completed","completed_partial","failed"):return {"status":job.status.value,"error":job.error,"result":job.result}
   return {"status":"timeout"}
  app.state.amazon_enqueue=_enqueue_for_amazon;app.state.amazon_list_boards=_list_boards_for_amazon;app.state.amazon_wait_job=_wait_job
- await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)
+ await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)\n await _resume_pin_n_requests()
  yield
  await amazon_scheduler.stop_daily_session()
  await amazon_scheduler.stop()
@@ -386,18 +386,65 @@ async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:Bac
  rejected=sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id"))
  return {"requested":n,"discovered":len(discovered),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"snapshot":balance_meta.get("snapshot")},"pipeline":"existing_/submit_job_pipeline","tag":"desiredplus-20","note":"Discovery used live board pin counts + COMPOSIO_SEARCH_AMAZON + tag injection. Each accepted product uses the existing four-Pin pipeline."}
 
-@app.get("/amazon/pin-count")
-async def amazon_pin_count_get(
-    count:int=1,
-    authorization:Optional[str]=Header(None),
-    _:bool=Depends(verify_manual_oidc),
-):
- """Authenticated GitHub-OIDC Pin N trigger; executes the existing discovery-submit pipeline."""
- if count<1 or count>MAX_BATCH:raise HTTPException(status_code=400,detail=f"count must be 1..{MAX_BATCH}")
+async def _pin_n_write(request_id:str,data:Dict[str,Any]):
+ os.makedirs(PIN_N_REQUEST_DIR,exist_ok=True)
+ tmp=os.path.join(PIN_N_REQUEST_DIR,request_id+".json.tmp");path=os.path.join(PIN_N_REQUEST_DIR,request_id+".json")
+ with open(tmp,"w",encoding="utf-8") as f:json.dump(data,f,default=str,separators=(",",":"))
+ os.replace(tmp,path)
+
+async def _pin_n_read(request_id:str)->Optional[Dict[str,Any]]:
+ path=os.path.join(PIN_N_REQUEST_DIR,request_id+".json")
+ try:
+  with open(path,encoding="utf-8") as f:return json.load(f)
+ except FileNotFoundError:return None
+ except Exception:return None
+
+async def _run_pin_n_request(request_id:str,count:int,exclude_asins:List[str]):
+ await _pin_n_write(request_id,{"request_id":request_id,"requested":count,"status":"running","discovered":0,"accepted":0,"started_at":datetime.now(timezone.utc).isoformat()})
  class _BG:
   def add_task(self,fn,*args):asyncio.create_task(fn(*args))
- body=DiscoverSubmitRequest(count=count,exclude_asins=[])
- return await amazon_discover_submit(body,_BG(),True)
+ try:
+  result=await amazon_discover_submit(DiscoverSubmitRequest(count=count,exclude_asins=exclude_asins),_BG(),True)
+  result={"request_id":request_id,**result,"status":"accepted" if int(result.get("accepted",0))==count else "partial"}
+  await _pin_n_write(request_id,result)
+ except Exception as exc:
+  result={"request_id":request_id,"requested":count,"discovered":0,"accepted":0,"status":"failed","error":f"{type(exc).__name__}:{exc}"}
+  await _pin_n_write(request_id,result)
+ finally:
+  _pin_n_tasks.pop(request_id,None)
+
+async def _resume_pin_n_requests():
+ os.makedirs(PIN_N_REQUEST_DIR,exist_ok=True)
+ try:names=os.listdir(PIN_N_REQUEST_DIR)
+ except Exception:return
+ for name in names:
+  if not name.endswith(".json"):continue
+  request_id=name[:-5]
+  state=await _pin_n_read(request_id)
+  if not state or state.get("status") not in ("queued","running"):continue
+  count=int(state.get("requested") or 0)
+  if 1<=count<=MAX_BATCH and request_id not in _pin_n_tasks:
+   task=asyncio.create_task(_run_pin_n_request(request_id,count,list(state.get("exclude_asins") or [])),name=f"pin-n-{request_id}")
+   _pin_n_tasks[request_id]=task
+
+@app.get("/amazon/pin-count")
+async def amazon_pin_count_get(count:int=1,request_id:Optional[str]=None,authorization:Optional[str]=Header(None),_:bool=Depends(verify_manual_oidc)):
+ """Authenticated GitHub-OIDC Pin N trigger. Returns immediately; discovery/publishing runs durably in the background."""
+ if count<1 or count>MAX_BATCH:raise HTTPException(status_code=400,detail=f"count must be 1..{MAX_BATCH}")
+ rid=(request_id or str(uuid.uuid4())).strip()[:120]
+ if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}",rid):raise HTTPException(status_code=400,detail="invalid request_id")
+ existing=await _pin_n_read(rid)
+ if existing and existing.get("status") in ("queued","running","accepted","partial"):return {"request_id":rid,**existing}
+ state={"request_id":rid,"requested":count,"status":"queued","discovered":0,"accepted":0,"exclude_asins":[],"queued_at":datetime.now(timezone.utc).isoformat()}
+ await _pin_n_write(rid,state)
+ task=asyncio.create_task(_run_pin_n_request(rid,count,[]),name=f"pin-n-{rid}");_pin_n_tasks[rid]=task
+ return {"request_id":rid,"requested":count,"status":"queued","message":"Pin N accepted for background processing; poll /amazon/pin-count/status"}
+ 
+@app.get("/amazon/pin-count/status")
+async def amazon_pin_count_status(request_id:str,authorization:Optional[str]=Header(None),_:bool=Depends(verify_manual_oidc)):
+ state=await _pin_n_read(request_id.strip())
+ if not state:raise HTTPException(status_code=404,detail="Pin N request not found")
+ return state
 
 @app.get("/")
 async def root():return {"service":"Pinterest Autonomous Agent","version":"3.9.0","endpoints":{"health":"GET /health","submit":"POST /submit body: {\"url\": \"<product_url>\"}","status":"GET /status/{job_id}","quota":"GET /quota","amazon_status":"GET /amazon/status","amazon_batch":"POST /amazon/run-batch body: {\"batch\":1|2|3}","batch_submit":"POST /batch-submit body: {\"urls\":[\"<amazon_us_url\",...]}","amazon_discover_submit":"POST /amazon/discover-submit body: {\"count\":N}"},"usage":"Send one product/affiliate URL. System creates 4 unique Pins automatically."}
