@@ -1,5 +1,11 @@
 # Pin A Universal Trigger Contract
 
+## Canonical command routing
+
+`Run pin a` and `Run pin A` are the same canonical command. Every authorized AI agent or other source connected through Composio must route this command to the universal Pin A trigger (`PINTEREST_RUN_PIN_A`, with `PINTEREST_PIN_A` retained as a legacy alias). No caller may create a competing scheduler/batch path for this command.
+
+The universal trigger is the only command-level wake path: it calls Railway `POST /pin-a`, where the Railway scheduler and daily ledger remain the execution authority. This includes ChatGPT, Claude, Grok, Gemini, other AI agents, Composio-connected tools, GitHub, Railway, Cloudflare, and future authorized callers.
+
 Pin A is a platform-independent trigger/wake layer. Existing scheduled mechanisms remain in place and may activate Pin A at their normal scheduled times. Pin A can also be invoked independently on demand.
 
 ## Trigger sources
