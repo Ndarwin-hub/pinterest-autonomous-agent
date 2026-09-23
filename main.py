@@ -170,7 +170,12 @@ async def repair_pins(body:RepairRequest,background_tasks:BackgroundTasks,_:bool
                 pid=str(pin_id).strip()
                 if not re.fullmatch(r"\d+",pid):
                     raise HTTPException(status_code=400,detail=f"Invalid Pinterest Pin ID: {pid}")
-                await agent_module.run_composio_tool("PINTEREST_DELETE_PIN",{"pin_id":pid},retries=1)
+                try:
+                    await agent_module.run_composio_tool("PINTEREST_DELETE_PIN",{"pin_id":pid},retries=1)
+                except Exception as delete_error:
+                    msg=str(delete_error).lower()
+                    if "404" not in msg and "not found" not in msg:
+                        raise
                 try:
                     await agent_module.run_composio_tool("PINTEREST_GET_PIN",{"pin_id":pid},retries=0)
                     raise RuntimeError(f"Pin {pid} still exists after delete")
