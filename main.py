@@ -39,7 +39,13 @@ import image_diversity_guard
 publication_guard.install(agent_module)
 image_diversity_guard.install(agent_module)
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO"),format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-logger=logging.getLogger("pinterest-agent");job_store=JobStore();_enqueue_lock=asyncio.Lock();API_SECRET=os.getenv("API_SECRET","").strip();AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip();CLOUDFLARE_WAKE_SECRET=os.getenv("CLOUDFLARE_WAKE_SECRET","").strip();GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent";GITHUB_ISSUER="https://token.actions.githubusercontent.com";GITHUB_AUDIENCE=f"https://github.com/{GITHUB_REPO}";_jwks=PyJWKClient("https://token.actions.githubusercontent.com/.well-known/jwks",cache_keys=True)
+logger=logging.getLogger("pinterest-agent");job_store=JobStore();_enqueue_lock=asyncio.Lock();API_SECRET=os.getenv("API_SECRET","").strip();AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip();CLOUDFLARE_WAKE_SECRET=os.getenv("CLOUDFLARE_WAKE_SECRET","").strip();GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent";GITHUB_ISSUER="https://token.actions.githubusercontent.com";CLOUDFLARE_TZ="Asia/Kathmandu";CLOUDFLARE_WINDOW_START_MIN=6*60;CLOUDFLARE_WINDOW_END_MIN=14*60;
+def cloudflare_wake_allowed(now=None):
+ from zoneinfo import ZoneInfo
+ local=(now or datetime.now(timezone.utc)).astimezone(ZoneInfo(CLOUDFLARE_TZ))
+ minute=local.hour*60+local.minute
+ return CLOUDFLARE_WINDOW_START_MIN<=minute<CLOUDFLARE_WINDOW_END_MIN,local
+GITHUB_AUDIENCE=f"https://github.com/{GITHUB_REPO}";_jwks=PyJWKClient("https://token.actions.githubusercontent.com/.well-known/jwks",cache_keys=True)
 def verify_secret(x_api_secret:Optional[str]=Header(None)):
  if API_SECRET and x_api_secret!=API_SECRET:raise HTTPException(status_code=401,detail="Invalid or missing API secret")
  return True
@@ -265,6 +271,12 @@ async def pin_a_trigger(
     source=(x_pin_a_source or ((body or {}).get("source") if isinstance(body,dict) else None) or "unknown").strip()[:200]
     request_id=(x_pin_a_request_id or ((body or {}).get("request_id") if isinstance(body,dict) else None) or str(uuid.uuid4())).strip()[:200]
     day=daily_ledger.today_str()
+    is_cloudflare=source.lower().startswith("cloudflare")
+    if is_cloudflare:
+        allowed,local_now=cloudflare_wake_allowed()
+        if not allowed:
+            logger.info("Cloudflare Pin A wake ignored outside scheduled window: local_time=%s window=06:00-14:00",local_now.isoformat())
+            return {"status":"ignored","source":source,"request_id":request_id,"reason":"outside_cloudflare_watchdog_window","local_time":local_now.isoformat(),"window":"06:00-14:00 Asia/Kathmandu"}
     daily_ledger.record_scheduler_event(day=day,batch_requested=1,scheduler_run_id=f"pin-a:{request_id}",scheduled_local_time="pin-a",github_delay_seconds=0,github_queued_runs=0,github_active_runs=0,github_load_class="PIN_A")
     logger.info("Pin A accepted source=%s request_id=%s",source,request_id)
     if SCHEDULER_MODE!="external":
@@ -276,8 +288,13 @@ async def pin_a_trigger(
 async def amazon_run_batch(body:BatchRequest,x_scheduler_secret:Optional[str]=Header(None,alias="X-Scheduler-Secret"),_:bool=Depends(verify_batch_secret)):
  if SCHEDULER_MODE!="external":raise HTTPException(status_code=409,detail="Amazon scheduler is not in external mode")
  day=daily_ledger.today_str()
- daily_ledger.record_scheduler_event(day=day,batch_requested=body.batch,scheduler_run_id=body.scheduler_run_id,scheduled_local_time=body.scheduled_local_time,github_delay_seconds=body.github_delay_seconds,github_queued_runs=body.github_queued_runs,github_active_runs=body.github_active_runs,github_load_class=body.github_load_class)
  pin_a_source="cloudflare-compat" if (x_scheduler_secret and CLOUDFLARE_WAKE_SECRET and hmac.compare_digest(x_scheduler_secret,CLOUDFLARE_WAKE_SECRET)) else "legacy-scheduler"
+ if pin_a_source=="cloudflare-compat":
+  allowed,local_now=cloudflare_wake_allowed()
+  if not allowed:
+   logger.info("Cloudflare compatibility wake ignored outside scheduled window: local_time=%s window=06:00-14:00",local_now.isoformat())
+   return {"status":"ignored","source":pin_a_source,"reason":"outside_cloudflare_watchdog_window","local_time":local_now.isoformat(),"window":"06:00-14:00 Asia/Kathmandu","day":day}
+ daily_ledger.record_scheduler_event(day=day,batch_requested=body.batch,scheduler_run_id=body.scheduler_run_id,scheduled_local_time=body.scheduled_local_time,github_delay_seconds=body.github_delay_seconds,github_queued_runs=body.github_queued_runs,github_active_runs=body.github_active_runs,github_load_class=body.github_load_class)
  logger.info("Pin A compatibility activation via existing /amazon/run-batch source=%s requested_batch=%s github_run=%s",pin_a_source,body.batch,body.scheduler_run_id)
  logger.info("Amazon wake trigger requested_batch=%s github_run=%s delay=%ss queued=%s active=%s load=%s",body.batch,body.scheduler_run_id,body.github_delay_seconds,body.github_queued_runs,body.github_active_runs,body.github_load_class)
  result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=body.batch)
