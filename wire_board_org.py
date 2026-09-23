@@ -121,7 +121,10 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 candidates=await choose_candidates(product,strategy,i,used,agent_mod)
                 if not candidates:
                     generated=await generate_image(product,strategy)
-                    if not generated:raise RuntimeError(f"Pin {i}: no genuine high-quality image survived and no AI-generation fallback is configured.")
+                    if not generated:
+                        fallback=getattr(agent_mod,"pillow_card",None)
+                        generated=fallback(product,strategy.get("key","")) if fallback else None
+                    if not generated:raise RuntimeError(f"Pin {i}: no usable image source survived.")
                     candidates=[generated]
                 best=candidates[0]
                 if best.get("url"):used.add(best["url"])
