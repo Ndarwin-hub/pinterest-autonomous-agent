@@ -194,7 +194,7 @@ class DailyLedger:
     def next_recovery_slot(self,day=None):
         day=day or self.today_str()
         with _lock:
-            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND status IN ('deferred','partial','exhausted') ORDER BY slot LIMIT 1",(day,)).fetchone(); c.close()
+            c=self._conn(); row=c.execute("SELECT slot,target_board_name,target_board_id,slot_kind,status,selected_asin,selected_url,affiliate_url,replacement_attempts,job_id,pinterest_verified,error,completed_at FROM daily_slots WHERE day=? AND (status IN ('deferred','partial') OR (status='exhausted' AND COALESCE(error,'') NOT LIKE 'final_recovery_exhausted%')) ORDER BY slot LIMIT 1",(day,)).fetchone(); c.close()
         if not row:return None
         keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]
         return dict(zip(keys,row))
