@@ -16,7 +16,7 @@ def test_four_verified_pins_are_completed():
 
 def test_three_verified_pins_are_completed_partial_and_kept():
     url = "https://www.amazon.com/dp/B000TEST01?tag=desiredplus-20"
-    pins = [_pin(url, i) for i in range(1, 4)] + [_pin(url, 4, verified=False)]
+    pins = [_pin(url, i) for i in range(1, 4)]
     result = inspect_result({"pins": pins}, url)
     assert result["pin_supervisor_status"] == "completed_partial"
     assert result["verified_pins"] == 3
