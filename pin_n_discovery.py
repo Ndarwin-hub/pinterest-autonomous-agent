@@ -1,0 +1,152 @@
+"""Pin N-specific Amazon discovery.
+
+This module is intentionally separate from Pin A's board-balanced scheduler.
+Pin N means "find N fresh eligible Amazon US products"; board balancing is
+not allowed to become a discovery bottleneck. Accepted products still enter
+the existing shared enqueue/publish/verify pipeline.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional, Set
+
+from published_registry import registry
+from amazon_url import AFFILIATE_TAG
+from amazon_composio_discovery import (
+    CATEGORY_QUERIES,
+    BOARD_SEARCH_PROFILES,
+    _search,
+    _candidate,
+)
+from batch_submit import validate_and_canonicalize, MAX_BATCH
+
+logger = logging.getLogger("pinterest-agent.pin_n_discovery")
+
+# Broad queries are deliberately first. Category-specific queries are fallback
+# expansion, not a prerequisite for accepting a valid Amazon product.
+PIN_N_BROAD_QUERIES = [
+    "new Amazon products",
+    "new releases Amazon",
+    "new arrivals Amazon",
+    "latest Amazon best sellers",
+    "popular new products",
+    "Amazon best sellers",
+    "new useful products",
+    "trending Amazon products",
+]
+
+def _priority(query: str) -> int:
+    q = str(query or "").lower()
+    if any(x in q for x in ("new release", "new releases", "new arrival", "new arrivals", "latest", "new ")):
+        return 0
+    if "best seller" in q or "bestseller" in q or "popular" in q or "trending" in q:
+        return 1
+    return 2
+
+def _score(c: Dict[str, Any]) -> tuple:
+    return (
+        _priority(c.get("_discovery_query", "")),
+        -int(c.get("score") or 0),
+        str(c.get("asin") or ""),
+    )
+
+def _assign_board(title: str) -> Dict[str, Optional[str]]:
+    """Best-effort board assignment after product acceptance."""
+    try:
+        from board_org import classify_with_confidence, CATEGORY_BOARD_MAP, DEFAULT_BOARD_NAME
+        info = classify_with_confidence({"title": title or "", "name": title or ""})
+        category = info.get("category") or "general"
+        board = CATEGORY_BOARD_MAP.get(category, DEFAULT_BOARD_NAME)
+        return {
+            "board": board,
+            "confidence": info.get("confidence"),
+            "category": category,
+        }
+    except Exception:
+        return {"board": "Everything Else", "confidence": None, "category": "general"}
+
+async def discover_pin_n_products(
+    n: int,
+    *,
+    exclude_asins: Optional[Set[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Find exactly up to N fresh, distinct, valid Amazon US products.
+
+    Unlike Pin A, this function never requires a particular board to have a
+    candidate before accepting a product. It expands search sources until the
+    requested count is reached or the complete bounded discovery pool is
+    exhausted.
+    """
+    n = max(1, min(int(n), MAX_BATCH))
+    excluded = {str(a).upper() for a in (exclude_asins or set()) if a}
+    excluded |= registry.all_published_asins()
+    chosen: Dict[str, Dict[str, Any]] = {}
+    queries: List[str] = list(PIN_N_BROAD_QUERIES)
+
+    # Add current/new category queries as an expansion pool, deduplicated while
+    # preserving their new/current-first ordering.
+    for board_queries in BOARD_SEARCH_PROFILES.values():
+        for q in board_queries:
+            if q not in queries:
+                queries.append(q)
+
+    # Finally retain the established category queries as a deterministic safety
+    # net for any board profile that changes later.
+    for category_queries in CATEGORY_QUERIES.values():
+        for q in category_queries:
+            if q not in queries:
+                queries.append(q)
+
+    # Bounded search: two pages per query normally suffice. If the pool remains
+    # short, a third page is allowed rather than declaring "no products" early.
+    for query in queries:
+        if len(chosen) >= n:
+            break
+        for page in (1, 2, 3):
+            if len(chosen) >= n:
+                break
+            try:
+                raws = await _search(query, page)
+            except Exception as exc:
+                logger.warning("Pin N search failed query=%s page=%s: %s", query, page, exc)
+                continue
+
+            for raw in raws:
+                c = _candidate(raw, "Pin N")
+                if not c:
+                    continue
+                asin = str(c.get("asin") or "").upper()
+                if not asin or asin in excluded or asin in chosen:
+                    continue
+
+                # Re-run canonical Amazon/affiliate validation using the same
+                # validator as the existing production batch path.
+                validated = validate_and_canonicalize(c.get("affiliate_url") or c.get("product_url") or "")
+                if not validated.get("ok"):
+                    logger.info("Pin N candidate rejected asin=%s reason=%s", asin, validated.get("error"))
+                    continue
+
+                final_asin = str(validated.get("asin") or asin).upper()
+                if final_asin in excluded or final_asin in chosen:
+                    continue
+
+                c["asin"] = final_asin
+                c["affiliate_url"] = validated["affiliate_url"]
+                c["product_url"] = validated["product_url"]
+                c["_discovery_query"] = query
+                board = _assign_board(str(c.get("title") or ""))
+                c["target_board_name"] = board.get("board")
+                c["balance_mode"] = "pin_n_independent"
+                c["pin_n_category"] = board.get("category")
+                c["pin_n_confidence"] = board.get("confidence")
+                chosen[final_asin] = c
+
+                if len(chosen) >= n:
+                    break
+
+    selected = sorted(chosen.values(), key=_score)[:n]
+    logger.info(
+        "Pin N discovery requested=%s eligible=%s queries=%s published_exclusions=%s",
+        n, len(selected), len(queries), len(excluded),
+    )
+    return selected
