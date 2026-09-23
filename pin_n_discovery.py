@@ -22,17 +22,14 @@ from batch_submit import validate_and_canonicalize, MAX_BATCH
 
 logger = logging.getLogger("pinterest-agent.pin_n_discovery")
 
-# Broad queries are deliberately first. Category-specific queries are fallback
-# expansion, not a prerequisite for accepting a valid Amazon product.
+# Keep the synchronous Pin N request safely below the Railway proxy timeout.
+# Pin N remains independent from Pin A; broader discovery can be resumed by
+# another Pin N request if this bounded pool is exhausted.
 PIN_N_BROAD_QUERIES = [
     "new Amazon products",
     "new releases Amazon",
     "new arrivals Amazon",
-    "latest Amazon best sellers",
-    "popular new products",
     "Amazon best sellers",
-    "new useful products",
-    "trending Amazon products",
 ]
 
 def _priority(query: str) -> int:
@@ -73,9 +70,9 @@ async def discover_pin_n_products(
     """Find exactly up to N fresh, distinct, valid Amazon US products.
 
     Unlike Pin A, this function never requires a particular board to have a
-    candidate before accepting a product. It expands search sources until the
-    requested count is reached or the complete bounded discovery pool is
-    exhausted.
+    candidate before accepting a product. It uses a deliberately bounded fast
+    discovery pass so the synchronous /amazon/pin-count endpoint stays within
+    the production proxy timeout.
     """
     n = max(1, min(int(n), MAX_BATCH))
     excluded = {str(a).upper() for a in (exclude_asins or set()) if a}
@@ -83,66 +80,65 @@ async def discover_pin_n_products(
     chosen: Dict[str, Dict[str, Any]] = {}
     queries: List[str] = list(PIN_N_BROAD_QUERIES)
 
-    # Add current/new category queries as an expansion pool, deduplicated while
-    # preserving their new/current-first ordering.
+    # Add a small deterministic fallback pool without allowing the full Pin A
+    # board/category expansion to become a latency bottleneck.
+    fallback_queries: List[str] = []
     for board_queries in BOARD_SEARCH_PROFILES.values():
         for q in board_queries:
-            if q not in queries:
-                queries.append(q)
-
-    # Finally retain the established category queries as a deterministic safety
-    # net for any board profile that changes later.
+            if q not in queries and q not in fallback_queries:
+                fallback_queries.append(q)
     for category_queries in CATEGORY_QUERIES.values():
         for q in category_queries:
-            if q not in queries:
-                queries.append(q)
+            if q not in queries and q not in fallback_queries:
+                fallback_queries.append(q)
+    queries.extend(fallback_queries[:4])
 
-    # Bounded search: two pages per query normally suffice. If the pool remains
-    # short, a third page is allowed rather than declaring "no products" early.
+    # One page per query keeps the synchronous request bounded. Fresh requests
+    # can be repeated if the current bounded pool is exhausted.
     for query in queries:
         if len(chosen) >= n:
             break
-        for page in (1, 2, 3):
-            if len(chosen) >= n:
-                break
-            try:
-                raws = await _search(query, page)
-            except Exception as exc:
-                logger.warning("Pin N search failed query=%s page=%s: %s", query, page, exc)
+        try:
+            raws = await _search(query, 1)
+        except Exception as exc:
+            logger.warning("Pin N search failed query=%s: %s", query, exc)
+            continue
+
+        for raw in raws:
+            c = _candidate(raw, "Pin N")
+            if not c:
+                continue
+            asin = str(c.get("asin") or "").upper()
+            if not asin or asin in excluded or asin in chosen:
                 continue
 
-            for raw in raws:
-                c = _candidate(raw, "Pin N")
-                if not c:
-                    continue
-                asin = str(c.get("asin") or "").upper()
-                if not asin or asin in excluded or asin in chosen:
-                    continue
+            validated = validate_and_canonicalize(
+                c.get("affiliate_url") or c.get("product_url") or ""
+            )
+            if not validated.get("ok"):
+                logger.info(
+                    "Pin N candidate rejected asin=%s reason=%s",
+                    asin, validated.get("error")
+                )
+                continue
 
-                # Re-run canonical Amazon/affiliate validation using the same
-                # validator as the existing production batch path.
-                validated = validate_and_canonicalize(c.get("affiliate_url") or c.get("product_url") or "")
-                if not validated.get("ok"):
-                    logger.info("Pin N candidate rejected asin=%s reason=%s", asin, validated.get("error"))
-                    continue
+            final_asin = str(validated.get("asin") or asin).upper()
+            if final_asin in excluded or final_asin in chosen:
+                continue
 
-                final_asin = str(validated.get("asin") or asin).upper()
-                if final_asin in excluded or final_asin in chosen:
-                    continue
+            c["asin"] = final_asin
+            c["affiliate_url"] = validated["affiliate_url"]
+            c["product_url"] = validated["product_url"]
+            c["_discovery_query"] = query
+            board = _assign_board(str(c.get("title") or ""))
+            c["target_board_name"] = board.get("board")
+            c["balance_mode"] = "pin_n_independent"
+            c["pin_n_category"] = board.get("category")
+            c["pin_n_confidence"] = board.get("confidence")
+            chosen[final_asin] = c
 
-                c["asin"] = final_asin
-                c["affiliate_url"] = validated["affiliate_url"]
-                c["product_url"] = validated["product_url"]
-                c["_discovery_query"] = query
-                board = _assign_board(str(c.get("title") or ""))
-                c["target_board_name"] = board.get("board")
-                c["balance_mode"] = "pin_n_independent"
-                c["pin_n_category"] = board.get("category")
-                c["pin_n_confidence"] = board.get("confidence")
-                chosen[final_asin] = c
-
-                if len(chosen) >= n:
-                    break
+            if len(chosen) >= n:
+                break
 
     selected = sorted(chosen.values(), key=_score)[:n]
     logger.info(
