@@ -91,9 +91,9 @@ def test_virtual_increment_reorders():
     rows = extract_board_rows(LIVE_FIXTURE)
     bal = balance_state(rows)
     before = [r["name"] for r in bal["ranked_dedicated"][:3]]
-    bal2 = apply_virtual_increment(bal, "Automotive & Tools", pins_per_product=5)
+    bal2 = apply_virtual_increment(bal, "Automotive & Tools", pins_per_product=4)
     after_counts = {r["name"]: r["pin_count"] for r in bal2["ranked_dedicated"]}
-    assert after_counts.get("Automotive & Tools") == 5
+    assert after_counts.get("Automotive & Tools") == 4
 
 
 def test_missing_counts_message():
