@@ -4,14 +4,13 @@ import contextvars, logging, re
 from typing import Any, Dict
 from board_org import detect_product_category, preferred_board_name, find_matching_board, DEFAULT_BOARD_NAME, LEGACY_BOARD_NAMES, LEGACY_BOARD_IDS
 from image_quality import choose_candidates
+from pin_config import PINS_PER_PRODUCT
 from ai_quality_gate import review_batch, generate_image, GEMINI_API_KEY, XAI_API_KEY, OPENAI_API_KEY
 logger=logging.getLogger("pinterest-agent.wire")
 MAX_COMPOSIO_CALLS=40
 MAX_RECOVERY_ROUNDS=1
-# Five Pins x four targeted image-search queries = 20 calls. The old value of 18
-# starved the last Pins of the initial candidate pool under concurrent load.
-# Reserve 25 image-search calls so all five Pins receive the full initial search
-# pass and one bounded recovery refresh can still fit inside the 40-call ceiling.
+# Four Pins x four targeted image-search queries = 16 calls. Reserve extra capacity
+# for one bounded adaptive recovery refresh without exceeding the job budget.
 MAX_IMAGE_SEARCH_CALLS=25
 _call_budget=contextvars.ContextVar("pinterest_call_budget",default=None)
 class CallBudget:
@@ -116,9 +115,9 @@ def apply_agent_wiring(agent_mod:Any)->None:
             url=url.strip(); m=re.search(r"https?://\S+",url)
             if m:url=m.group(0).rstrip(".,)]")
             if not url.startswith("http"):raise RuntimeError("A valid product/affiliate URL is required.")
-            product=await research(url,job_store,job_id); seo=agent_mod.build_five_seo(product); board_id=await board(product,job_store,job_id)
+            product=await research(url,job_store,job_id); seo=agent_mod.build_four_seo(product); board_id=await board(product,job_store,job_id)
             used=set(); pins=[]; resources=set()
-            for i,strategy in enumerate(agent_mod.STRATEGIES,1):
+            for i,strategy in enumerate(agent_mod.STRATEGIES[:PINS_PER_PRODUCT],1):
                 candidates=await choose_candidates(product,strategy,i,used,agent_mod)
                 if not candidates:
                     generated=await generate_image(product,strategy)
@@ -194,7 +193,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     errors.append({"pin_number":p["pin_number"],"error":str(e)})
             logger.info("Pinterest publication summary published=%s errors=%s", len(published), errors)
             if not published:raise RuntimeError("No Pins were successfully published and verified.")
-            return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":5,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"external_visual_review_calls":0},"summary":f"{len(published)}/5 Pins published and independently verified; successful Pins preserved and failed Pins reported."}
+            return {"product_name":product.get("name"),"source_url":url,"affiliate_url":product.get("url") or product.get("affiliate_url") or url,"category":product.get("category"),"capabilities":await _static_capabilities(agent_mod),"resources_used":sorted(resources),"pins_planned":PINS_PER_PRODUCT,"pins_published":len(published),"pins_failed":len(errors),"failed_pin_indexes":[e.get("pin_number") for e in errors],"board_id":board_id,"pins":published,"errors":errors,"ai_quality_review":review,"recovery_rounds":recovery_rounds,"composio_call_budget":{"used":b.used,"maximum":b.maximum,"remaining":b.maximum-b.used,"image_search_calls":b.image_search_invocations,"external_visual_review_calls":0},"summary":f"{len(published)}/{PINS_PER_PRODUCT} Pins published and independently verified; successful Pins preserved and failed Pins reported."}
         finally:_call_budget.reset(token)
     agent_mod.run_composio_tool=budgeted_run; agent_mod.publish_and_verify=strict_publish; agent_mod.probe_capabilities=lambda:_static_capabilities(agent_mod); agent_mod.research_product=research; agent_mod.select_or_create_board=board; agent_mod.process_pinterest_job=process
     logger.info("Zero-tolerance image sourcing + multi-angle comparison + adaptive recovery + 40-call budget + strict board routing/verification wiring applied")
