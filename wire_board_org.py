@@ -194,7 +194,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     else:
                         final_check=await inspect_image_content(str(im.get("value") or im.get("url") or ""))
                     if not final_check:
-                        raise RuntimeError(f"Pin {p["pin_number"]}: final image byte validation failed; publication blocked.")
+                        raise RuntimeError(f"Pin {p['pin_number']}: final image byte validation failed; publication blocked.")
                     im.update(final_check, content_gate="passed", final_image_validation="passed")
                     if im.get("provider") == "pillow_card":
                         raise RuntimeError("Pillow placeholder image is never publishable.")
