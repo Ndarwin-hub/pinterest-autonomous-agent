@@ -133,6 +133,17 @@ def install(agent_mod: Any) -> str:
         from board_org import current_section_id
 
         job_store.update(job_id, progress=f"Publishing Pin {pin_index}/{PINS_PER_PRODUCT}")
+        # Stage 2 image gate: validate the exact bytes immediately before the
+        # external CREATE_PIN call. This applies equally to manual /submit and Amazon jobs.
+        from image_quality import validate_base64_image, inspect_image_content
+        if image_mode == "base64":
+            final_image_check = await validate_base64_image(str(image_value or ""))
+        else:
+            final_image_check = await inspect_image_content(str(image_value or ""))
+        if not final_image_check:
+            raise RuntimeError(f"Pin {pin_index}: final selected image failed byte-level validation; CREATE_PIN blocked.")
+        if str((final_image_check or {}).get("provider") or "") == "pillow_card" or str(image_value or "").strip() == "":
+            raise RuntimeError(f"Pin {pin_index}: invalid placeholder/empty image; CREATE_PIN blocked.")
         if image_mode == "base64":
             media_source = {
                 "source_type": "image_base64",
