@@ -28,7 +28,8 @@ from agent import process_pinterest_job
 from models import JobStore,JobStatus,Job
 from published_registry import registry,extract_asin
 from amazon_client import amazon_credentials_present
-from batch_submit import prepare_batch_items, discover_n_products, MAX_BATCH, validate_and_canonicalize
+from batch_submit import prepare_batch_items, MAX_BATCH, validate_and_canonicalize
+from pin_n_discovery import discover_pin_n_products
 from pin_config import PINS_PER_PRODUCT
 from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
@@ -344,7 +345,7 @@ async def batch_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,
 
 @app.post("/amazon/discover-submit")
 async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
- """Discover N distinct Amazon US products using live board-balance ordering, then submit each to the existing job pipeline."""
+ """Discover N distinct fresh Amazon US products using Pin-N-specific broad discovery, then submit each to the existing job pipeline. Pin N does not depend on Pin A board balancing."""
  n=int(body.count)
  if n<1 or n>MAX_BATCH:raise HTTPException(status_code=400,detail=f"count must be 1..{MAX_BATCH}")
  exclude=set(a.upper() for a in (body.exclude_asins or []) if a)
@@ -358,7 +359,7 @@ async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:Bac
  except Exception as e:
   logger.warning("Live board fetch for balance failed: %s",e)
  try:
-  discovered=await discover_n_products(n,exclude_asins=exclude,live_boards=live_boards)
+  discovered=await discover_pin_n_products(n,exclude_asins=exclude)
  except Exception as e:
   raise HTTPException(status_code=502,detail=f"discovery_failed:{type(e).__name__}:{e}")
  if not discovered:
