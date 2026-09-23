@@ -54,34 +54,51 @@ BOARD_CATEGORY_KEYS={
  "Office & Productivity":"office","PC's, Laptops & TV's":"pc_tv","Pet Supplies":"pets","Smartphones & Tablets":"smartphones_tablets",
  "Sports, Games & Toys":"games","Travel & Camping":"travel"
 }
+# New/current discovery is intentionally first. Amazon search does not expose a
+# reliable publication date in every discovery response, so "new/current" is
+# implemented with explicit new-release/new-arrival/latest queries first, then
+# popularity/quality scoring within those result sets. Older generic queries are
+# only fallback candidates.
 BOARD_SEARCH_PROFILES={
- "Appliances & Home":["countertop ice maker","air fryer","coffee maker","blender appliance","toaster oven"],
- "Automotive & Tools":["car emergency tools","automotive tools garage","car accessories"],
- "Baby & Kids":["baby wipes","diapers","baby bottle feeding"],
- "Beauty & Personal Care":["Mighty Patch acne patches","skincare serum moisturizer","hair care shampoo"],
- "Books & Learning":["bestselling paperback book","self improvement book","educational textbook"],
- "Electronics & Gadgets":["surge protector power strip","wireless headphones earbuds","USB-C charger cable"],
- "Fashion & Lifestyle":["running shoes","sneakers women men","everyday handbag"],
- "Health & Fitness":["whey protein powder","reusable ice packs","resistance bands fitness"],
- "Home, Kitchen & Dining":["Stanley Quencher tumbler","kitchen cookware set","home storage organizer"],
- "Office & Productivity":["desk organizer office","planner productivity","monitor arm desk"],
- "PC's, Laptops & TV's":["gaming laptop","desktop PC","4K smart TV","computer monitor","PC SSD RAM"],
- "Pet Supplies":["cat litter","dog grooming supplies","pet toys"],
- "Smartphones & Tablets":["iPhone smartphone","Android smartphone","iPad tablet","phone screen protector","tablet case"],
- "Sports, Games & Toys":["LCD writing tablet kids","gaming headset","sports equipment"],
- "Travel & Camping":["travel backpack","camping tent","hiking gear"],
- "Everything Else":["Amazon best selling new products","popular useful product"]
+ "Appliances & Home":["new countertop ice maker","new air fryer","new coffee maker","new blender appliance","new toaster oven","countertop ice maker","air fryer","coffee maker","blender appliance","toaster oven"],
+ "Automotive & Tools":["new car emergency tools","new automotive tools garage","new car accessories","car emergency tools","automotive tools garage","car accessories"],
+ "Baby & Kids":["new baby wipes","new diapers","new baby bottle feeding","baby wipes","diapers","baby bottle feeding"],
+ "Beauty & Personal Care":["new Mighty Patch acne patches","new skincare serum moisturizer","new hair care shampoo","Mighty Patch acne patches","skincare serum moisturizer","hair care shampoo"],
+ "Books & Learning":["new bestselling paperback book","new self improvement book","new educational textbook","bestselling paperback book","self improvement book","educational textbook"],
+ "Electronics & Gadgets":["new surge protector power strip","new wireless headphones earbuds","new USB-C charger cable","surge protector power strip","wireless headphones earbuds","USB-C charger cable"],
+ "Fashion & Lifestyle":["new running shoes","new sneakers women men","new everyday handbag","running shoes","sneakers women men","everyday handbag"],
+ "Health & Fitness":["new whey protein powder","new reusable ice packs","new resistance bands fitness","whey protein powder","reusable ice packs","resistance bands fitness"],
+ "Home, Kitchen & Dining":["new Stanley Quencher tumbler","new kitchen cookware set","new home storage organizer","Stanley Quencher tumbler","kitchen cookware set","home storage organizer"],
+ "Office & Productivity":["new desk organizer office","new planner productivity","new monitor arm desk","desk organizer office","planner productivity","monitor arm desk"],
+ "PC's, Laptops & TV's":["new gaming laptop","new desktop PC","new 4K smart TV","new computer monitor","new PC SSD RAM","gaming laptop","desktop PC","4K smart TV","computer monitor","PC SSD RAM"],
+ "Pet Supplies":["new cat litter","new dog grooming supplies","new pet toys","cat litter","dog grooming supplies","pet toys"],
+ "Smartphones & Tablets":["new iPhone smartphone","new Android smartphone","new iPad tablet","new phone screen protector","new tablet case","iPhone smartphone","Android smartphone","iPad tablet","phone screen protector","tablet case"],
+ "Sports, Games & Toys":["new LCD writing tablet kids","new gaming headset","new sports equipment","LCD writing tablet kids","gaming headset","sports equipment"],
+ "Travel & Camping":["new travel backpack","new camping tent","new hiking gear","travel backpack","camping tent","hiking gear"],
+ "Everything Else":["new Amazon products","new useful products","Amazon best selling new products","popular useful product"]
 }
+def _query_priority(query:str)->int:
+    q=str(query or "").lower()
+    # Lower is better. Explicit new/current intent outranks generic queries.
+    if any(term in q for term in ("new releases","new release","new arrivals","new arrival","latest","new ")):
+        return 0
+    return 1
+
+def _discovery_score(candidate:dict, query:str)->tuple:
+    # Query priority is the primary selection criterion; existing score remains
+    # the tie-breaker so current demand/quality still matters.
+    return (_query_priority(query), -int(candidate.get("score") or 0), str(candidate.get("asin") or ""))
+
 async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=None,client=None):
     key=BOARD_CATEGORY_KEYS.get(board_name,"general")
     excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins()
-    queries=BOARD_SEARCH_PROFILES.get(board_name,[board_name])
+    queries=BOARD_SEARCH_PROFILES.get(board_name,[f"new {board_name}",board_name])
     from board_org import detect_product_category
+    all_candidates=[]
     for q in queries:
         try:
             for page in (1,2):
                 products=await _search(q,page)
-                candidates=[]
                 for raw in products:
                     c=_candidate(raw,key)
                     if not c or c["asin"] in excluded:
@@ -90,11 +107,16 @@ async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=N
                     if (board_name=="Everything Else" and detected!="general") or (board_name!="Everything Else" and detected!=key):
                         continue
                     c["target_board_name"]=board_name
-                    candidates.append(c)
-                if candidates:
-                    return sorted(candidates,key=lambda x:(-x["score"],x["asin"]))[0]
+                    c["_discovery_query"]=q
+                    all_candidates.append(c)
         except Exception as e:
             logger.warning("Exact board discovery failed board=%s query=%s: %s",board_name,q,e)
+    if all_candidates:
+        # Deduplicate ASINs across overlapping queries/pages before ranking.
+        unique={}
+        for c in all_candidates:
+            unique.setdefault(c["asin"],c)
+        return sorted(unique.values(),key=lambda x:_discovery_score(x,x.get("_discovery_query","")))[0]
     api_category=_BOARD_CATEGORY.get(board_name,"Electronics")
     api_candidate=await _discover_api(api_category,exclude_asins)
     if api_candidate:
