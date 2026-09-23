@@ -138,7 +138,8 @@ class DiscoverSubmitRequest(BaseModel):
  exclude_asins:Optional[List[str]]=Field(default=None,description="Optional ASIN exclude list")
 class RepairItem(BaseModel):
  url:str
- pin_ids:List[str]=Field(...,min_length=1,max_length=4)
+ pin_ids:List[str]=Field(default_factory=list,max_length=4)
+ retry_pin_indices:List[int]=Field(default_factory=list,max_length=4)
  target_board_id:Optional[str]=None
  target_board_name:Optional[str]=None
 class RepairRequest(BaseModel):
@@ -166,6 +167,10 @@ async def repair_pins(body:RepairRequest,background_tasks:BackgroundTasks,_:bool
         url=extract_url(item.url)
         deleted=[]
         try:
+            if item.retry_pin_indices:
+                if any(int(i)<1 or int(i)>PINS_PER_PRODUCT for i in item.retry_pin_indices):
+                    raise HTTPException(status_code=400,detail=f"retry_pin_indices must be within 1..{PINS_PER_PRODUCT}")
+                publication_guard.guard.release_for_repair(url,item.retry_pin_indices)
             for pin_id in item.pin_ids:
                 pid=str(pin_id).strip()
                 if not re.fullmatch(r"\d+",pid):
@@ -183,7 +188,8 @@ async def repair_pins(body:RepairRequest,background_tasks:BackgroundTasks,_:bool
                     if "404" not in str(verify_error) and "not found" not in str(verify_error).lower():
                         raise
                 deleted.append(pid)
-            publication_guard.guard.release_for_repair(url)
+            if not item.retry_pin_indices:
+                publication_guard.guard.release_for_repair(url)
             resp=await enqueue_job(url,background_tasks,target_board_id=item.target_board_id,target_board_name=item.target_board_name,force_new=True)
             results.append({"url":url,"deleted_pin_ids":deleted,"job_id":resp.job_id,"status":resp.status,"message":resp.message,"target_board_id":item.target_board_id})
         except Exception as e:
