@@ -4,6 +4,13 @@ on:
     paths:
       - "publication_guard.py"
       - "image_diversity_guard.py"
+      - "image_quality.py"
+      - "image_fingerprint.py"
+      - "ai_quality_gate.py"
+      - "wire_board_org.py"
+      - "runtime_hardening.py"
+      - "pin_config.py"
+      - "daily_ledger.py"
       - "amazon_*.py"
       - "tests/**"
       - "main.py"
@@ -26,5 +33,5 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt pytest
-      - run: python -m py_compile main.py publication_guard.py image_diversity_guard.py amazon_alerts.py amazon_watchdog.py amazon_composio_discovery.py amazon_discovery.py amazon_scheduler.py amazon_boards.py
-      - run: PYTHONPATH=. pytest -q tests/test_publication_guard.py
+      - run: python -m py_compile main.py agent.py wire_board_org.py runtime_hardening.py publication_guard.py image_diversity_guard.py image_quality.py image_fingerprint.py ai_quality_gate.py amazon_alerts.py amazon_watchdog.py amazon_composio_discovery.py amazon_discovery.py amazon_scheduler.py amazon_boards.py daily_ledger.py pin_supervisor.py
+      - run: PYTHONPATH=. pytest -q tests
