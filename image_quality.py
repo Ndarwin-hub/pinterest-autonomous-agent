@@ -1,4 +1,4 @@
-"""Zero-tolerance Pinterest image sourcing and quality selection."""
+"""Fail-closed visual image validation and selection shared by every publication path."""
 from __future__ import annotations
 import asyncio, io, logging, os, re, math, hashlib
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,6 +17,47 @@ BLANK_UNIQUE_COLOR_THRESHOLD=24
 VISUAL_DUPLICATE_THRESHOLD=0.12
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
+
+def inspect_image_bytes(raw: bytes) -> Optional[Dict[str,Any]]:
+    """Validate the actual image bytes; provider metadata is never trusted."""
+    if not raw or len(raw) > MAX_IMAGE_BYTES_TO_INSPECT: return None
+    try:
+        im=Image.open(io.BytesIO(raw)); im.verify()
+        im=Image.open(io.BytesIO(raw)); im.load()
+        if im.width < MIN_DIMENSION or im.height < MIN_DIMENSION: return None
+        rgba=im.convert("RGBA"); alpha=list(rgba.getchannel("A").resize((64,64)).getdata())
+        opaque_ratio=sum(1 for a in alpha if a>=250)/len(alpha)
+        if opaque_ratio < 0.20: return None
+        rgb=rgba.convert("RGB").resize((64,64),Image.Resampling.LANCZOS); px=list(rgb.getdata())
+        gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]; mean=sum(gray)/len(gray)
+        std=math.sqrt(sum((v-mean)**2 for v in gray)/len(gray)); unique=len(set(px))
+        hist=[0]*32
+        for v in gray: hist[min(31,int(v//8))]+=1
+        entropy=-sum((n/len(gray))*math.log2(n/len(gray)) for n in hist if n)
+        if std < BLANK_STDDEV_THRESHOLD or unique < BLANK_UNIQUE_COLOR_THRESHOLD or entropy < 1.8: return None
+        from PIL import ImageFilter
+        edge_px=list(rgb.convert("L").filter(ImageFilter.FIND_EDGES).getdata())
+        edge_ratio=sum(1 for v in edge_px if v>=180)/len(edge_px)
+        sat=sum(max(p)-min(p) for p in px)/len(px)
+        if edge_ratio > 0.34 and sat < 18 and entropy < 5.0: return None
+        from image_fingerprint import fingerprint
+        return {"width":int(im.width),"height":int(im.height),"sha256":hashlib.sha256(raw).hexdigest(),
+                "stddev":round(std,3),"unique_colors":unique,"entropy":round(entropy,3),
+                "opaque_ratio":round(opaque_ratio,4),"edge_ratio":round(edge_ratio,4),
+                "_fingerprint":fingerprint(raw)}
+    except Exception: return None
+
+async def _fetch_image_bytes(url:str)->Optional[bytes]:
+    if not url or not str(url).startswith(("http://","https://")): return None
+    try:
+        async with httpx.AsyncClient(timeout=25,follow_redirects=True) as client:
+            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"})
+            ct=(r.headers.get("content-type") or "").lower()
+            if r.status_code>=400 or not r.content or len(r.content)>MAX_IMAGE_BYTES_TO_INSPECT:return None
+            if ct and not ct.startswith("image/"):return None
+            return r.content
+    except Exception:return None
+
 async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
     if not url or not str(url).startswith(("http://","https://")): return None
     parser=ImageFile.Parser(); total=0
@@ -39,32 +80,8 @@ def hard_gate(w:int,h:int)->Tuple[bool,str]:
     if ratio>MAX_ASPECT:return False,f"bad_aspect:{w}x{h}"
     return True,"ok"
 async def inspect_image_content(url:str)->Optional[Dict[str,Any]]:
-    if not url or not str(url).startswith(("http://","https://")): return None
-    try:
-        async with httpx.AsyncClient(timeout=20,follow_redirects=True) as client:
-            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/content"})
-            if r.status_code>=400 or not r.content or len(r.content)>MAX_IMAGE_BYTES_TO_INSPECT:return None
-        im=Image.open(io.BytesIO(r.content))
-        im.load()
-        if im.width < MIN_DIMENSION or im.height < MIN_DIMENSION:return None
-        rgb=im.convert("RGB").resize((64,64))
-        px=list(rgb.getdata())
-        gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]
-        mean=sum(gray)/len(gray)
-        variance=sum((v-mean)**2 for v in gray)/len(gray)
-        std=math.sqrt(variance)
-        unique=len(set(px))
-        # Reject blank/near-blank canvases and transparent/empty assets.
-        if std < BLANK_STDDEV_THRESHOLD or unique < BLANK_UNIQUE_COLOR_THRESHOLD:return None
-        # Reject extremely low-information images even when not literally white.
-        hist=[0]*32
-        for v in gray: hist[min(31,int(v//8))]+=1
-        entropy=-sum((n/len(gray))*math.log2(n/len(gray)) for n in hist if n)
-        if entropy < 1.8:return None
-        digest=hashlib.sha256(r.content).hexdigest()
-        return {"sha256":digest,"stddev":round(std,3),"unique_colors":unique,"entropy":round(entropy,3)}
-    except Exception:
-        return None
+    raw=await _fetch_image_bytes(url)
+    return inspect_image_bytes(raw) if raw else None
 
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     d=await inspect_image_url(c.get("url",""))
@@ -269,15 +286,9 @@ async def validate_base64_image(value:str)->Optional[Dict[str,Any]]:
     try:
         import base64
         raw=base64.b64decode(value,validate=True)
-        if not raw or len(raw)>MAX_IMAGE_BYTES_TO_INSPECT:return None
-        im=Image.open(io.BytesIO(raw)); im.load(); w,h=im.size
-        ok,_=hard_gate(w,h)
-        if not ok:return None
-        rgb=im.convert("RGB").resize((64,64)); px=list(rgb.getdata()); gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]
-        mean=sum(gray)/len(gray); std=math.sqrt(sum((v-mean)**2 for v in gray)/len(gray)); unique=len(set(px))
-        if std<BLANK_STDDEV_THRESHOLD or unique<BLANK_UNIQUE_COLOR_THRESHOLD:return None
-        return {"width":w,"height":h,"sha256":hashlib.sha256(raw).hexdigest(),"stddev":round(std,3),"unique_colors":unique}
+        return inspect_image_bytes(raw)
     except Exception:return None
+
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
