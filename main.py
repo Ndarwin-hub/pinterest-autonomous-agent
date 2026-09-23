@@ -136,10 +136,17 @@ class BatchSubmitRequest(BaseModel):
 class DiscoverSubmitRequest(BaseModel):
  count:int=Field(...,ge=1,le=50,description="Number of distinct Amazon US products to discover and submit")
  exclude_asins:Optional[List[str]]=Field(default=None,description="Optional ASIN exclude list")
-async def enqueue_job(url_str:str,background_tasks:BackgroundTasks,target_board_id:Optional[str]=None,target_board_name:Optional[str]=None)->SubmitResponse:
+class RepairItem(BaseModel):
+ url:str
+ pin_ids:List[str]=Field(...,min_length=1,max_length=4)
+ target_board_id:Optional[str]=None
+ target_board_name:Optional[str]=None
+class RepairRequest(BaseModel):
+ items:List[RepairItem]=Field(...,min_length=1,max_length=10)
+async def enqueue_job(url_str:str,background_tasks:BackgroundTasks,target_board_id:Optional[str]=None,target_board_name:Optional[str]=None,force_new:bool=False)->SubmitResponse:
  async with _enqueue_lock:
   existing=job_store.find_by_url(url_str)
-  if existing:return SubmitResponse(job_id=existing.job_id,status=existing.status.value,message="Existing job reused; duplicate Pinterest workflow was not started.")
+  if existing and not force_new:return SubmitResponse(job_id=existing.job_id,status=existing.status.value,message="Existing job reused; duplicate Pinterest workflow was not started.")
   if not quota.reserve_job():raise HTTPException(status_code=429,detail={"message":"Monthly safe Pinterest capacity reached; job not started.","quota":quota.snapshot()})
   job_id=str(uuid.uuid4());job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress=f"Job accepted — {PINS_PER_PRODUCT}-Pin workflow queued",target_board_id=target_board_id,target_board_name=target_board_name);job_store.save(job);background_tasks.add_task(run_job,job_id,url_str);return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message=f"Job accepted. {PINS_PER_PRODUCT} Pins will be researched, imaged, published and verified. Poll /status/{{job_id}}")
 @app.get("/health")
@@ -151,6 +158,33 @@ async def submit(body:SubmitRequest,background_tasks:BackgroundTasks,_:bool=Depe
  try:url_str=extract_url(body.url)
  except ValueError as e:raise HTTPException(status_code=400,detail=str(e))
  return await enqueue_job(url_str,background_tasks)
+@app.post("/repair-pins")
+async def repair_pins(body:RepairRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_manual_oidc)):
+    """Explicit repair-only route: delete specified bad Pins, release their logical claims, then rerun the unchanged product workflow."""
+    results=[]
+    for item in body.items:
+        url=extract_url(item.url)
+        deleted=[]
+        try:
+            for pin_id in item.pin_ids:
+                pid=str(pin_id).strip()
+                if not re.fullmatch(r"\d+",pid):
+                    raise HTTPException(status_code=400,detail=f"Invalid Pinterest Pin ID: {pid}")
+                await agent_module.run_composio_tool("PINTEREST_DELETE_PIN",{"pin_id":pid},retries=1)
+                try:
+                    await agent_module.run_composio_tool("PINTEREST_GET_PIN",{"pin_id":pid},retries=0)
+                    raise RuntimeError(f"Pin {pid} still exists after delete")
+                except Exception as verify_error:
+                    if "404" not in str(verify_error) and "not found" not in str(verify_error).lower():
+                        raise
+                deleted.append(pid)
+            publication_guard.guard.release_for_repair(url)
+            resp=await enqueue_job(url,background_tasks,target_board_id=item.target_board_id,target_board_name=item.target_board_name,force_new=True)
+            results.append({"url":url,"deleted_pin_ids":deleted,"job_id":resp.job_id,"status":resp.status,"message":resp.message,"target_board_id":item.target_board_id})
+        except Exception as e:
+            results.append({"url":url,"deleted_pin_ids":deleted,"status":"failed","error":str(e)[:1000]})
+    return {"requested":len(body.items),"accepted":sum(1 for r in results if r.get("job_id")),"results":results,"workflow":"existing_shared_submit_pipeline","pins_per_product":PINS_PER_PRODUCT}
+
 @app.get("/status/{job_id}",response_model=StatusResponse)
 async def status(job_id:str,_:bool=Depends(verify_secret)):
  job=job_store.get(job_id)
