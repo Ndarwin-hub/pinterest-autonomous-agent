@@ -210,7 +210,14 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     valid=await validate_many(raw)
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
     valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls]
-    valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
+    def _resolution_tier(x):
+        m=max(int(x.get("width") or 0),int(x.get("height") or 0))
+        if m>=6000:return 4
+        if m>=3500:return 3
+        if m>=2000:return 2
+        if m>=1200:return 1
+        return 0
+    valid.sort(key=lambda x:(_resolution_tier(x),x.get("score",0),x.get("original",False)),reverse=True)
     diverse=await _remove_visual_duplicates(valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
     if diverse:return diverse[:MAX_CANDIDATES_PER_PIN]
     return []
