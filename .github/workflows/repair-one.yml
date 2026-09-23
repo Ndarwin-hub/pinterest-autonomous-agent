@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
           payload='{
             "items":[
-              {"url":"https://www.amazon.com/Personal-Travel-Backpack-Airlines-18x14x8/dp/B0H5V4D29V?tag=desiredplus-20","pin_ids":["987906868284388256","987906868284388255","987906868284388254","987906868284388253"],"target_board_id":"987906936951147683","target_board_name":"Fashion & Lifestyle"},
+              {"url":"https://www.amazon.com/Personal-Travel-Backpack-Airlines-18x14x8/dp/B0H5V4D29V?tag=desiredplus-20","pin_ids":["987906868284389587","987906868284389491"],"target_board_id":"987906936951147683","target_board_name":"Fashion & Lifestyle"},
               {"url":"https://www.amazon.com/Amazon-vibrant-helpful-routines-Charcoal/dp/B09B8V1LZ3?tag=desiredplus-20","pin_ids":["987906868284388268","987906868284388267","987906868284388265","987906868284388263"],"target_board_id":"987906936951145057","target_board_name":"Electronics & Gadgets"},
               {"url":"https://www.amazon.com/Coolake-Self-Cleaning-Stainless-Drainage-Restaurant/dp/B0HGLHBBLS?tag=desiredplus-20","pin_ids":["987906868284388278","987906868284388277","987906868284388275","987906868284388272"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"},
               {"url":"https://www.amazon.com/OXILAM-Starter-Battery-Portable-UltraSafe/dp/B0D4JDNSCF?tag=desiredplus-20","pin_ids":["987906868284388284","987906868284388282","987906868284388281","987906868284388280"],"target_board_id":"987906936951148022","target_board_name":"Automotive & Tools"},
