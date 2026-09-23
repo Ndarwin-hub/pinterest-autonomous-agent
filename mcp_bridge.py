@@ -75,13 +75,13 @@ async def ensure_composio_router_session()->Dict[str,Any]:
   try:
    session=await _composio_request("POST","/tool_router/session",{"user_id":COMPOSIO_ENTITY_ID,"toolkits":{"enable":[COMPOSIO_SEARCH_TOOLKIT_SLUG,CUSTOM_MCP_TOOLKIT_SLUG]}});sid=str(session.get("session_id") or "")
    if not sid:raise RuntimeError("Composio created a session without a session_id")
-   search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute Pinterest Railway bridge tools including PINTEREST_SUBMIT_URL, PINTEREST_PIN_COUNT, PINTEREST_BRIDGE_HEALTH, and the universal PINTEREST_PIN_A scheduler wake"}],"search_strategy":"tool_search"})
+   search=await _composio_request("POST",f"/tool_router/session/{sid}/search",{"queries":[{"use_case":"execute Pinterest Railway bridge tools including PINTEREST_SUBMIT_URL, PINTEREST_PIN_COUNT, PINTEREST_BRIDGE_HEALTH, and the universal PINTEREST_RUN_PIN_A/PINTEREST_PIN_A scheduler wake"}],"search_strategy":"tool_search"})
    submit_slug=None;health_slug=None;pin_a_slug=None;count_slug=None
    for result in search.get("results") or []:
     for slug in (result.get("primary_tool_slugs") or [])+(result.get("related_tool_slugs") or []):
      if str(slug).upper().endswith("PINTEREST_SUBMIT_URL"):submit_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
-     if str(slug).upper().endswith("PINTEREST_PIN_A"):pin_a_slug=str(slug)
+     if str(slug).upper().endswith("PINTEREST_RUN_PIN_A") or str(slug).upper().endswith("PINTEREST_PIN_A"):pin_a_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_PIN_COUNT"):count_slug=str(slug)
      if submit_slug and health_slug and pin_a_slug and count_slug:break
     if submit_slug and health_slug and pin_a_slug and count_slug:break
@@ -89,7 +89,7 @@ async def ensure_composio_router_session()->Dict[str,Any]:
     for slug,schema in (search.get("tool_schemas") or {}).items():
      if str(slug).upper().endswith("PINTEREST_SUBMIT_URL") or "exact product/affiliate URL" in str(schema.get("description","")):submit_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_BRIDGE_HEALTH"):health_slug=str(slug)
-     if str(slug).upper().endswith("PINTEREST_PIN_A"):pin_a_slug=str(slug)
+     if str(slug).upper().endswith("PINTEREST_RUN_PIN_A") or str(slug).upper().endswith("PINTEREST_PIN_A"):pin_a_slug=str(slug)
      if str(slug).upper().endswith("PINTEREST_PIN_COUNT"):count_slug=str(slug)
      if submit_slug and health_slug and pin_a_slug and count_slug:break
    if not submit_slug:raise RuntimeError("Composio session search did not expose PINTEREST_SUBMIT_URL")
