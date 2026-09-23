@@ -9,7 +9,7 @@ COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip();COMPOSIO_ENTITY_ID=os.
 router=APIRouter();_router_session_id:Optional[str]=None;_router_submit_tool_slug:Optional[str]=None;_router_health_tool_slug:Optional[str]=None;_router_amazon_tool_slug:Optional[str]=None;_router_session_mcp_url:Optional[str]=None
 TOOL={"name":"PINTEREST_SUBMIT_URL","description":"Submit one exact product/affiliate URL to the autonomous Pinterest workflow. Pass the URL unchanged; do not shorten, rewrite, or replace it.","inputSchema":{"type":"object","properties":{"url":{"type":"string","description":"Exact http(s) product or affiliate URL."}},"required":["url"],"additionalProperties":False}}
 HEALTH_TOOL={"name":"PINTEREST_BRIDGE_HEALTH","description":"Non-publishing bridge health check. Returns a fixed readiness response and does not submit or publish anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}}
-COUNT_TOOL={"name":"PINTEREST_PIN_COUNT","description":"Search, verify and publish N distinct Amazon US products through the Railway Pinterest workflow. N is the number of products, not the number of Pins. Each product uses the existing independent Pin research/image/publish/verification pipeline; publish every usable verified Pin and do not block the batch merely because fewer than five usable Pins are available for a product. Preserve desiredplus-20, reject duplicate ASINs, and use the configured image-quality priority.","inputSchema":{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":50,"description":"Number of distinct Amazon US products to search, verify and publish."}},"required":["count"],"additionalProperties":False}}
+COUNT_TOOL={"name":"PINTEREST_PIN_COUNT","description":"Search, verify and publish N distinct Amazon US products through the Railway Pinterest workflow. N is the number of products, not the number of Pins. Each product uses the existing independent Pin research/image/publish/verification pipeline; publish every usable verified Pin and do not block the batch merely because fewer than five usable Pins are available for a product. Preserve desiredplus-20, reject duplicate ASINs, and use the configured image-quality priority.","inputSchema":{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":50,"description":"Number of distinct Amazon US products to search, verify and publish."}},"required":["count"],"additionalProperties":False}}\nRUN_PIN_A_TOOL={"name":"PINTEREST_RUN_PIN_A","description":"Canonical universal trigger for the Run pin a / Run pin A command. Any authorized AI agent, Composio-connected source, automation platform, GitHub workflow, Railway scheduler, Cloudflare watchdog, or authorized API caller that receives a Run pin a/A request must call this tool so every source converges on the same Railway /pin-a scheduler wake. Do not start a competing batch directly.","inputSchema":{"type":"object","properties":{"source":{"type":"string","description":"Calling source identifier."},"request_id":{"type":"string","description":"Optional idempotency/correlation ID."}},"additionalProperties":False}}
 
 def _result(request_id:Any,result:Dict[str,Any])->JSONResponse:return JSONResponse({"jsonrpc":"2.0","id":request_id,"result":result})
 def _error(request_id:Any,code:int,message:str)->JSONResponse:return JSONResponse({"jsonrpc":"2.0","id":request_id,"error":{"code":code,"message":message}})
@@ -141,15 +141,15 @@ async def mcp_endpoint(request:Request):
  if request_id is None:
   if method in {"notifications/initialized","notifications/cancelled"}:return Response(status_code=202)
   if method=="ping":return Response(status_code=202)
- if method=="initialize":return _result(request_id,{"protocolVersion":params.get("protocolVersion") or "2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"Pinterest Railway Bridge","version":"1.2.0"},"instructions":"Use PINTEREST_SUBMIT_URL for exact URLs or PINTEREST_PIN_COUNT for Pin N product batches."})
+ if method=="initialize":return _result(request_id,{"protocolVersion":params.get("protocolVersion") or "2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"Pinterest Railway Bridge","version":"1.2.0"},"instructions":"Canonical command routing: Run pin a / Run pin A -> PINTEREST_RUN_PIN_A (or legacy PINTEREST_PIN_A); Pin N -> PINTEREST_PIN_COUNT; exact URL -> PINTEREST_SUBMIT_URL. All Pin A callers must converge on Railway /pin-a."})
  if method=="ping":return _result(request_id,{})
- if method=="tools/list":return _result(request_id,{"tools":[TOOL,HEALTH_TOOL,PIN_A_TOOL,COUNT_TOOL]})
+ if method=="tools/list":return _result(request_id,{"tools":[TOOL,HEALTH_TOOL,RUN_PIN_A_TOOL,PIN_A_TOOL,COUNT_TOOL]})
  if method=="tools/call":
   name=params.get("name");args=params.get("arguments") or {}
   try:
    if name==TOOL["name"]:text=await _submit_exact_url(args.get("url",""))
    elif name==HEALTH_TOOL["name"]:text="PINTEREST_BRIDGE_HEALTH_OK"
-   elif name==PIN_A_TOOL["name"]:text=json.dumps(await _pin_a(args.get("source","composio"),args.get("request_id")),separators=(",",":"))
+   elif name in (RUN_PIN_A_TOOL["name"],PIN_A_TOOL["name"]):text=json.dumps(await _pin_a(args.get("source","composio"),args.get("request_id")),separators=(",",":"))
    elif name==COUNT_TOOL["name"]:text=json.dumps(await _pin_count(int(args.get("count",0))),separators=(",",":"))
    else:return _error(request_id,-32601,f"Unknown tool: {name}")
    return _result(request_id,{"content":[{"type":"text","text":text}],"isError":False})
@@ -189,4 +189,4 @@ async def register_custom_mcp_with_retry()->bool:
   except Exception as exc:print(f"Composio Custom MCP registration attempt {attempt} failed: {type(exc).__name__}")
   await asyncio.sleep(min(2**attempt,15))
  return False
-PIN_A_TOOL={"name":"PINTEREST_PIN_A","description":"Activate the universal Pin A scheduler wake. Railway scheduler and daily ledger remain the single execution authority and prevent duplicate sessions.","inputSchema":{"type":"object","properties":{"source":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":False}}
+PIN_A_TOOL={"name":"PINTEREST_PIN_A","description":"Legacy alias for the canonical PINTEREST_RUN_PIN_A universal scheduler wake. Use PINTEREST_RUN_PIN_A for Run pin a / Run pin A requests.","inputSchema":{"type":"object","properties":{"source":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":False}}
