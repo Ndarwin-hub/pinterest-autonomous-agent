@@ -15,6 +15,8 @@ from typing import Any, Dict, Optional
 from pin_config import PINS_PER_PRODUCT
 
 logger = logging.getLogger("pinterest-agent.runtime-hardening")
+_PIN_CREATE_LOCK=asyncio.Lock()
+_RATE_BACKOFF_SECONDS=(15,30,60,120)
 
 def _account_for(slug: str) -> Optional[str]:
     s = slug.upper()
