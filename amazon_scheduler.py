@@ -39,6 +39,10 @@ class AmazonScheduler:
    logger.info("Closed prior daily session day=%s before starting fresh day=%s",old_day,day)
   if ledger.is_day_complete(day):
    return {"status":"already_completed","day":day}
+  orphaned=ledger.reclaim_orphaned_batches(day)
+  if orphaned:
+   logger.warning("Reclaimed orphaned batch ownership on wake: day=%s batches=%s",day,orphaned)
+  ledger.reclaim_stale_processing(day)
   # Materialize today's 50 fresh slot records now. Existing rows from other days are never reused.
   try:
    live=await list_boards()
@@ -75,16 +79,19 @@ class AmazonScheduler:
     else:
      slot=ledger.next_recovery_slot(day)
      if not slot:
+      logger.info("Final recovery pass complete for %s; closing today's session.",day)
+      ledger.close_day(day,reason="final_recovery_complete")
       break
      if not ledger.claim_recovery_slot(day,int(slot["slot"])):
       continue
-     logger.info("Final recovery attempting deferred/exhausted slot %s.",slot["slot"])
+     logger.info("Final recovery attempting deferred/partial/exhausted slot %s.",slot["slot"])
      ok=await self._process_slot(slot,enqueue,wait_job,day,recovery=True)
      if not ok:
-      current=ledger.next_recovery_slot(day)
-      if not current or int(current.get("slot") or -1)!=int(slot["slot"]) or current.get("status")!="deferred":
-       ledger.mark_slot(int(slot["slot"]),status="exhausted",day=day,error="final_recovery_exhausted")
-    if ledger.is_day_complete(day): break
+      # A final-recovery slot gets one controlled recovery attempt today.
+      # Keep it historical, but do not loop indefinitely on the same deferred slot.
+      ledger.mark_slot(int(slot["slot"]),status="exhausted",day=day,error="final_recovery_exhausted")
+     # Recovery is intentionally contiguous: no normal 48-minute inter-batch delay.
+     continue
     try:
      await asyncio.wait_for(self._daily_stop.wait(),timeout=SLOT_INTERVAL_SEC)
     except asyncio.TimeoutError:
@@ -103,7 +110,7 @@ class AmazonScheduler:
    self.status["daily_session"]={"running":False,"day":day,"started_at":self.status.get("daily_session",{}).get("started_at"),"completed_at":datetime.now(timezone.utc).isoformat() if complete else None,"next_batch":ledger.next_unfinished_batch(day)}
    self._daily_task=None
    self.status["current_batch"]=None
-   if complete: logger.info("DAILY AMAZON SESSION COMPLETE for %s; service is now idle and may sleep.",day)
+   if complete: logger.info("DAILY AMAZON SESSION COMPLETE/CLOSED for %s; service is now idle and may sleep.",day)
  async def stop_daily_session(self):
   self._daily_stop.set()
   if self._daily_task:
