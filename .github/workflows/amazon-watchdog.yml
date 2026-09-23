@@ -18,12 +18,6 @@ on:
         required: true
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10']
-      mode:
-        description: 'Normal watchdog or one-time 20-Pin image repair'
-        required: false
-        default: 'watchdog'
-        type: choice
-        options: ['watchdog','repair20']
 permissions:
   contents: read
   id-token: write
@@ -33,8 +27,31 @@ concurrency:
 jobs:
   watchdog:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
+      - name: Select expected batch
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}" in
+              '23 0 * * *') echo "batch=1" >> "$GITHUB_OUTPUT" ;;
+              '11 1 * * *') echo "batch=2" >> "$GITHUB_OUTPUT" ;;
+              '59 1 * * *') echo "batch=3" >> "$GITHUB_OUTPUT" ;;
+              '47 2 * * *') echo "batch=4" >> "$GITHUB_OUTPUT" ;;
+              '35 3 * * *') echo "batch=5" >> "$GITHUB_OUTPUT" ;;
+              '23 4 * * *') echo "batch=6" >> "$GITHUB_OUTPUT" ;;
+              '11 5 * * *') echo "batch=7" >> "$GITHUB_OUTPUT" ;;
+              '59 5 * * *') echo "batch=8" >> "$GITHUB_OUTPUT" ;;
+              '47 6 * * *') echo "batch=9" >> "$GITHUB_OUTPUT" ;;
+              '35 7 * * *') echo "batch=10" >> "$GITHUB_OUTPUT" ;;
+              *) echo 'Unknown schedule' >&2; exit 1 ;;
+            esac
+          fi
+
       - name: Request GitHub OIDC token
         id: oidc
         shell: bash
@@ -45,53 +62,16 @@ jobs:
           test -n "$token" && test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      - name: Execute requested watchdog/repair action
+      - name: Wake/check Railway scheduler
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
+          BATCH: ${{ steps.select.outputs.batch }}
         shell: bash
         run: |
           set -euo pipefail
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.mode }}" == "repair20" ]]; then
-            payload='{
-              "items":[
-                {"url":"https://www.amazon.com/SenCre-Nugget-Countertop-Makers-Chewable/dp/B0HF4QN93Z?tag=desiredplus-20","pin_ids":["987906868284388979","987906868284388978"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"},
-                {"url":"https://www.amazon.com/HOW-SELL-AMAZON-BEGINNERS-Step/dp/B0GWPTMYZ9?tag=desiredplus-20","pin_ids":["987906868284388973","987906868284388972","987906868284388971","987906868284388969"],"target_board_id":"987906936951147704","target_board_name":"Books & Learning"},
-                {"url":"https://www.amazon.com/Apple-iPhone-SE-64GB-White/dp/B088NQSLGN?tag=desiredplus-20","pin_ids":["987906868284388410","987906868284388408"],"target_board_id":"987906936951153891","target_board_name":"Cell Phones & Accessories"},
-                {"url":"https://www.amazon.com/Fresh-Step-Advanced-Multi-Cat-18-5lb/dp/B07ZK3FP27?tag=desiredplus-20","pin_ids":["987906868284388404","987906868284388403","987906868284388402","987906868284388401"],"target_board_id":"987906936951148021","target_board_name":"Pet Supplies"},
-                {"url":"https://www.amazon.com/msi-Katana-15-HX-i7-14650HX/dp/B0HGR2MWJV?tag=desiredplus-20","pin_ids":["987906868284388397","987906868284388395","987906868284388394","987906868284388393"],"target_board_id":"987906936951153890","target_board_name":"Computers & Accessories"},
-                {"url":"https://www.amazon.com/Holder-Organizers-Pencil-Compartments-Organizer/dp/B0CQP9LYXC?tag=desiredplus-20","pin_ids":["987906868284388379","987906868284388377","987906868284388375","987906868284388374"],"target_board_id":"987906936951148020","target_board_name":"Office & Productivity"}
-              ]
-            }'
-            response=$(curl --fail --silent --show-error --no-buffer               --connect-timeout 20 --max-time 900               --retry 3 --retry-delay 5 --retry-all-errors               -H "Authorization: Bearer $ID_TOKEN"               -H 'Content-Type: application/json'               -H 'X-Pin-A-Source: repair-20-watchdog'               -H "X-Pin-A-Request-ID: repair-20-${GITHUB_RUN_ID}"               -X POST 'https://web-production-dae68.up.railway.app/repair-pins'               --data "$payload")
-            printf '%s
-' "$response"
-            accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
-            test "$accepted" -eq 1
-            exit 0
-          fi
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            BATCH="${{ inputs.batch }}"
-          else
-            case "${{ github.event.schedule }}" in
-              '23 0 * * *') BATCH=1 ;;
-              '11 1 * * *') BATCH=2 ;;
-              '59 1 * * *') BATCH=3 ;;
-              '47 2 * * *') BATCH=4 ;;
-              '35 3 * * *') BATCH=5 ;;
-              '23 4 * * *') BATCH=6 ;;
-              '11 5 * * *') BATCH=7 ;;
-              '59 5 * * *') BATCH=8 ;;
-              '47 6 * * *') BATCH=9 ;;
-              '35 7 * * *') BATCH=10 ;;
-              *) echo 'Unknown schedule' >&2; exit 1 ;;
-            esac
-          fi
-
           response_file=$(mktemp)
           trap 'rm -f "$response_file"' EXIT
-          curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 6 --retry-delay 10 --retry-max-time 180 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch'             --data "{\"batch\":$BATCH}" | tee "$response_file"
+          curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 6 --retry-delay 10 --retry-max-time 180 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch'             --data "{"batch":$BATCH}" | tee "$response_file"
           final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
           case "$final_status" in
             session_started|already_running|completed|already_completed|running)
