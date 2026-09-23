@@ -585,8 +585,8 @@ async def get_best_pin_image(
                 "license": best.get("license"),
             }
 
-    # Emergency pillow
-    return pillow_card(product, strategy["key"])
+    # Fail closed: a generic Pillow card is not a product image and must never be published.
+    raise RuntimeError(f"No trustworthy image source survived for Pin {pin_index}.")
 
 
 async def select_or_create_board(product: Dict[str, Any], job_store: JobStore, job_id: str) -> str:
