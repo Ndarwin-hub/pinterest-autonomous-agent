@@ -10,7 +10,7 @@ Priority contract:
 5. Verified 4K local upscale/derivative of the best genuine external image.
 6. Native product-page imagery, only when priorities 1-5 cannot satisfy the
    resolution requirements.
-7. Existing Pillow emergency fallback, unchanged as the final last resort.
+7. No placeholder fallback; fail closed.
 
 Composio Image Search is called directly from Railway using the configured
 Composio project key, so the first two priorities do not depend on a separate
