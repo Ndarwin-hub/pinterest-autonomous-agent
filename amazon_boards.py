@@ -55,7 +55,7 @@ def classify_live_boards(live_items:List[Dict[str,Any]])->Dict[str,Any]:
         "unknown_non_legacy":[],
         "primary_count":len(primary),
         "required_primary_slots":REQUIRED_PRIMARY_SLOTS,
-        "scheduler_ready":bool(primary) and all(str(b.get("id") or "") for b in primary),
+        "scheduler_ready":(bool(primary) and all(str(b.get("id") or "") for b in primary)) or bool(PERMANENT_BOARD_IDS.get(DEFAULT_BOARD_NAME)),
         "missing_primary_slots":max(0,REQUIRED_PRIMARY_SLOTS-len(primary)),
         "serial_order":[b["name"] for b in primary],
         "board_scopes":BOARD_SCOPES,
