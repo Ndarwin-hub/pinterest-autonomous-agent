@@ -7,6 +7,11 @@ on:
         description: 'Replacement product index 0-9'
         required: true
         type: string
+      retry_indices:
+        description: 'Optional comma-separated failed Pin indexes, e.g. 2,3,4'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -51,6 +56,10 @@ jobs:
           INDEX='${{ inputs.index }}'
           case "$INDEX" in 0|1|2|3|4|5|6|7|8|9) ;; *) echo 'index must be 0-9'; exit 2 ;; esac
           payload=$(printf '%s' "$payload" | jq --argjson i "$INDEX" '{items:[.items[$i]]}')
+          RETRY='${{ inputs.retry_indices }}'
+          if [ -n "$RETRY" ]; then
+            payload=$(printf '%s' "$payload" | jq --arg r "$RETRY" '.items[0].pin_ids=[] | .items[0].retry_pin_indices=($r|split(",")|map(tonumber))')
+          fi
           response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-one'             -H "X-Pin-A-Request-ID: repair-40-${GITHUB_RUN_ID}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$payload")
           printf '%s\n' "$response"
           accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
