@@ -1,6 +1,6 @@
 """Zero-tolerance Pinterest image sourcing and quality selection."""
 from __future__ import annotations
-import asyncio, io, logging, os, re
+import asyncio, io, logging, os, re, math, hashlib
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from PIL import Image, ImageFile
@@ -12,6 +12,9 @@ MAX_ASPECT=2.0
 MIN_SCORE=85
 MAX_CANDIDATES_PER_PIN=12
 MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
+BLANK_STDDEV_THRESHOLD=4.0
+BLANK_UNIQUE_COLOR_THRESHOLD=24
+VISUAL_DUPLICATE_THRESHOLD=0.12
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
 async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
@@ -35,12 +38,42 @@ def hard_gate(w:int,h:int)->Tuple[bool,str]:
     ratio=max(w,h)/max(1,min(w,h))
     if ratio>MAX_ASPECT:return False,f"bad_aspect:{w}x{h}"
     return True,"ok"
+async def inspect_image_content(url:str)->Optional[Dict[str,Any]]:
+    if not url or not str(url).startswith(("http://","https://")): return None
+    try:
+        async with httpx.AsyncClient(timeout=20,follow_redirects=True) as client:
+            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/content"})
+            if r.status_code>=400 or not r.content or len(r.content)>MAX_IMAGE_BYTES_TO_INSPECT:return None
+        im=Image.open(io.BytesIO(r.content))
+        im.load()
+        if im.width < MIN_DIMENSION or im.height < MIN_DIMENSION:return None
+        rgb=im.convert("RGB").resize((64,64))
+        px=list(rgb.getdata())
+        gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]
+        mean=sum(gray)/len(gray)
+        variance=sum((v-mean)**2 for v in gray)/len(gray)
+        std=math.sqrt(variance)
+        unique=len(set(px))
+        # Reject blank/near-blank canvases and transparent/empty assets.
+        if std < BLANK_STDDEV_THRESHOLD or unique < BLANK_UNIQUE_COLOR_THRESHOLD:return None
+        # Reject extremely low-information images even when not literally white.
+        hist=[0]*32
+        for v in gray: hist[min(31,int(v//8))]+=1
+        entropy=-sum((n/len(gray))*math.log2(n/len(gray)) for n in hist if n)
+        if entropy < 1.8:return None
+        digest=hashlib.sha256(r.content).hexdigest()
+        return {"sha256":digest,"stddev":round(std,3),"unique_colors":unique,"entropy":round(entropy,3)}
+    except Exception:
+        return None
+
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     d=await inspect_image_url(c.get("url",""))
     if not d:return None
     w,h=d; ok,reason=hard_gate(w,h)
     if not ok:return None
-    x=dict(c);x.update(width=w,height=h,quality_gate=reason);return x
+    content=await inspect_image_content(c.get("url",""))
+    if not content:return None
+    x=dict(c);x.update(width=w,height=h,quality_gate=reason,content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"]);return x
 async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
     seen=set();unique=[]
     for c in raw:
@@ -52,6 +85,10 @@ async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
 def score(c:Dict[str,Any],product:Dict[str,Any],strategy:str)->int:
     p=(c.get("provider") or "").lower();src=(c.get("source") or "").lower();name=(product.get("name") or "").lower();brand=(product.get("brand") or "").lower();w,h=int(c.get("width") or 0),int(c.get("height") or 0);ratio=w/max(1,h);s=45
     if p=="product_page":s+=30
+    if w>=3840 or h>=3840:s+=20
+    elif w>=2160 or h>=2160:s+=15
+    elif w>=1440 or h>=1440:s+=10
+    elif w>=1200 or h>=1200:s+=6
     elif p=="composio_search_image":
         s+=20
         if brand and brand in src:s+=12
@@ -107,6 +144,7 @@ async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set
     for c in candidates:
         u=c.get("url")
         if not u or u in used_urls:continue
+        if c.get("provider") == "pillow_card":continue
         sig=await _visual_signature(u)
         if sig is None:
             selected.append(c)
@@ -176,6 +214,21 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     diverse=await _remove_visual_duplicates(valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
     if diverse:return diverse[:MAX_CANDIDATES_PER_PIN]
     return []
+
+async def validate_base64_image(value:str)->Optional[Dict[str,Any]]:
+    if not value:return None
+    try:
+        import base64
+        raw=base64.b64decode(value,validate=True)
+        if not raw or len(raw)>MAX_IMAGE_BYTES_TO_INSPECT:return None
+        im=Image.open(io.BytesIO(raw)); im.load(); w,h=im.size
+        ok,_=hard_gate(w,h)
+        if not ok:return None
+        rgb=im.convert("RGB").resize((64,64)); px=list(rgb.getdata()); gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]
+        mean=sum(gray)/len(gray); std=math.sqrt(sum((v-mean)**2 for v in gray)/len(gray)); unique=len(set(px))
+        if std<BLANK_STDDEV_THRESHOLD or unique<BLANK_UNIQUE_COLOR_THRESHOLD:return None
+        return {"width":w,"height":h,"sha256":hashlib.sha256(raw).hexdigest(),"stddev":round(std,3),"unique_colors":unique}
+    except Exception:return None
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
