@@ -1,6 +1,9 @@
 name: Pin N Production Timeout Repair
 
 on:
+  push:
+    paths:
+      - .github/workflows/pin-n-production-fix.yml
   workflow_dispatch:
 
 permissions:
