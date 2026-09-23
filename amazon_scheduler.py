@@ -202,7 +202,9 @@ class AmazonScheduler:
    logger.exception("Amazon batch %s failed",batch_index);ledger.complete_batch(day,batch_index,owner,status="failed",error=str(e)[:500]);await send_failure_alert(batch=batch_index,reason="unhandled batch exception",details=str(e));raise
   finally:self.status["current_batch"]=None
  async def _process_slot(self,slot,enqueue,wait_job,day,recovery=False):
-  n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0);exclude=set()
+  n=int(slot["slot"]);attempts=int(slot.get("replacement_attempts") or 0)
+  # A new day never resumes an ASIN selected by a previous day's unfinished slot.
+  exclude=set(ledger.historical_selected_asins(exclude_day=day))
   while attempts<MAX_REPLACEMENTS_PER_SLOT:
    target_board_name=str(slot.get("target_board_name") or "Everything Else")
    target_board_id=str(slot.get("target_board_id") or "")
