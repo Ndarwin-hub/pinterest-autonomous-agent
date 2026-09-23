@@ -17,12 +17,22 @@ class JobStore:
  def __init__(self,db_path:Path=DB_PATH): self.db_path=db_path; self._memory={}; self._init_db()
  def _connect(self): self.db_path.parent.mkdir(parents=True,exist_ok=True); return sqlite3.connect(str(self.db_path),check_same_thread=False)
  def _init_db(self):
+  c=None
   try:
-   c=self._connect(); c.execute("CREATE TABLE IF NOT EXISTS jobs(job_id TEXT PRIMARY KEY,url TEXT NOT NULL,status TEXT NOT NULL,progress TEXT,result TEXT,error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,target_board_id TEXT,target_board_name TEXT)")
+   c=self._connect()
+   c.execute("CREATE TABLE IF NOT EXISTS jobs(job_id TEXT PRIMARY KEY,url TEXT NOT NULL,status TEXT NOT NULL,progress TEXT,result TEXT,error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,target_board_id TEXT,target_board_name TEXT)")
+   existing={row[1] for row in c.execute("PRAGMA table_info(jobs)").fetchall()}
    for col in ("target_board_id","target_board_name"):
-    try: c.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
-    except sqlite3.OperationalError: pass; c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_url ON jobs(url)"); c.commit(); c.close()
-  except Exception as e: print(f"JobStore SQLite init warning: {e}")
+    if col not in existing:
+     c.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
+   c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_url ON jobs(url)")
+   c.commit()
+  except Exception as e:
+   print(f"JobStore SQLite init warning: {e}")
+  finally:
+   if c is not None:
+    try: c.close()
+    except Exception: pass
  def save(self,job:Job):
   self._memory[job.job_id]=job
   try:
