@@ -8,7 +8,7 @@ Image priority:
 2) COMPOSIO_SEARCH_IMAGE (real web product photos — works without per-toolkit entity)
 3) Pexels/Pixabay/Unsplash if credentials/entity allow
 4) OpenAI if key present
-5) Pillow emergency only
+5) No fake/placeholder fallback; fail closed
 
 AI text tools (DeepSeek/Perplexity/etc.) are probed at runtime; if entity lacks connection,
 local SEO remains active (honest capability report in job result).
@@ -479,52 +479,8 @@ def score_candidate(c: Dict[str, Any], product: Dict[str, Any], strategy_key: st
 
 
 def pillow_card(product: Dict[str, Any], strategy_key: str) -> Dict[str, Any]:
-    from PIL import Image, ImageDraw, ImageFont
-
-    w, h = 1000, 1500
-    palettes = {
-        "hero": ((245, 240, 235), (30, 30, 30)),
-        "problem": ((236, 242, 248), (20, 40, 70)),
-        "benefit": ((240, 248, 240), (20, 60, 30)),
-        "usecase": ((248, 242, 236), (60, 35, 20)),
-        "discovery": ((244, 240, 250), (40, 25, 60)),
-    }
-    bg, ink = palettes.get(strategy_key, ((245, 240, 235), (30, 30, 30)))
-    img = Image.new("RGB", (w, h), bg)
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, w, 220], fill=ink)
-    draw.rectangle([0, h - 140, w, h], fill=ink)
-    name = (product.get("name") or "Product")[:60]
-    site = product.get("site") or ""
-    try:
-        font_lg = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 44)
-        font_sm = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 26)
-    except Exception:
-        font_lg = ImageFont.load_default()
-        font_sm = font_lg
-
-    def wrap(text: str, max_chars: int) -> str:
-        words = text.split()
-        lines, cur = [], ""
-        for word in words:
-            trial = (cur + " " + word).strip()
-            if len(trial) <= max_chars:
-                cur = trial
-            else:
-                if cur:
-                    lines.append(cur)
-                cur = word
-        if cur:
-            lines.append(cur)
-        return "\n".join(lines[:5])
-
-    draw.multiline_text((60, 560), wrap(name, 26), fill=ink, font=font_lg, spacing=10)
-    if site:
-        draw.text((60, h - 90), f"Shop on {site}", fill=(230, 230, 230), font=font_sm)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90)
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    return {"mode": "base64", "value": b64, "provider": "pillow_card", "id": strategy_key, "score": 45}
+    """Retired compatibility symbol. Placeholder cards are never publishable."""
+    raise RuntimeError("Pillow placeholder fallback is disabled; no trustworthy image is available.")
 
 
 async def get_best_pin_image(
