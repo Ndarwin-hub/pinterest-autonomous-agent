@@ -177,6 +177,37 @@ async def search_pexels(query:str,agent_mod:Any)->List[Dict[str,Any]]:
             if u:out.append({"url":u,"provider":"pexels","id":str(p.get("id") or ""),"source":"pexels","license":"Pexels License","original":True})
         return out
     except Exception:return []
+async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any]]:
+    """Direct Amazon image extraction fallback used only when normal image search is unavailable."""
+    url=str(product.get("url") or "").strip()
+    if not url:return []
+    try:
+        async with httpx.AsyncClient(timeout=25,follow_redirects=True) as client:
+            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36","Accept-Language":"en-US,en;q=0.9"})
+            if r.status_code>=400:return []
+            html=r.text
+        html=html.replace("\\u002F","/").replace("\\/","/")
+        found=[]
+        patterns=[
+            r'"(?:hiRes|large|main)"\s*:\s*"([^"]+)"',
+            r'"(?:large|hiRes)"\s*:\s*"(https?://m\.media-amazon\.com/images/I/[^"]+)"',
+            r'(https?://m\.media-amazon\.com/images/I/[A-Za-z0-9._%+-]+\.(?:jpg|jpeg|png|webp))'
+        ]
+        for pat in patterns:
+            for u in re.findall(pat,html,re.I):
+                u=u.replace("\\u0026","&").replace("\\u003d","=")
+                if u.startswith("//"):u="https:"+u
+                if "m.media-amazon.com/images/I/" not in u:continue
+                if u not in found:found.append(u)
+                # Upgrade common Amazon derivative filenames to their original asset.
+                upgraded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)','.',u)
+                if upgraded!=u and upgraded not in found:found.append(upgraded)
+                if len(found)>=24:break
+            if len(found)>=24:break
+        return [{"url":u,"provider":"amazon_direct","source":"Amazon product image","license":"Amazon product listing","original":True} for u in found[:24]]
+    except Exception:
+        return []
+
 def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
     name=(product.get("name") or "product").strip()
     brand=(product.get("brand") or "").strip()
@@ -191,18 +222,29 @@ def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
     """Search multiple independent query angles, merge all candidates, hard-validate, then rank globally.
 
-    The caller's Composio budget limits actual executions. Four targeted Composio image
-    searches are attempted per Pin so the five Pins can compare a broad candidate pool.
+    The caller's Composio budget limits actual executions. Existing image-search queries remain available when the provider works; a direct Amazon product-image fallback is always available before publication.
     No candidate is accepted merely because it was found: dimensions/aspect and the
     minimum score gate still apply before ranking.
     """
     raw=[]
     for u in product.get("images") or []:
         if u and u not in used_urls:raw.append({"url":u,"provider":"product_page","source":"product page","license":"product_page","original":True})
+    # Preserve the existing search order, but add a direct Amazon product-image
+    # fallback before any AI/placeholder generation. This survives administrator-disabled
+    # COMPOSIO_SEARCH_IMAGE without weakening the content gate.
+    raw.extend(await search_amazon_product_images(product))
     queries=_search_queries(product,strategy)
+    composio_empty_streak=0
     for query in queries:
-        try:raw.extend(await agent_mod.search_composio_images(query,num=10))
-        except Exception:pass
+        try:
+            found=await agent_mod.search_composio_images(query,num=10)
+            if found:
+                raw.extend(found); composio_empty_streak=0
+            else:
+                composio_empty_streak+=1
+                if composio_empty_streak>=1: break
+        except Exception:
+            break
     if not COMPOSIO_API_KEY:
         # Only use the direct/credentialed Pexels path when Composio is not the active
         # image-search route, avoiding duplicate quota use in the normal production path.
