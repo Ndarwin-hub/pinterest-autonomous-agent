@@ -90,7 +90,7 @@ async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not ok:return None
     content=await inspect_image_content(c.get("url",""))
     if not content:return None
-    x=dict(c);x.update(width=w,height=h,quality_gate=reason,content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"]);return x
+    x=dict(c);x.update(content);x.update(quality_gate=reason,content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"]);return x
 async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
     seen=set();unique=[]
     for c in raw:
