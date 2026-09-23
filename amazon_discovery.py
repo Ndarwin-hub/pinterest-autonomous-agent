@@ -1,5 +1,6 @@
 """Amazon discovery facade using Composio only for scheduled discovery."""
 from __future__ import annotations
+import asyncio
 from typing import Optional, Set
 import logging
 logger=logging.getLogger("pinterest-agent.amazon_discovery")
@@ -102,7 +103,7 @@ async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=N
     for q in prioritized:
         try:
             for page in (1,2):
-                products=await _search(q,page)
+                products=await asyncio.wait_for(_search(q,page),timeout=45)
                 for raw in products:
                     c=_candidate(raw,key)
                     if not c or c["asin"] in excluded:
