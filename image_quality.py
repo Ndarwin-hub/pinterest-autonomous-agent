@@ -1,9 +1,9 @@
 """Zero-tolerance Pinterest image sourcing and quality selection."""
 from __future__ import annotations
-import asyncio, logging, os, re
+import asyncio, io, logging, os, re
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
-from PIL import ImageFile
+from PIL import Image, ImageFile
 logger=logging.getLogger("pinterest-agent.image-quality")
 MIN_DIMENSION=800
 PREFERRED_MIN_DIMENSION=1200
@@ -64,6 +64,59 @@ def score(c:Dict[str,Any],product:Dict[str,Any],strategy:str)->int:
     elif 1.35<ratio<=1.80:s+=3
     if c.get("original"):s+=2
     return min(100,s)
+
+
+async def _visual_signature(url:str)->Optional[Tuple[Tuple[int,...],Tuple[int,...]]]:
+    """Create a lightweight visual fingerprint for human-visible near-duplicate detection."""
+    if not url or not str(url).startswith(("http://","https://")): return None
+    try:
+        async with httpx.AsyncClient(timeout=12,follow_redirects=True) as client:
+            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/visual"})
+            if r.status_code>=400 or len(r.content)>1024*1024:return None
+        im=Image.open(io.BytesIO(r.content)).convert("RGB").resize((32,32))
+        px=list(im.getdata())
+        gray=[(299*r+587*g+114*b)//1000 for r,g,b in px]
+        avg=sum(gray)/len(gray)
+        ah=tuple(1 if v>=avg else 0 for v in gray)
+        hist=[0]*64
+        for r,g,b in px:
+            hist=((r//64)*16)+((g//64)*4)+(b//64),
+            hist_index=hist[0]
+            # histogram bucket update kept explicit for portability
+            if not hasattr(_visual_signature,"_dummy"): pass
+        hist=[0]*64
+        for r,g,b in px: hist[((r//64)*16)+((g//64)*4)+(b//64)]+=1
+        total=float(len(px)); hist=tuple(round(v/total,5) for v in hist)
+        return ah,hist
+    except Exception:return None
+
+def _visual_distance(a,b)->float:
+    if not a or not b:return 1.0
+    ah1,h1=a; ah2,h2=b
+    hamming=sum(x!=y for x,y in zip(ah1,ah2))/max(1,len(ah1))
+    color=sum(abs(x-y) for x,y in zip(h1,h2))/max(1,len(h1))
+    return 0.75*hamming+0.25*min(1.0,color*4.0)
+
+async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set)->List[Dict[str,Any]]:
+    if not candidates:return []
+    used_sigs=[]
+    for u in list(used_urls)[:4]:
+        sig=await _visual_signature(u)
+        if sig:used_sigs.append(sig)
+    selected=[]; selected_sigs=[]
+    for c in candidates:
+        u=c.get("url")
+        if not u or u in used_urls:continue
+        sig=await _visual_signature(u)
+        if sig is None:
+            selected.append(c); continue
+        distances=[_visual_distance(sig,s) for s in used_sigs+selected_sigs]
+        if distances and min(distances)<0.12:continue
+        c["visual_distance"]=round(min(distances),4) if distances else 1.0
+        selected.append(c); selected_sigs.append(sig)
+        if len(selected)>=MAX_CANDIDATES_PER_PIN:break
+    return selected
+
 async def search_pexels(query:str,agent_mod:Any)->List[Dict[str,Any]]:
     if PEXELS_API_KEY:
         try:
@@ -116,8 +169,11 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         raw.extend(await search_pexels(queries[0],agent_mod))
     valid=await validate_many(raw)
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
+    valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls and c.get("score",0)>=MIN_SCORE]
     valid.sort(key=lambda x:(x.get("score",0),x.get("provider") == "product_page",x.get("original",False)),reverse=True)
-    return [c for c in valid if c.get("score",0)>=MIN_SCORE][:MAX_CANDIDATES_PER_PIN]
+    diverse=await _remove_visual_duplicates(valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
+    if diverse:return diverse[:MAX_CANDIDATES_PER_PIN]
+    return valid[:1]
 async def choose_best_image(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->Optional[Dict[str,Any]]:
     candidates=await choose_candidates(product,strategy,pin_index,used_urls,agent_mod)
     if not candidates:return None
