@@ -58,23 +58,37 @@ jobs:
           if [[ -z "$request_id" ]]; then request_id="$GITHUB_RUN_ID"; fi
 
           response=$(curl --fail --silent --show-error --no-buffer \
-            --connect-timeout 20 --max-time 2400 \
-            --retry 5 --retry-delay 10 --retry-max-time 120 --retry-all-errors \
-            -H "Authorization: Bearer $ID_TOKEN" \
-            -H 'Accept: application/json' \
-            -H "X-Pin-N-Request-ID: $request_id" \
-            -H "X-Pin-N-GitHub-Run-ID: $GITHUB_RUN_ID" \
-            -G 'https://web-production-dae68.up.railway.app/amazon/pin-count' \
-            --data-urlencode "count=$count")
-
+            --connect-timeout 20 --max-time 60 --retry 5 --retry-delay 10 --retry-max-time 120 --retry-all-errors \
+            -H "Authorization: Bearer $ID_TOKEN" -H 'Accept: application/json' \
+            -H "X-Pin-N-Request-ID: $request_id" -H "X-Pin-N-GitHub-Run-ID: $GITHUB_RUN_ID" \
+            -G 'https://web-production-dae68.up.railway.app/amazon/pin-count' --data-urlencode "count=$count" --data-urlencode "request_id=$request_id")
           printf '%s\n' "$response" | jq .
-          requested=$(printf '%s' "$response" | jq -r '.requested // 0')
-          discovered=$(printf '%s' "$response" | jq -r '.discovered // 0')
-          accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
+          returned_id=$(printf '%s' "$response" | jq -r '.request_id // empty')
+          test "$returned_id" = "$request_id"
+          echo "Pin N queued: $count products; polling durable status."
 
-          test "$requested" -eq "$count"
-          test "$discovered" -eq "$count"
-          test "$accepted" -eq "$count"
-
-          echo "Pin N accepted: $count distinct Amazon US products."
-          echo "Each accepted product enters the existing four-Pin production workflow."
+          for attempt in $(seq 1 180); do
+            sleep 10
+            status=$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors \
+              -H "Authorization: Bearer $ID_TOKEN" -G 'https://web-production-dae68.up.railway.app/amazon/pin-count/status' \
+              --data-urlencode "request_id=$request_id")
+            printf '%s\n' "$status" | jq .
+            terminal=$(printf '%s' "$status" | jq -r '.status // "unknown"')
+            requested=$(printf '%s' "$status" | jq -r '.requested // 0')
+            discovered=$(printf '%s' "$status" | jq -r '.discovered // 0')
+            accepted=$(printf '%s' "$status" | jq -r '.accepted // 0')
+            if [[ "$terminal" == "accepted" || "$terminal" == "partial" || "$terminal" == "failed" ]]; then
+              if [[ "$terminal" != "accepted" ]]; then
+                echo "Pin N terminal state: $terminal (requested=$requested discovered=$discovered accepted=$accepted)" >&2
+                exit 1
+              fi
+              test "$requested" -eq "$count"
+              test "$discovered" -eq "$count"
+              test "$accepted" -eq "$count"
+              echo "Pin N accepted: $count distinct Amazon US products."
+              echo "Each accepted product enters the existing four-Pin production workflow."
+              exit 0
+            fi
+          done
+          echo "Pin N status polling timed out." >&2
+          exit 1
