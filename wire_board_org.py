@@ -105,7 +105,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
             return fallback
         raise RuntimeError("No verified permanent Pinterest board is available for this product; automatic board creation is disabled.")
     def build_review_items(pins,product):
-        return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"image_provider":p["image"].get("provider"),"dimensions":[p["image"].get("width"),p["image"].get("height")]}} for p in pins]
+        return [{"image_ref":p["image_ref"],"metadata":{"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"title":p["seo"]["title"],"description":p["seo"]["description"],"product":product.get("name"),"brand":product.get("brand"),"image_score":p["image"].get("score"),"image_provider":p["image"].get("provider"),"image_source":p["image"].get("source") or p["image"].get("license") or "","dimensions":[p["image"].get("width"),p["image"].get("height")],"trusted_image_urls":(product.get("images") or [])[:6]}} for p in pins]
     def failed_indexes(review,pin_count):
         approved={int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit()}
         return {i for i in range(1,pin_count+1) if i not in approved}
@@ -149,7 +149,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 job_store.update(job_id,progress="Internal image review" if not recovery_rounds else f"Internal re-review after automatic recovery round {recovery_rounds}")
                 review=await review_batch(review_items,composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
                 failed=failed_indexes(review,len(pins))
-                # Partial approval is sufficient. A fifth rejected/missing Pin never blocks valid Pins.
+                # Partial approval is sufficient; only valid, individually verified Pins are published.
                 if not failed or review.get("final_reviewer")=="deterministic":
                     break
                 if recovery_rounds>=MAX_RECOVERY_ROUNDS:
@@ -188,6 +188,16 @@ def apply_agent_wiring(agent_mod:Any)->None:
                     continue
                 s=p["seo"]; im=p["image"]
                 try:
+                    from image_quality import validate_base64_image, inspect_image_content
+                    if im.get("mode") == "base64":
+                        final_check=await validate_base64_image(str(im.get("value") or ""))
+                    else:
+                        final_check=await inspect_image_content(str(im.get("value") or im.get("url") or ""))
+                    if not final_check:
+                        raise RuntimeError(f"Pin {p["pin_number"]}: final image byte validation failed; publication blocked.")
+                    im.update(final_check, content_gate="passed", final_image_validation="passed")
+                    if im.get("provider") == "pillow_card":
+                        raise RuntimeError("Pillow placeholder image is never publishable.")
                     dest_url=(product.get("url") or product.get("affiliate_url") or url)
                     r=await agent_mod.publish_and_verify(
                         board_id=board_id,
@@ -201,7 +211,14 @@ def apply_agent_wiring(agent_mod:Any)->None:
                         job_id=job_id,
                         pin_index=p["pin_number"],
                     )
-                    published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),**r})
+                    if im.get("_fingerprint"):
+                        try:
+                            from image_fingerprint import register_fingerprint
+                            from amazon_url import extract_asin_from_url
+                            register_fingerprint(im["_fingerprint"], pin_id=str(r.get("pin_id") or ""), job_id=job_id, asin=str(extract_asin_from_url(dest_url) or ""))
+                        except Exception as fp_error:
+                            logger.warning("Visual fingerprint registry update failed for pin=%s: %s", p["pin_number"], fp_error)
+                    published.append({"pin_number":p["pin_number"],"strategy":p["strategy"]["name"],"image_provider":im.get("provider"),"image_id":im.get("id"),"image_score":im.get("score"),"dimensions":[im.get("width"),im.get("height")],"candidate_count":p["candidate_count"],"title":s["title"],"keywords":s.get("keywords"),"image_validation":"passed","post_publish_image_validation":bool(r.get("verified")),"visual_fingerprint_registered":bool(im.get("_fingerprint")),**r})
                 except Exception as e:
                     logger.error("Pinterest publish/verify failed pin=%s: %s", p["pin_number"], e, exc_info=True)
                     errors.append({"pin_number":p["pin_number"],"error":str(e)})
