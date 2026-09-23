@@ -79,27 +79,33 @@ async def _openai_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
         return None
 
 async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
-    """Advisory technical validation; image selection/deduplication remains authoritative."""
+    """Independent internal image reviewer. External AI is optional and never authoritative."""
+    from image_quality import inspect_image_content, validate_base64_image
     approved=[]; scores={}; reasons=[]
     for i,item in enumerate(items,1):
-        meta=item.get("metadata") or {}; ref=item.get("image_ref") or ""
+        meta=item.get("metadata") or {}; ref=str(item.get("image_ref") or "").strip()
         dims=meta.get("dimensions") or []
         w=int(dims[0] or 0) if len(dims)>0 and dims[0] else 0
         h=int(dims[1] or 0) if len(dims)>1 and dims[1] else 0
         score=int(meta.get("image_score") or 0)
-        # Technical validity only: image_quality.py owns image selection and quality scoring.
-        # This reviewer must never reject a usable image merely because a candidate's
-        # metadata omitted dimensions; URLs/base64 are valid media references by themselves.
-        # When dimensions are known, enforce only the hard structural bounds.
-        dimensions_known = w > 0 and h > 0
-        aspect_ok = (max(w,h) / max(1,min(w,h)) <= 4.0) if dimensions_known else True
-        size_ok = (w >= 100 and h >= 100) if dimensions_known else True
-        ok=bool(ref) and size_ok and aspect_ok
+        ok=bool(ref)
+        if ok and w and h:
+            ok = min(w,h) >= 800 and max(w,h)/max(1,min(w,h)) <= 2.5
+        if ok:
+            if ref.startswith("data:image/"):
+                try:
+                    _,b64=ref.split(",",1)
+                    ok = bool(await validate_base64_image(b64))
+                except Exception:
+                    ok=False
+            elif ref.startswith(("http://","https://")):
+                ok = bool(await inspect_image_content(ref))
+            else:
+                ok=False
         scores[str(i)]=score
         if ok: approved.append(i)
-        else: reasons.append(f"Pin {i} failed deterministic image safety checks")
-    return {"approved_indexes":approved,"scores":scores,"reason":"; ".join(reasons) if reasons else "All candidates passed deterministic technical validation.","status":"DETERMINISTIC_VALIDATION_PASSED" if len(approved)==len(items) else "DETERMINISTIC_VALIDATION_PARTIAL","final_reviewer":"deterministic","tool_failure":False,"advisory":True}
-
+        else: reasons.append(f"Pin {i} failed internal image-content validation")
+    return {"approved_indexes":approved,"scores":scores,"reason":"; ".join(reasons) if reasons else "All candidates passed independent internal image-content validation.","status":"DETERMINISTIC_VALIDATION_PASSED" if len(approved)==len(items) else "DETERMINISTIC_VALIDATION_PARTIAL","final_reviewer":"deterministic","tool_failure":False,"advisory":False}
 async def _grok_one(item:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not XAI_API_KEY:return None
     ref=item.get("image_ref"); content=[{"type":"text","text":SYSTEM+"\nReview this candidate. Return {approved:boolean,score:0-100,reason:string}. Score the candidate 0-100. Do not treat the score as a publication gate."}]
@@ -155,7 +161,7 @@ async def review_batch(items:List[Dict[str,Any]], composio_run:Optional[Callable
 
 async def _gemini(items:List[Dict[str,Any]])->Optional[Dict[str,Any]]:
     if not GEMINI_API_KEY:return None
-    parts=[{"text":SYSTEM+"\nReview all five candidates. Return JSON exactly as {approved_indexes:[1,2,...],scores:{\"1\":0,\"2\":0,...},reason:string}. Use scores to identify stronger candidates; do not reject a technically usable candidate solely because of its score."}]
+    parts=[{"text":SYSTEM+"\nReview all four candidates. Return JSON exactly as {approved_indexes:[1,2,...],scores:{\"1\":0,\"2\":0,...},reason:string}. Use scores to identify stronger candidates; do not reject a technically usable candidate solely because of its score."}]
     for i,x in enumerate(items,1):
         parts.append({"text":f"CANDIDATE {i}: {json.dumps(x.get('metadata') or {},ensure_ascii=False)[:3500]}"})
         ref=x.get("image_ref") or ""
