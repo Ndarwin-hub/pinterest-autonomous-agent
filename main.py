@@ -68,7 +68,7 @@ def extract_url(text:str)->str:
  raise ValueError("No valid http(s) URL found")
 @asynccontextmanager
 async def lifespan(app:FastAPI):
- logger.info("Pinterest Autonomous Agent v3.9.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
+ logger.info("Pinterest Autonomous Agent v4.0.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
  registration_task=None
  if MCP_PATH:registration_task=asyncio.create_task(register_custom_mcp_with_retry())
  startup_pin_count=int(os.getenv("PIN_COMMAND_ON_START","0") or "0")
@@ -111,7 +111,7 @@ async def lifespan(app:FastAPI):
   try:await registration_task
   except asyncio.CancelledError:pass
  logger.info("Shutting down...")
-app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates four unique Pins with multi-provider images, publishes and verifies.",version="3.9.0",lifespan=lifespan)
+app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates four unique Pins with multi-provider images, publishes and verifies.",version="4.0.0",lifespan=lifespan)
 if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
 class SubmitResponse(BaseModel):job_id:str;status:str;message:str
@@ -151,7 +151,7 @@ async def enqueue_job(url_str:str,background_tasks:BackgroundTasks,target_board_
   if not quota.reserve_job():raise HTTPException(status_code=429,detail={"message":"Monthly safe Pinterest capacity reached; job not started.","quota":quota.snapshot()})
   job_id=str(uuid.uuid4());job=Job(job_id=job_id,url=url_str,status=JobStatus.QUEUED,progress=f"Job accepted — {PINS_PER_PRODUCT}-Pin workflow queued",target_board_id=target_board_id,target_board_name=target_board_name);job_store.save(job);background_tasks.add_task(run_job,job_id,url_str);return SubmitResponse(job_id=job_id,status=JobStatus.QUEUED.value,message=f"Job accepted. {PINS_PER_PRODUCT} Pins will be researched, imaged, published and verified. Poll /status/{{job_id}}")
 @app.get("/health")
-async def health():return {"status":"ok","service":"pinterest-autonomous-agent","version":"3.9.0","quality_patch_version":QUALITY_PATCH_VERSION,"mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
+async def health():return {"status":"ok","service":"pinterest-autonomous-agent","version":"4.0.0","quality_patch_version":QUALITY_PATCH_VERSION,"mcp_bridge":bool(MCP_PATH),"amazon":{"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"required_primary_boards":REQUIRED_PRIMARY_SLOTS,"published_registry_count":registry.count_success()},"time":datetime.now(timezone.utc).isoformat()}
 @app.get("/quota")
 async def quota_status(_:bool=Depends(verify_secret)):return quota.snapshot()
 @app.post("/submit",response_model=SubmitResponse)
@@ -298,7 +298,7 @@ async def amazon_notification_check(_:bool=Depends(verify_batch_secret)):
 
 @app.post("/batch-submit")
 async def batch_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
- """Accept a list of already-resolved Amazon US product URLs. Each accepted URL is fed into the existing single-product job pipeline unchanged in behavior."""
+ """Accept a list of already-resolved Amazon US product URLs. Each accepted URL is fed into the existing single-product four-Pin job pipeline unchanged in routing."""
  if not body.urls:raise HTTPException(status_code=400,detail="urls must be a non-empty list")
  if len(body.urls)>MAX_BATCH:raise HTTPException(status_code=400,detail=f"max {MAX_BATCH} urls per batch")
  prepared=await prepare_batch_items(body.urls)
@@ -318,7 +318,7 @@ async def batch_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,
  accepted=sum(1 for r in results if r.get("job_id"))
  skipped=sum(1 for r in results if r.get("status")=="skipped")
  rejected=sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id"))
- return {"batch_size":len(body.urls),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"pipeline":"existing_/submit_job_pipeline","note":"Each accepted URL enters the existing 5-Pin research/publish/verify workflow. Poll /status/{job_id} for completion."}
+ return {"batch_size":len(body.urls),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"pipeline":"existing_/submit_job_pipeline","note":"Each accepted URL enters the existing four-Pin research/publish/verify workflow. Poll /status/{job_id} for completion."}
 
 @app.post("/amazon/discover-submit")
 async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
@@ -361,7 +361,7 @@ async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:Bac
  accepted=sum(1 for r in results if r.get("job_id"))
  skipped=sum(1 for r in results if r.get("status")=="skipped")
  rejected=sum(1 for r in results if r.get("status") in ("rejected","failed") and not r.get("job_id"))
- return {"requested":n,"discovered":len(discovered),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"snapshot":balance_meta.get("snapshot")},"pipeline":"existing_/submit_job_pipeline","tag":"desiredplus-20","note":"Discovery used live board pin counts + COMPOSIO_SEARCH_AMAZON + tag injection. Each accepted product uses the existing 5-Pin pipeline."}
+ return {"requested":n,"discovered":len(discovered),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"snapshot":balance_meta.get("snapshot")},"pipeline":"existing_/submit_job_pipeline","tag":"desiredplus-20","note":"Discovery used live board pin counts + COMPOSIO_SEARCH_AMAZON + tag injection. Each accepted product uses the existing four-Pin pipeline."}
 
 @app.get("/amazon/pin-count")
 async def amazon_pin_count_get(count:int=1,token:str="",request:Request=None):
