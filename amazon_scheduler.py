@@ -222,7 +222,7 @@ class AmazonScheduler:
     self.activate_pinterest_circuit(json.dumps(result,separators=(",",":")))
     ledger.mark_slot(n,status="deferred",day=day,job_id=job_id,error="pinterest_rate_or_spam_block")
     return False
-   if result.get("status")=="completed" and pinterest_target_verified(result):logger.info("Amazon slot %s completed inline with all target Pins verified",n);ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
+   if pinterest_target_verified(result):logger.info("Amazon slot %s completed inline with all target Pins verified",n);ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
    if result.get("status")=="completed_partial" and pinterest_any_verified(result):
     ledger.mark_slot(n,status="partial",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url,error="partial_pin_set_recovery_pending")
     return False
@@ -236,7 +236,7 @@ class AmazonScheduler:
      self.activate_pinterest_circuit(combined_error)
      ledger.mark_slot(n,status="deferred",day=day,job_id=job_id,error="pinterest_rate_or_spam_block")
      return False
-    if final.get("status") == "completed" and pinterest_target_verified(final_result):
+    if pinterest_target_verified(final_result):
      ledger.mark_slot(n,status="success",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url);return True
     if final.get("status") == "completed_partial" and pinterest_any_verified(final_result):
      ledger.mark_slot(n,status="partial",day=day,job_id=job_id,pinterest_verified=True,affiliate_url=url,error="partial_pin_set_recovery_pending");return False
