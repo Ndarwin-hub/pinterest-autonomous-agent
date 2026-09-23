@@ -95,12 +95,22 @@ async def discover_for_board(board_name:str,*,exclude_asins:Optional[Set[str]]=N
                     return sorted(candidates,key=lambda x:(-x["score"],x["asin"]))[0]
         except Exception as e:
             logger.warning("Exact board discovery failed board=%s query=%s: %s",board_name,q,e)
-    api_candidate=await _discover_api(_BOARD_CATEGORY.get(board_name,"Electronics"),exclude_asins)
+    api_category=_BOARD_CATEGORY.get(board_name,"Electronics")
+    api_candidate=await _discover_api(api_category,exclude_asins)
     if api_candidate:
         detected=detect_product_category({"name":api_candidate.get("title",""),"title":api_candidate.get("title","")})
         if (board_name=="Everything Else" and detected=="general") or (board_name!="Everything Else" and detected==key):
             api_candidate["target_board_name"]=board_name
             return api_candidate
+    # Last-resort mapped category discovery preserves the board mapping while
+    # allowing a sparse board profile to obtain a replacement candidate.
+    try:
+        fallback=await composio_discover_category(api_category,exclude_asins=excluded)
+        if fallback:
+            fallback["target_board_name"]=board_name
+            return fallback
+    except Exception as e:
+        logger.warning("Mapped Amazon category fallback failed board=%s category=%s: %s",board_name,api_category,e)
     return None
 
 async def discover_global(*,exclude_asins:Optional[Set[str]]=None,client=None):
