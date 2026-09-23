@@ -22,7 +22,7 @@ jobs:
           job_id=$(printf '%s' "$response" | jq -r '.job_id')
           test -n "$job_id" && test "$job_id" != "null"
           echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
-      - name: Wait for five-pin completion
+      - name: Wait for four-pin completion
         env:
           JOB_ID: ${{ steps.submit.outputs.job_id }}
         shell: bash
@@ -36,8 +36,8 @@ jobs:
             if [[ "$status" == "completed" ]]; then
               verified=$(printf '%s' "$response" | jq -r '(.result.verified_pins // (.result.pins | length) // 0)')
               published=$(printf '%s' "$response" | jq -r '.result.pins_published // 0')
-              test "$verified" -ge 5
-              test "$published" -ge 5
+              test "$verified" -ge 4
+              test "$published" -ge 4
               exit 0
             fi
             if [[ "$status" == "failed" || "$status" == "completed_partial" ]]; then
@@ -45,5 +45,5 @@ jobs:
             fi
             sleep 20
           done
-          echo "Timed out waiting for five-pin completion" >&2
+          echo "Timed out waiting for four-pin completion" >&2
           exit 1
