@@ -261,8 +261,14 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         if best_4k.get("_fingerprint"): previous.append(best_4k["_fingerprint"])
         return {"mode": "url", "value": best_4k["url"], "provider": "composio_search_image", "id": best_4k.get("id"), "score": 98, "license": best_4k.get("license"), "resolution_tier": "4K+"}
 
-    # PRIORITY 3: other genuinely executable external image providers.
+    # PRIORITY 3: verified Amazon product imagery is the primary recovery when
+    # Composio image search is unavailable/administrator-disabled.
     other: List[Dict[str, Any]] = []
+    try:
+        from image_quality import search_amazon_product_images
+        other.extend(await search_amazon_product_images(product))
+    except Exception:
+        pass
     try:
         for f in await agent.search_pexels(query):
             if f.get("url"):
