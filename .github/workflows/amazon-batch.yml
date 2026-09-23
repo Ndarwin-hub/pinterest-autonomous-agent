@@ -1,4 +1,4 @@
-name: Amazon external batches
+name: Amazon external Pin A triggers
 on:
   # The 10 batch slots remain unchanged. Times below are the established
   # Nepal local times converted explicitly to UTC for GitHub Actions:
@@ -137,11 +137,11 @@ PY
       - name: Activate Pin A alongside the existing scheduled trigger
         if: steps.select.outputs.action == 'run'
         env:
-          ID_TOKEN: \${{ steps.oidc.outputs.token }}
-          BATCH: \${{ steps.select.outputs.batch }}
-          SCHEDULED_LOCAL_TIME: \${{ steps.select.outputs.scheduled_local_time }}
-          GH_RUN_ID: \${{ github.run_id }}
-          GH_SCHEDULE: \${{ github.event.schedule || 'manual' }}
+          ID_TOKEN: ${{ steps.oidc.outputs.token }}
+          BATCH: ${{ steps.select.outputs.batch }}
+          SCHEDULED_LOCAL_TIME: ${{ steps.select.outputs.scheduled_local_time }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_SCHEDULE: ${{ github.event.schedule || 'manual' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -167,75 +167,6 @@ PY
               exit 1
               ;;
           esac
-
-      - name: Wake Railway and run batch with application-level recovery
-        if: steps.select.outputs.action == 'run'
-        env:
-          ID_TOKEN: ${{ steps.oidc.outputs.token }}
-          BATCH: ${{ steps.select.outputs.batch }}
-          SCHEDULED_LOCAL_TIME: ${{ steps.select.outputs.scheduled_local_time }}
-          GH_STARTED_AT: ${{ steps.select.outputs.started_at }}
-          GH_DELAY: ${{ steps.select.outputs.delay }}
-          GH_QUEUED: ${{ steps.select.outputs.queued }}
-          GH_ACTIVE: ${{ steps.select.outputs.active }}
-          GH_LOAD_CLASS: ${{ steps.select.outputs.load_class }}
-          GH_RUN_ID: ${{ github.run_id }}
-          GH_SCHEDULE: ${{ github.event.schedule || 'manual' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # A scheduled trigger is only the transport layer. The Railway ledger is
-          # the source of truth and makes repeated attempts safe.
-          for attempt in 1 2 3; do
-            echo "Starting Amazon batch $BATCH, recovery attempt $attempt/3"
-
-            response_file=$(mktemp)
-            trap 'rm -f "$response_file"' EXIT
-
-            curl --fail --silent --show-error --no-buffer \
-              --connect-timeout 20 --max-time 2400 \
-              --retry 5 --retry-delay 10 --retry-max-time 120 \
-              --retry-all-errors \
-              -H "Authorization: Bearer $ID_TOKEN" \
-              -H 'Content-Type: application/json' \
-              -H "X-GitHub-Run-ID: $GH_RUN_ID" \
-              -H "X-GitHub-Schedule: $GH_SCHEDULE" \
-              -H "X-GitHub-Started-At: $GH_STARTED_AT" \
-              -H "X-GitHub-Scheduled-Local-Time: $SCHEDULED_LOCAL_TIME" \
-              -H "X-GitHub-Delay-Seconds: $GH_DELAY" \
-              -H "X-GitHub-Queued-Runs: $GH_QUEUED" \
-              -H "X-GitHub-Active-Runs: $GH_ACTIVE" \
-              -H "X-GitHub-Load-Class: $GH_LOAD_CLASS" \
-              -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch' \
-              --data "{\"batch\":$BATCH,\"scheduler_run_id\":\"$GH_RUN_ID\",\"scheduled_local_time\":\"$SCHEDULED_LOCAL_TIME\",\"github_delay_seconds\":$GH_DELAY,\"github_queued_runs\":$GH_QUEUED,\"github_active_runs\":$GH_ACTIVE,\"github_load_class\":\"$GH_LOAD_CLASS\"}" | tee "$response_file"
-
-            final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
-
-            case "$final_status" in
-              completed|already_completed)
-                echo "Amazon batch terminal status: $final_status"
-                exit 0
-                ;;
-              partial_failure|failed|blocked|busy)
-                echo "Amazon batch attempt $attempt returned: $final_status" >&2
-                if [[ "$attempt" -lt 3 ]]; then
-                  sleep 20
-                  continue
-                fi
-                echo "Amazon batch exhausted all in-run recovery attempts." >&2
-                exit 1
-                ;;
-              *)
-                echo "Unknown or missing Amazon batch terminal status: ${final_status:-<empty>}" >&2
-                if [[ "$attempt" -lt 3 ]]; then
-                  sleep 20
-                  continue
-                fi
-                exit 1
-                ;;
-            esac
-          done
 
       - name: Final daily STARTED / NOT STARTED check
         if: steps.select.outputs.action == 'check'
