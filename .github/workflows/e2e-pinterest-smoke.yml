@@ -2,12 +2,12 @@ name: Pinterest end-to-end smoke test
 on:
   push:
   repository_dispatch:
-    types: [pinterest_e2e_smoke, repair_recent_pinterest_images]
+    types: [pinterest_e2e_smoke]
   workflow_dispatch:
 
 jobs:
   smoke:
-    if: ${{ github.event_name != 'repository_dispatch' || github.event.action == 'pinterest_e2e_smoke' }}
+    if: ${{ github.event_name != 'repository_dispatch' || github.event.action == 'pinterest_e2e_smoke' && github.event.client_payload.mode != 'repair20' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -47,7 +47,7 @@ jobs:
           exit 1
 
   repair:
-    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'repair_recent_pinterest_images' }}
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'pinterest_e2e_smoke' && github.event.client_payload.mode == 'repair20' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
