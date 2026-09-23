@@ -1,6 +1,8 @@
-"""Canonical Pin-count configuration shared by manual and automated workflows."""
+"""Canonical Pin-count configuration shared by manual and automated workflows.
+The production workflow is fixed at four Pins per product; legacy environment
+overrides cannot re-enable the retired five-Pin path.
+"""
 from __future__ import annotations
-import os
 
-PINS_PER_PRODUCT = max(1, min(int(os.getenv("PINS_PER_PRODUCT", "4") or "4"), 10))
-MAX_PINS_PER_PRODUCT = PINS_PER_PRODUCT
+PINS_PER_PRODUCT = 4
+MAX_PINS_PER_PRODUCT = 4
