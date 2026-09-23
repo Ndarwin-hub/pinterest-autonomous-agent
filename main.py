@@ -386,11 +386,12 @@ async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:Bac
  return {"requested":n,"discovered":len(discovered),"accepted":accepted,"skipped":skipped,"rejected":rejected,"results":results,"board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"snapshot":balance_meta.get("snapshot")},"pipeline":"existing_/submit_job_pipeline","tag":"desiredplus-20","note":"Discovery used live board pin counts + COMPOSIO_SEARCH_AMAZON + tag injection. Each accepted product uses the existing four-Pin pipeline."}
 
 @app.get("/amazon/pin-count")
-async def amazon_pin_count_get(count:int=1,token:str="",request:Request=None):
- """Protected GET trigger for the Railway Pin N bridge; executes the same discovery-submit pipeline."""
- expected=os.getenv("MCP_BRIDGE_TOKEN","").strip()
- if not expected or not hmac.compare_digest(token,expected):
-  raise HTTPException(status_code=401,detail="Invalid trigger token")
+async def amazon_pin_count_get(
+    count:int=1,
+    authorization:Optional[str]=Header(None),
+    _:bool=Depends(verify_manual_oidc),
+):
+ """Authenticated GitHub-OIDC Pin N trigger; executes the existing discovery-submit pipeline."""
  if count<1 or count>MAX_BATCH:raise HTTPException(status_code=400,detail=f"count must be 1..{MAX_BATCH}")
  class _BG:
   def add_task(self,fn,*args):asyncio.create_task(fn(*args))
