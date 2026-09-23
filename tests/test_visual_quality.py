@@ -7,11 +7,14 @@ from image_fingerprint import fingerprint, similarity
 from pin_config import PINS_PER_PRODUCT
 
 
-def _jpg(size=(1200, 1800), color=(120, 80, 40)):
-    im=Image.new("RGB",size,color)
-    for x in range(0,size[0],80):
-        for y in range(0,size[1],80):
-            im.putpixel((x,y),((color[0]+x//80*3)%256,(color[1]+y//80*5)%256,(color[2]+x//80*7)%256))
+def _jpg(size=(1200, 1800)):
+    from PIL import ImageDraw
+    im=Image.new("RGB",size,(35,95,180)); draw=ImageDraw.Draw(im)
+    for i in range(18):
+        x=70+i*55; y=90+(i%6)*260
+        draw.ellipse((x,y,x+260,y+260),fill=((40+i*9)%256,(120+i*5)%256,(210-i*7)%256))
+    for i in range(10):
+        draw.rectangle((100+i*95,1450-(i%3)*70,360+i*95,1650-(i%3)*70),fill=((220-i*8)%256,(70+i*12)%256,(60+i*9)%256))
     b=io.BytesIO(); im.save(b,"JPEG",quality=92); return b.getvalue()
 
 
