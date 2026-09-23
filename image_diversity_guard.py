@@ -32,9 +32,7 @@ def install(agent_module):
             # The core selector has already attempted diversity; fail closed here.
             # pillow_card is strategy-specific and therefore cannot be the same
             # visual asset as another selected URL.
-            fallback = agent_module.pillow_card(product, strategy["key"])
-            fallback["diversity_fallback"] = "normalized_duplicate_media_url"
-            return fallback
+            raise RuntimeError("Image diversity gate blocked a repeated media URL; no placeholder fallback is permitted.")
         used_urls.add(value)
         return image
 
