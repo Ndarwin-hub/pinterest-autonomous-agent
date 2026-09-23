@@ -130,6 +130,20 @@ class DailyLedger:
             if row: c.execute("UPDATE batch_runs SET status='running',owner=?,started_at=?,completed_at=NULL,result_json=NULL,error=NULL,updated_at=? WHERE day=? AND batch_index=?",(owner,iso,iso,day,batch_index))
             else: c.execute("INSERT INTO batch_runs(day,batch_index,status,owner,started_at,updated_at) VALUES(?,?,?,?,?,?)",(day,batch_index,"running",owner,iso,iso))
             c.commit(); c.close(); return {"acquired":True,"status":"running"}
+    def reclaim_orphaned_batches(self,day=None):
+        """Reclaim any running batch when a new Railway executor is starting.
+        A new process cannot own a batch from the previous process, so its lease
+        is orphaned regardless of age."""
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn()
+            rows=c.execute("SELECT batch_index,owner FROM batch_runs WHERE day=? AND status='running'",(day,)).fetchall()
+            reclaimed=[int(r[0]) for r in rows]
+            if reclaimed:
+                c.execute("UPDATE batch_runs SET status='failed',error='orphaned_executor_reclaimed',updated_at=? WHERE day=? AND status='running'",(now,day))
+            c.commit(); c.close()
+        return reclaimed
+
     def reclaim_stale_batches(self,day=None):
         """Release batch ownership left behind by a crashed/restarted Railway executor."""
         day=day or self.today_str(); cutoff=time.time()-BATCH_LEASE_SEC; now_iso=datetime.now(timezone.utc).isoformat(); reclaimed=[]
