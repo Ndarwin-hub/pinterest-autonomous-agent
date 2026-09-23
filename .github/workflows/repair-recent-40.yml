@@ -33,12 +33,12 @@ jobs:
           set -euo pipefail
           payload='{
             "items":[
-              {"url":"https://www.amazon.com/SenCre-Nugget-Countertop-Makers-Chewable/dp/B0HF4QN93Z?tag=desiredplus-20","retry_pin_indices":[2,3,4],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"},
-              {"url":"https://www.amazon.com/HOW-SELL-AMAZON-BEGINNERS-Step/dp/B0GWPTMYZ9?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951147704","target_board_name":"Books & Learning"},
-              {"url":"https://www.amazon.com/Apple-iPhone-SE-64GB-White/dp/B088NQSLGN?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951153891","target_board_name":"Cell Phones & Accessories"},
-              {"url":"https://www.amazon.com/Fresh-Step-Advanced-Multi-Cat-18-5lb/dp/B07ZK3FP27?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951148021","target_board_name":"Pet Supplies"},
-              {"url":"https://www.amazon.com/msi-Katana-15-HX-i7-14650HX/dp/B0HGR2MWJV?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951153890","target_board_name":"PC's, Laptops & TV's"},
-              {"url":"https://www.amazon.com/Holder-Organizers-Pencil-Compartments-Organizer/dp/B0CQP9LYXC?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951148020","target_board_name":"Office & Productivity"}
+              {"url":"https://www.amazon.com/SenCre-Nugget-Countertop-Makers-Chewable/dp/B0HF4QN93Z?tag=desiredplus-20","retry_pin_indices":[2,3,4],"target_board_id":"987906936951145744"},
+              {"url":"https://www.amazon.com/HOW-SELL-AMAZON-BEGINNERS-Step/dp/B0GWPTMYZ9?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951147704"},
+              {"url":"https://www.amazon.com/Apple-iPhone-SE-64GB-White/dp/B088NQSLGN?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951153891"},
+              {"url":"https://www.amazon.com/Fresh-Step-Advanced-Multi-Cat-18-5lb/dp/B07ZK3FP27?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951148021"},
+              {"url":"https://www.amazon.com/msi-Katana-15-HX-i7-14650HX/dp/B0HGR2MWJV?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951153890"},
+              {"url":"https://www.amazon.com/Holder-Organizers-Pencil-Compartments-Organizer/dp/B0CQP9LYXC?tag=desiredplus-20","retry_pin_indices":[1,2,3,4],"target_board_id":"987906936951148020"}
             ]
           }'
           response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 900             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-retry-unfinished'             -H "X-Pin-A-Request-ID: repair-retry-${GITHUB_RUN_ID}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$payload")
