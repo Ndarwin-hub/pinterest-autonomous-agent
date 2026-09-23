@@ -245,6 +245,7 @@ async def pin_a_trigger(
     The existing Railway scheduler/ledger remains the single owner of batch execution.
     """
     authorized=False
+    cloudflare_authenticated=False
     for candidate, expected in (
         (x_pin_a_secret, API_SECRET),
         (x_pin_a_secret, CLOUDFLARE_WAKE_SECRET),
@@ -253,6 +254,8 @@ async def pin_a_trigger(
         (x_scheduler_secret, CLOUDFLARE_WAKE_SECRET),
         (x_scheduler_secret, AMAZON_BATCH_SECRET),
     ):
+        if candidate and CLOUDFLARE_WAKE_SECRET and hmac.compare_digest(candidate, CLOUDFLARE_WAKE_SECRET):
+            cloudflare_authenticated=True
         if candidate and expected and hmac.compare_digest(candidate, expected):
             authorized=True
             break
@@ -271,7 +274,9 @@ async def pin_a_trigger(
     source=(x_pin_a_source or ((body or {}).get("source") if isinstance(body,dict) else None) or "unknown").strip()[:200]
     request_id=(x_pin_a_request_id or ((body or {}).get("request_id") if isinstance(body,dict) else None) or str(uuid.uuid4())).strip()[:200]
     day=daily_ledger.today_str()
-    is_cloudflare=source.lower().startswith("cloudflare")
+    # Only an actually authenticated Cloudflare watchdog is time-window gated.
+    # Manual Run pin A (GitHub/OIDC, API secret, or other authorized caller) remains 24/7.
+    is_cloudflare=cloudflare_authenticated
     if is_cloudflare:
         allowed,local_now=cloudflare_wake_allowed()
         if not allowed:
