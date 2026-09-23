@@ -267,6 +267,18 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         # image-search route, avoiding duplicate quota use in the normal production path.
         raw.extend(await search_pexels(queries[0],agent_mod))
     valid=await validate_many(raw)
+    from image_fingerprint import known_fingerprints, similarity
+    known=known_fingerprints()
+    filtered=[]
+    for c in valid:
+        fp=c.get("_fingerprint")
+        if not fp: continue
+        if any(similarity(fp,old_fp)>=0.93 for old_fp in known):
+            continue
+        if any(similarity(fp,other.get("_fingerprint"))>=0.93 for other in filtered if other.get("_fingerprint")):
+            continue
+        filtered.append(c)
+    valid=filtered
     for c in valid:c["score"]=score(c,product,strategy.get("key",""))
     valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls]
     def _resolution_tier(x):
