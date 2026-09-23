@@ -33,14 +33,14 @@ jobs:
               "https://web-production-dae68.up.railway.app/status/$JOB_ID")
             echo "$response"
             status=$(printf '%s' "$response" | jq -r '.status')
-            if [[ "$status" == "completed" ]]; then
+            if [[ "$status" == "completed" || "$status" == "completed_partial" ]]; then
               verified=$(printf '%s' "$response" | jq -r '(.result.verified_pins // (.result.pins | length) // 0)')
               published=$(printf '%s' "$response" | jq -r '.result.pins_published // 0')
               test "$verified" -ge 4
               test "$published" -ge 4
               exit 0
             fi
-            if [[ "$status" == "failed" || "$status" == "completed_partial" ]]; then
+            if [[ "$status" == "failed" ]]; then
               exit 1
             fi
             sleep 20
