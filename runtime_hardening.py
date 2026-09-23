@@ -196,6 +196,37 @@ def install(agent_mod: Any) -> str:
                 f"Pin {pin_index} ({pin_id}): section verification mismatch; intended {section_id}, actual {actual_section}"
             )
 
+        # Third-stage validation: Pinterest must have ingested a real, non-blank image.
+        # API acceptance alone is not considered visual success.
+        try:
+            from image_quality import inspect_image_content
+            media = verified.get("media") if isinstance(verified, dict) else None
+            media_urls = []
+            def _collect_media_urls(value):
+                if isinstance(value, dict):
+                    for k,v in value.items():
+                        if k in {"url","original","original_url","image_url"} and isinstance(v,str) and v.startswith("http"):
+                            media_urls.append(v)
+                        else:
+                            _collect_media_urls(v)
+                elif isinstance(value, list):
+                    for v in value: _collect_media_urls(v)
+            _collect_media_urls(media)
+            media_urls = [u for u in media_urls if "pinimg.com" in u][:4]
+            if not media_urls:
+                raise RuntimeError(f"Pin {pin_index} ({pin_id}): Pinterest returned no inspectable ingested image URL.")
+            checked = False
+            for media_url in media_urls:
+                if await inspect_image_content(media_url):
+                    checked = True
+                    break
+            if not checked:
+                raise RuntimeError(f"Pin {pin_index} ({pin_id}): post-Pinterest image content validation failed.")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Pin {pin_index} ({pin_id}): post-Pinterest image validation error: {exc}") from exc
+
         return {
             "pin_id": pin_id,
             "pin_url": f"https://www.pinterest.com/pin/{pin_id}/",
