@@ -5,30 +5,50 @@ on:
     types: [pinterest_e2e_smoke]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
-  smoke:
-    if: ${{ github.event_name != 'push' || (!contains(github.event.head_commit.message, 'Execute 20-pin image replacement') && !contains(github.event.head_commit.message, 'Restore repair workflow')) && (github.event_name != 'repository_dispatch' || github.event.client_payload.mode != 'repair20') }}
+  smoke-or-repair:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Submit one verified Amazon US product to Railway
-        id: submit
+      - name: Route smoke or 20-Pin image repair
         shell: bash
         run: |
           set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "repository_dispatch" ] && [ "${{ github.event.client_payload.mode }}" = "repair20" ]; then
+            response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors               -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               -H 'Accept: application/json; api-version=2.0'               "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+            token=$(printf '%s' "$response" | jq -r '.value')
+            test -n "$token" && test "$token" != "null"
+
+            payload='{
+              "items":[
+                {"url":"https://www.amazon.com/SenCre-Nugget-Countertop-Makers-Chewable/dp/B0HF4QN93Z?tag=desiredplus-20","pin_ids":["987906868284388979","987906868284388978"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"},
+                {"url":"https://www.amazon.com/HOW-SELL-AMAZON-BEGINNERS-Step/dp/B0GWPTMYZ9?tag=desiredplus-20","pin_ids":["987906868284388973","987906868284388972","987906868284388971","987906868284388969"],"target_board_id":"987906936951147704","target_board_name":"Books & Learning"},
+                {"url":"https://www.amazon.com/Apple-iPhone-SE-64GB-White/dp/B088NQSLGN?tag=desiredplus-20","pin_ids":["987906868284388410","987906868284388408"],"target_board_id":"987906936951153891","target_board_name":"Cell Phones & Accessories"},
+                {"url":"https://www.amazon.com/Fresh-Step-Advanced-Multi-Cat-18-5lb/dp/B07ZK3FP27?tag=desiredplus-20","pin_ids":["987906868284388404","987906868284388403","987906868284388402","987906868284388401"],"target_board_id":"987906936951148021","target_board_name":"Pet Supplies"},
+                {"url":"https://www.amazon.com/msi-Katana-15-HX-i7-14650HX/dp/B0HGR2MWJV?tag=desiredplus-20","pin_ids":["987906868284388397","987906868284388395","987906868284388394","987906868284388393"],"target_board_id":"987906936951153890","target_board_name":"Computers & Accessories"},
+                {"url":"https://www.amazon.com/Holder-Organizers-Pencil-Compartments-Organizer/dp/B0CQP9LYXC?tag=desiredplus-20","pin_ids":["987906868284388379","987906868284388377","987906868284388375","987906868284388374"],"target_board_id":"987906936951148020","target_board_name":"Office & Productivity"}
+              ]
+            }'
+            response=$(curl --fail --silent --show-error --no-buffer               --connect-timeout 20 --max-time 900               --retry 3 --retry-delay 5 --retry-all-errors               -H "Authorization: Bearer $token"               -H 'Content-Type: application/json'               -H 'X-Pin-A-Source: repair-20-router'               -H "X-Pin-A-Request-ID: repair-20-${GITHUB_RUN_ID}"               -X POST 'https://web-production-dae68.up.railway.app/repair-pins'               --data "$payload")
+            printf '%s
+' "$response"
+            accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
+            test "$accepted" -eq 1
+            exit 0
+          fi
+
           response=$(curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/submit'             --data '{"url":"https://www.amazon.com/dp/B0FDQK69GQ?tag=desiredplus-20"}')
           echo "$response"
           job_id=$(printf '%s' "$response" | jq -r '.job_id')
           test -n "$job_id" && test "$job_id" != "null"
-          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
-      - name: Wait for four-pin completion
-        env:
-          JOB_ID: ${{ steps.submit.outputs.job_id }}
-        shell: bash
-        run: |
-          set -euo pipefail
+
           for i in $(seq 1 36); do
-            response=$(curl --fail --silent --show-error               "https://web-production-dae68.up.railway.app/status/$JOB_ID")
+            response=$(curl --fail --silent --show-error               "https://web-production-dae68.up.railway.app/status/$job_id")
             echo "$response"
             status=$(printf '%s' "$response" | jq -r '.status')
             if [[ "$status" == "completed" || "$status" == "completed_partial" ]]; then
@@ -45,40 +65,3 @@ jobs:
           done
           echo "Timed out waiting for four-pin completion" >&2
           exit 1
-
-  repair:
-    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, 'Execute 20-pin image replacement') || github.event_name == 'repository_dispatch' && github.event.client_payload.mode == 'repair20' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Request GitHub OIDC token
-        shell: bash
-        run: |
-          set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
-          token=$(printf '%s' "$response" | jq -r '.value')
-          test -n "$token" && test "$token" != "null"
-          echo "ID_TOKEN=$token" >> "$GITHUB_ENV"
-
-      - name: Replace exact 20 target Pins
-        shell: bash
-        run: |
-          set -euo pipefail
-          payload='{
-            "items":[
-              {"url":"https://www.amazon.com/SenCre-Nugget-Countertop-Makers-Chewable/dp/B0HF4QN93Z?tag=desiredplus-20","pin_ids":["987906868284388979","987906868284388978"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"},
-              {"url":"https://www.amazon.com/HOW-SELL-AMAZON-BEGINNERS-Step/dp/B0GWPTMYZ9?tag=desiredplus-20","pin_ids":["987906868284388973","987906868284388972","987906868284388971","987906868284388969"],"target_board_id":"987906936951147704","target_board_name":"Books & Learning"},
-              {"url":"https://www.amazon.com/Apple-iPhone-SE-64GB-White/dp/B088NQSLGN?tag=desiredplus-20","pin_ids":["987906868284388410","987906868284388408"],"target_board_id":"987906936951153891","target_board_name":"Cell Phones & Accessories"},
-              {"url":"https://www.amazon.com/Fresh-Step-Advanced-Multi-Cat-18-5lb/dp/B07ZK3FP27?tag=desiredplus-20","pin_ids":["987906868284388404","987906868284388403","987906868284388402","987906868284388401"],"target_board_id":"987906936951148021","target_board_name":"Pet Supplies"},
-              {"url":"https://www.amazon.com/msi-Katana-15-HX-i7-14650HX/dp/B0HGR2MWJV?tag=desiredplus-20","pin_ids":["987906868284388397","987906868284388395","987906868284388394","987906868284388393"],"target_board_id":"987906936951153890","target_board_name":"Computers & Accessories"},
-              {"url":"https://www.amazon.com/Holder-Organizers-Pencil-Compartments-Organizer/dp/B0CQP9LYXC?tag=desiredplus-20","pin_ids":["987906868284388379","987906868284388377","987906868284388375","987906868284388374"],"target_board_id":"987906936951148020","target_board_name":"Office & Productivity"}
-            ]
-          }'
-          response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 900             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-recent-20'             -H "X-Pin-A-Request-ID: repair-20-${GITHUB_RUN_ID}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$payload")
-          printf '%s
-' "$response"
-          accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
-          test "$accepted" -eq 1
