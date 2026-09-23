@@ -95,21 +95,45 @@ class DailyLedger:
         return [dict(zip(keys,r)) for r in rows]
 
     def next_unfinished_batch(self,day=None,max_batch=SLOT_COUNT//BATCH_SIZE):
-        """Return the next batch with actionable normal work.
+        """Return the next normal-pass batch without reopening earlier batches.
 
-        Deferred/exhausted slots are terminal for the normal pass and are handled
-        by the final recovery pass after Batch 10. This prevents one Pinterest-side
-        block from holding later batches hostage.
+        Normal daily progression is durable: once a batch has been attempted and
+        reached a terminal batch_runs status (completed/partial_failure/failed),
+        its unfinished slots are deferred to the single final recovery phase.
+        A batch reclaimed from an orphaned executor is the one exception: it is
+        returned so a restarted executor resumes that interrupted batch.
+
+        This deliberately does not inspect pending/failed_open slot states in
+        earlier terminal batches, because doing so would make Batch 1 block
+        Batch 2 after a partial Batch 1 attempt.
         """
         day=day or self.today_str()
         with _lock:
             c=self._conn()
+            rows=c.execute(
+                "SELECT batch_index,status,error FROM batch_runs "
+                "WHERE day=? AND batch_index BETWEEN 1 AND ? ORDER BY batch_index",
+                (day,int(max_batch))
+            ).fetchall()
+            by_batch={int(r[0]):(str(r[1] or ""),str(r[2] or "")) for r in rows}
+
+            # A scheduler restart can reclaim a genuinely running batch as
+            # orphaned. Resume that exact batch rather than skipping forward.
             for batch in range(1,int(max_batch)+1):
-                first=(batch-1)*BATCH_SIZE+1; last=first+BATCH_SIZE-1
-                statuses=[r[0] for r in c.execute("SELECT status FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? ORDER BY slot",(day,first,last)).fetchall()]
-                if len(statuses)<BATCH_SIZE or any(s in ("pending","failed_open","processing") for s in statuses):
-                    c.close(); return batch
-            c.close(); return None
+                status,error=by_batch.get(batch,("", ""))
+                if status=="failed" and error=="orphaned_executor_reclaimed":
+                    c.close()
+                    return batch
+
+            # The first batch with no durable batch-run record is the next
+            # untouched batch. Earlier terminal batches are recovery-only.
+            for batch in range(1,int(max_batch)+1):
+                if batch not in by_batch:
+                    c.close()
+                    return batch
+
+            c.close()
+            return None
 
     def try_begin_batch(self,day,batch_index,owner):
         now=time.time(); iso=datetime.now(timezone.utc).isoformat()
