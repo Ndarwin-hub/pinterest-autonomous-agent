@@ -99,3 +99,5 @@ Once the above are satisfied and `COMPOSIO_API_KEY` is set, the full flow works 
 
 
 <!-- e2e-smoke-trigger -->
+
+<!-- Pin A smoke trigger checkpoint -->
