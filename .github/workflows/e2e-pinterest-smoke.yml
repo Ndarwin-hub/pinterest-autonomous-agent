@@ -7,7 +7,7 @@ on:
 
 jobs:
   smoke:
-    if: ${{ github.event_name != 'repository_dispatch' || github.event.action == 'pinterest_e2e_smoke' && github.event.client_payload.mode != 'repair20' }}
+    if: ${{ github.event_name != 'push' || (!contains(github.event.head_commit.message, 'Execute 20-pin image replacement') && !contains(github.event.head_commit.message, 'Restore repair workflow')) && (github.event_name != 'repository_dispatch' || github.event.client_payload.mode != 'repair20') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -47,7 +47,7 @@ jobs:
           exit 1
 
   repair:
-    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'pinterest_e2e_smoke' && github.event.client_payload.mode == 'repair20' }}
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, 'Execute 20-pin image replacement') || github.event_name == 'repository_dispatch' && github.event.client_payload.mode == 'repair20' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
