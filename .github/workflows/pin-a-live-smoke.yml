@@ -35,3 +35,5 @@ jobs:
             session_started|already_running|already_completed|ignored) exit 0 ;;
             *) exit 1 ;;
           esac
+
+# trigger smoke execution after workflow registration
