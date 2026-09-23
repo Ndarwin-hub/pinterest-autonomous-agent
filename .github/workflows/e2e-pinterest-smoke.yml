@@ -1,44 +1,42 @@
 name: Pinterest end-to-end smoke test
 on:
   push:
-    branches:
-      - main
   repository_dispatch:
     types: [pinterest_e2e_smoke]
   workflow_dispatch:
 jobs:
-  repair20:
-    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, 'RUN-20-PIN-IMAGE-REPAIR-3') }}
+  smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
-      - name: Get OIDC token
-        id: oidc
+      - name: Submit one verified Amazon US product to Railway
+        id: submit
         shell: bash
         run: |
           set -euo pipefail
-          r=$(curl --fail --silent --show-error --retry 5 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H "Accept: application/json; api-version=2.0"             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
-          t=$(printf '%s' "$r" | jq -r '.value')
-          test -n "$t" && test "$t" != "null"
-          echo "token=$t" >> "$GITHUB_OUTPUT"
-      - name: Replace all 20 target Pins
+          response=$(curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/submit'             --data '{"url":"https://www.amazon.com/dp/B0FDQK69GQ?tag=desiredplus-20"}')
+          echo "$response"
+          job_id=$(printf '%s' "$response" | jq -r '.job_id')
+          test -n "$job_id" && test "$job_id" != "null"
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+      - name: Wait for four-pin completion
         env:
-          TOKEN: ${{ steps.oidc.outputs.token }}
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
         shell: bash
         run: |
           set -euo pipefail
-          payload='{
-            "items":[
-              {"url":"https://www.amazon.com/SenCre-Nugget-Countertop-Makers-Chewable/dp/B0HF4QN93Z?tag=desiredplus-20","pin_ids":["987906868284388979","987906868284388978"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"},
-              {"url":"https://www.amazon.com/HOW-SELL-AMAZON-BEGINNERS-Step/dp/B0GWPTMYZ9?tag=desiredplus-20","pin_ids":["987906868284388973","987906868284388972","987906868284388971","987906868284388969"],"target_board_id":"987906936951147704","target_board_name":"Books & Learning"},
-              {"url":"https://www.amazon.com/Apple-iPhone-SE-64GB-White/dp/B088NQSLGN?tag=desiredplus-20","pin_ids":["987906868284388410","987906868284388408"],"target_board_id":"987906936951153891","target_board_name":"Cell Phones & Accessories"},
-              {"url":"https://www.amazon.com/Fresh-Step-Advanced-Multi-Cat-18-5lb/dp/B07ZK3FP27?tag=desiredplus-20","pin_ids":["987906868284388404","987906868284388403","987906868284388402","987906868284388401"],"target_board_id":"987906936951148021","target_board_name":"Pet Supplies"},
-              {"url":"https://www.amazon.com/msi-Katana-15-HX-i7-14650HX/dp/B0HGR2MWJV?tag=desiredplus-20","pin_ids":["987906868284388397","987906868284388395","987906868284388394","987906868284388393"],"target_board_id":"987906936951153890","target_board_name":"Computers & Accessories"},
-              {"url":"https://www.amazon.com/Holder-Organizers-Pencil-Compartments-Organizer/dp/B0CQP9LYXC?tag=desiredplus-20","pin_ids":["987906868284388379","987906868284388377","987906868284388375","987906868284388374"],"target_board_id":"987906936951148020","target_board_name":"Office & Productivity"}
-            ]
-          }'
-          response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 1500             --retry 5 --retry-delay 10 --retry-all-errors             -H "Authorization: Bearer $TOKEN"             -H "Content-Type: application/json"             -H "X-Pin-A-Source: repair-20-push3"             -H "X-Pin-A-Request-ID: repair-20-${GITHUB_RUN_ID}"             -X POST "https://web-production-dae68.up.railway.app/repair-pins"             --data "$payload")
-          printf '%s
-' "$response"
-          accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
-          test "$accepted" -eq 1
+          for i in $(seq 1 36); do
+            response=$(curl --fail --silent --show-error "https://web-production-dae68.up.railway.app/status/$JOB_ID")
+            echo "$response"
+            status=$(printf '%s' "$response" | jq -r '.status')
+            if [[ "$status" == "completed" || "$status" == "completed_partial" ]]; then
+              verified=$(printf '%s' "$response" | jq -r '(.result.verified_pins // (.result.pins | length) // 0)')
+              published=$(printf '%s' "$response" | jq -r '.result.pins_published // 0')
+              test "$verified" -ge 4
+              test "$published" -ge 4
+              exit 0
+            fi
+            if [[ "$status" == "failed" ]]; then exit 1; fi
+            sleep 20
+          done
+          exit 1
