@@ -1,26 +1,24 @@
-name: Repair Pinterest Pin Image Set
+name: Repair One Replacement Pin Set
 
 on:
   workflow_dispatch:
     inputs:
-      items_json:
-        description: 'JSON object with items to replace; each item has url, pin_ids, target_board_id, target_board_name'
+      index:
+        description: 'Replacement product index 0-9'
         required: true
         type: string
-      request_label:
-        description: 'Short repair label for traceability'
+      retry_indices:
+        description: 'Optional comma-separated failed Pin indexes, e.g. 2,3,4'
         required: false
-        default: 'manual-image-replacement'
+        default: ''
         type: string
-  repository_dispatch:
-    types: [repair_pinterest_images]
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: repair-pinterest-images
+  group: repair-one-pin-${{ inputs.index }}
   cancel-in-progress: false
 
 jobs:
@@ -28,34 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Resolve repair payload
-        shell: bash
-        env:
-          DISPATCH_ITEMS: ${{ github.event.client_payload.items_json }}
-          DISPATCH_LABEL: ${{ github.event.client_payload.request_label }}
-          MANUAL_ITEMS: ${{ inputs.items_json }}
-          MANUAL_LABEL: ${{ inputs.request_label }}
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            ITEMS_JSON="$DISPATCH_ITEMS"
-            REQUEST_LABEL="$DISPATCH_LABEL"
-          else
-            ITEMS_JSON="$MANUAL_ITEMS"
-            REQUEST_LABEL="$MANUAL_LABEL"
-          fi
-          test -n "$ITEMS_JSON"
-          test -n "$REQUEST_LABEL"
-          printf '%s' "$ITEMS_JSON" | jq -e '
-            (.items | type == "array") and
-            (.items | length >= 1 and length <= 5) and
-            all(.[]; (.url | type == "string") and (.pin_ids | type == "array" and length >= 1) and
-              (.target_board_id | type == "string") and (.target_board_name | type == "string"))
-          ' >/dev/null
-          printf '%s' "$ITEMS_JSON" > /tmp/items.json
-          printf '%s' "$REQUEST_LABEL" > /tmp/request_label
-          echo "Repair payload validated."
-
       - name: Request GitHub OIDC token
         shell: bash
         run: |
@@ -65,14 +35,32 @@ jobs:
           test -n "$token" && test "$token" != "null"
           echo "ID_TOKEN=$token" >> "$GITHUB_ENV"
 
-      - name: Delete old Pins and enqueue exact replacements
+      - name: Delete bad Pins and enqueue exact replacements
         shell: bash
         run: |
           set -euo pipefail
-          ITEMS_JSON=$(cat /tmp/items.json)
-          REQUEST_LABEL=$(cat /tmp/request_label)
-          response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 900             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-one-batch'             -H "X-Pin-A-Request-ID: repair-${GITHUB_RUN_ID}-${REQUEST_LABEL}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$ITEMS_JSON")
-          printf '%s
-' "$response"
+          payload='{
+            "items":[
+              {"url":"https://www.amazon.com/Personal-Travel-Backpack-Airlines-18x14x8/dp/B0H5V4D29V?tag=desiredplus-20","pin_ids":["987906868284388256","987906868284388255","987906868284388254","987906868284388253"],"target_board_id":"987906936951147683","target_board_name":"Fashion & Lifestyle"},
+              {"url":"https://www.amazon.com/Amazon-vibrant-helpful-routines-Charcoal/dp/B09B8V1LZ3?tag=desiredplus-20","pin_ids":["987906868284388268","987906868284388267","987906868284388265","987906868284388263"],"target_board_id":"987906936951145057","target_board_name":"Electronics & Gadgets"},
+              {"url":"https://www.amazon.com/Coolake-Self-Cleaning-Stainless-Drainage-Restaurant/dp/B0HGLHBBLS?tag=desiredplus-20","pin_ids":["987906868284388278","987906868284388277","987906868284388275","987906868284388272"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"},
+              {"url":"https://www.amazon.com/OXILAM-Starter-Battery-Portable-UltraSafe/dp/B0D4JDNSCF?tag=desiredplus-20","pin_ids":["987906868284388284","987906868284388282","987906868284388281","987906868284388280"],"target_board_id":"987906936951148022","target_board_name":"Automotive & Tools"},
+              {"url":"https://www.amazon.com/Huggies-Simply-Unscented-Flip-Top-Packaging/dp/B078XYF78X?tag=desiredplus-20","pin_ids":["987906868284388290","987906868284388289","987906868284388287","987906868284388286"],"target_board_id":"987906936951153816","target_board_name":"Baby & Kids"},
+              {"url":"https://www.amazon.com/Mighty-Patch-Original-Surface-Bundle/dp/B08FJG17TY?tag=desiredplus-20","pin_ids":["987906868284388301","987906868284388300","987906868284388299","987906868284388298"],"target_board_id":"987906936951153833","target_board_name":"Beauty & Personal Care"},
+              {"url":"https://www.amazon.com/Only-One-Left-Novel/dp/059318324X?tag=desiredplus-20","pin_ids":["987906868284388310","987906868284388309","987906868284388307","987906868284388306"],"target_board_id":"987906936951145056","target_board_name":"Books & Learning"},
+              {"url":"https://www.amazon.com/JBL-Tune-Flex-Wireless-Cancelling/dp/B0C1QNRGHC?tag=desiredplus-20","pin_ids":["987906868284388318","987906868284388317","987906868284388316","987906868284388315"],"target_board_id":"987906936951145057","target_board_name":"Electronics & Gadgets"},
+              {"url":"https://www.amazon.com/RJYWGS-Sneakers-Running-Lightweight-Athletic/dp/B0F2G1V4ZM?tag=desiredplus-20","pin_ids":["987906868284388324","987906868284388322","987906868284388321","987906868284388320"],"target_board_id":"987906936951147683","target_board_name":"Fashion & Lifestyle"},
+              {"url":"https://www.amazon.com/Straw-Tumbler-ProTour-Quencher-Stanley/dp/B0F5WKJY6K?tag=desiredplus-20","pin_ids":["987906868284388371","987906868284388368","987906868284388367","987906868284388366"],"target_board_id":"987906936951145744","target_board_name":"Home, Kitchen & Dining"}
+            ]
+          }'
+          INDEX='${{ inputs.index }}'
+          case "$INDEX" in 0|1|2|3|4|5|6|7|8|9) ;; *) echo 'index must be 0-9'; exit 2 ;; esac
+          payload=$(printf '%s' "$payload" | jq --argjson i "$INDEX" '{items:[.items[$i]]}')
+          RETRY='${{ inputs.retry_indices }}'
+          if [ -n "$RETRY" ]; then
+            payload=$(printf '%s' "$payload" | jq --arg r "$RETRY" '.items[0].pin_ids=[] | .items[0].retry_pin_indices=($r|split(",")|map(tonumber))')
+          fi
+          response=$(curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 3 --retry-delay 5 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: repair-one'             -H "X-Pin-A-Request-ID: repair-40-${GITHUB_RUN_ID}"             -X POST 'https://web-production-dae68.up.railway.app/repair-pins'             --data "$payload")
+          printf '%s\n' "$response"
           accepted=$(printf '%s' "$response" | jq -r '.accepted // 0')
           test "$accepted" -eq 1
