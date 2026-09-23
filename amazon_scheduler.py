@@ -27,10 +27,25 @@ class AmazonScheduler:
  async def start_daily_session(self,enqueue,list_boards,wait_job=None,trigger_batch=None):
   if SCHEDULER_MODE!="external": return {"status":"ignored","reason":"not_external_mode"}
   day=ledger.today_str()
-  if self._daily_task and not self._daily_task.done() and self._daily_day==day:
-   return {"status":"already_running","day":day,"next_batch":ledger.next_unfinished_batch(day)}
+  if self._daily_task and not self._daily_task.done():
+   if self._daily_day==day:
+    return {"status":"already_running","day":day,"next_batch":ledger.next_unfinished_batch(day)}
+   # Midnight/day rollover: never let yesterday's executor continue into today's allocation.
+   old_day=self._daily_day
+   self._daily_stop.set(); self._daily_task.cancel()
+   try: await self._daily_task
+   except asyncio.CancelledError: pass
+   self._daily_task=None
+   logger.info("Closed prior daily session day=%s before starting fresh day=%s",old_day,day)
   if ledger.is_day_complete(day):
    return {"status":"already_completed","day":day}
+  # Materialize today's 50 fresh slot records now. Existing rows from other days are never reused.
+  try:
+   live=await list_boards()
+   specs,_=build_slot_specs(live)
+   if specs: ledger.ensure_day(day,slots_spec=specs)
+  except Exception as e:
+   logger.warning("Fresh-day slot initialization deferred to batch execution: %s",e)
   self._daily_day=day;self._daily_stop.clear()
   self.status["daily_session"]={"running":True,"day":day,"started_at":datetime.now(timezone.utc).isoformat(),"completed_at":None,"next_batch":ledger.next_unfinished_batch(day)}
   await notify_daily_started(day,trigger_batch or 0,None)
@@ -56,7 +71,7 @@ class AmazonScheduler:
      result=await self.run_batch(batch,enqueue,list_boards,wait_job)
      status=str(result.get("status") or "")
      if status in ("blocked","failed","partial_failure"):
-      logger.warning("Daily session batch %s returned %s; continuing with ledger-controlled progression.",batch,status)
+      logger.warning("Daily session batch %s returned %s; continuing with today's fresh ledger allocation only.",batch,status)
     else:
      slot=ledger.next_recovery_slot(day)
      if not slot:
