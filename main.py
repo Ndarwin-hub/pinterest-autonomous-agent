@@ -323,13 +323,11 @@ async def amazon_run_batch(body:BatchRequest,x_scheduler_secret:Optional[str]=He
 async def amazon_notification_check(_:bool=Depends(verify_batch_secret)):
     """Final reconciliation check: sends exactly one daily STARTED, NOT STARTED, or FAILED status notification."""
     day=daily_ledger.today_str()
-    from amazon_alerts import notify_daily_started,notify_daily_not_started,notify_daily_failed
+    from amazon_alerts import notify_daily_started,notify_daily_not_started,notify_daily_final_status
     state=daily_ledger.daily_status_state(day)
     if state.get("started"):
-        if daily_ledger.is_day_complete(day):
-            return {"status":"complete","day":day,"notification":"none"}
-        await notify_daily_failed(day)
-        return {"status":"failed","day":day,"notification":"failed"}
+        await notify_daily_final_status(day)
+        return {"status":"final_status","day":day,"notification":"final_status"}
     await notify_daily_not_started(day)
     return {"status":"not_started","day":day,"notification":"not_started"}
 
