@@ -330,7 +330,29 @@ async def get_best_pin_image(product: Dict[str, Any], strategy: Dict[str, Any], 
         tier = _native_tier(native_best)
         return {"mode": "url", "value": native_best["url"], "provider": "product_page", "score": 80, "license": "product_page", "resolution_tier": "native" if tier < 3 else ("8K+" if tier == 4 else "4K+")}
 
-    # Fail closed: a Pillow placeholder is not a product image.
+    # Last-resort shared selector fallback: reuse the canonical image-quality
+    # selector only after all higher-priority 8K/4K/external/AI/native paths
+    # above have been exhausted. This keeps product-page imagery last-resort
+    # while preventing a transient provider failure from unnecessarily failing
+    # an otherwise valid product job.
+    try:
+        from image_quality import choose_best_image
+        fallback = await choose_best_image(product, strategy, pin_index, used_urls, agent)
+        if fallback and fallback.get("url"):
+            used_urls.add(fallback["url"])
+            return {
+                "mode": "url",
+                "value": fallback["url"],
+                "provider": fallback.get("provider") or "image_quality_fallback",
+                "id": fallback.get("id"),
+                "score": fallback.get("score", 85),
+                "license": fallback.get("license"),
+                "resolution_tier": fallback.get("resolution_tier") or "validated_fallback",
+            }
+    except Exception as exc:
+        logger.warning("Shared image-quality fallback failed for Pin %s: %s", pin_index, exc)
+
+    # Fail closed: no placeholder or invented image is ever published.
     raise RuntimeError(f"No trustworthy image source survived for Pin {pin_index}.")
 
 
