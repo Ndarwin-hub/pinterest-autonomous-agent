@@ -4,7 +4,7 @@
 
 `Run pin a` and `Run pin A` are the same canonical command. Every authorized AI agent or other source connected through Composio must route this command to the universal Pin A trigger (`PINTEREST_RUN_PIN_A`, with `PINTEREST_PIN_A` retained as a legacy alias). No caller may create a competing scheduler/batch path for this command.
 
-The universal trigger is the only command-level wake path: it calls Railway `POST /pin-a`, where the Railway scheduler and daily ledger remain the execution authority. This includes ChatGPT, Claude, Grok, Gemini, other AI agents, Composio-connected tools, GitHub, Railway, Cloudflare, and future authorized callers.
+The universal command-level Pin A trigger remains Railway `POST /pin-a`, where the Railway scheduler and daily ledger remain the execution authority. Scheduled execution may also directly activate the same scheduler through `POST /amazon/run-batch`; this is not a second scheduler or execution owner. This includes ChatGPT, Claude, Grok, Gemini, other AI agents, Composio-connected tools, GitHub, Railway, Cloudflare, and future authorized callers.
 
 Pin A is a platform-independent trigger/wake layer. Existing scheduled mechanisms remain in place and may activate Pin A at their normal scheduled times. Pin A can also be invoked independently on demand.
 
@@ -41,11 +41,11 @@ Informational headers:
 
 Existing scheduled mechanisms are not replaced. A scheduled trigger continues performing its existing action and also activates Pin A.
 
-Current GitHub scheduled Amazon triggers now call Pin A and then continue into the existing /amazon/run-batch path.
+Current GitHub scheduled Amazon triggers exercise Pin A as a non-blocking compatibility wake, then directly activate the existing /amazon/run-batch scheduler path. A temporary Pin A/gateway failure cannot abort the mandatory scheduler activation.
 
-Current Railway Cron now calls Pin A and then continues into the existing /amazon/run-batch path.
+Current Railway Cron likewise attempts Pin A first for compatibility, but Pin A failure is non-fatal; it always continues with the mandatory /amazon/run-batch activation.
 
-Both calls are intentionally idempotent because Railway's scheduler/ledger remains the execution authority.
+Both wake and scheduler requests are intentionally idempotent because Railway's scheduler/ledger remains the execution authority. Repeated requests are acceptable and do not create competing batch ownership.
 
 ## Independent manual behavior
 
