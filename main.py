@@ -41,7 +41,7 @@ publication_guard.install(agent_module)
 image_diversity_guard.install(agent_module)
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO"),format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 PIN_N_REQUEST_DIR=os.getenv("PIN_N_REQUEST_DIR",os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"),"pin_n_requests"))
-logger=logging.getLogger("pinterest-agent");job_store=JobStore();_enqueue_lock=asyncio.Lock();API_SECRET=os.getenv("API_SECRET","").strip();AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip();CLOUDFLARE_WAKE_SECRET=os.getenv("CLOUDFLARE_WAKE_SECRET","").strip();GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent";GITHUB_ISSUER="https://token.actions.githubusercontent.com";CLOUDFLARE_TZ="Asia/Kathmandu";CLOUDFLARE_WINDOW_START_MIN=6*60;CLOUDFLARE_WINDOW_END_MIN=14*60;
+logger=logging.getLogger("pinterest-agent");_pin_n_tasks:Dict[str,asyncio.Task]={};job_store=JobStore();_enqueue_lock=asyncio.Lock();API_SECRET=os.getenv("API_SECRET","").strip();AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip();CLOUDFLARE_WAKE_SECRET=os.getenv("CLOUDFLARE_WAKE_SECRET","").strip();GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent";GITHUB_ISSUER="https://token.actions.githubusercontent.com";CLOUDFLARE_TZ="Asia/Kathmandu";CLOUDFLARE_WINDOW_START_MIN=6*60;CLOUDFLARE_WINDOW_END_MIN=14*60;
 def cloudflare_wake_allowed(now=None):
  from zoneinfo import ZoneInfo
  local=(now or datetime.now(timezone.utc)).astimezone(ZoneInfo(CLOUDFLARE_TZ))
