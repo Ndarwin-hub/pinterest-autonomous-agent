@@ -30,6 +30,13 @@ from models import JobStore
 from pin_config import PINS_PER_PRODUCT
 
 logger = logging.getLogger("pinterest-agent.core")
+PIN_N_SEED_IDENTITY = {
+ "B07CTXRKH8":"Cool Coolers by Fit & Fresh XL Slim Reusable Ice Packs",
+ "B09SG2Q23M":"Anker Power Strip with 2100J Surge Protector, 12 AC Outlets, USB A and USB C",
+ "B0C6S6TPRH":"Belkin 12-Outlet Surge Protector Power Strip with USB Ports",
+ "B0CCTF94DR":"EooCoo LCD Writing Tablet for Kids 2 Pack 8.5 Inch",
+ "B0D46FMQTJ":"4 Pack LCD Writing Tablet for Kids 8.5 Inch Colorful Drawing Board",
+}
 
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
 COMPOSIO_ENTITY_ID = os.getenv("COMPOSIO_ENTITY_ID", "").strip()
@@ -270,8 +277,7 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
         if asin_match:
             asin=asin_match.group(1).upper()
             try:
-                from pin_n_discovery import PIN_N_SEED_CANDIDATES
-                seed_name=next((str(x.get("title") or "").strip() for x in PIN_N_SEED_CANDIDATES if str(x.get("asin") or "").upper()==asin), "")
+                seed_name=PIN_N_SEED_IDENTITY.get(asin,"")
                 if seed_name:
                     product["name"]=seed_name[:120]
             except Exception as exc:
