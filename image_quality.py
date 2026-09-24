@@ -275,7 +275,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         if not fp: continue
         if any(similarity(fp,old_fp)>=0.999 for old_fp in known):
             continue
-        if any(similarity(fp,other.get("_fingerprint"))>=0.93 for other in filtered if other.get("_fingerprint")):
+        if any(similarity(fp,other.get("_fingerprint"))>=0.999 for other in filtered if other.get("_fingerprint")):
             continue
         filtered.append(c)
     valid=filtered
