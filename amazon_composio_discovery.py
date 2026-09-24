@@ -113,8 +113,10 @@ async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
     if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
    return products
   logger.warning("Composio Tool Router Amazon search returned no products; using direct Amazon")
- except Exception as e: logger.warning("Composio Amazon Tool Router fallback failed: %s; using direct Amazon",e)
- return await _amazon_html_search(query,page)
+ except Exception as e: logger.warning("Composio Amazon Tool Router search failed: %s",e)
+ # Never fall back to direct Amazon HTML requests. Amazon product pages are
+ # customer destinations, not an automation research endpoint.
+ return []
 async def discover_category(category:str,exclude_asins:Optional[Set[str]]=None)->Optional[Dict[str,Any]]:
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
  for q in CATEGORY_QUERIES.get(category,[category]):
