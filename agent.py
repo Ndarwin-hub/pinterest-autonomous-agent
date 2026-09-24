@@ -267,7 +267,18 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
 
     if not product["name"]:
         asin_match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?]|$)", parsed.path, re.I)
-        product["name"] = f"Amazon product {asin_match.group(1).upper()}" if asin_match else "Product"
+        if asin_match:
+            asin=asin_match.group(1).upper()
+            try:
+                from amazon_composio_discovery import _independent_web_search
+                recovered=await _independent_web_search(asin,1)
+                recovered_name=next((str(x.get("title") or "").strip() for x in recovered if str(x.get("title") or "").strip() and str(x.get("title") or "").strip().lower() not in {"amazon","amazon.com"}), "")
+                if recovered_name:
+                    product["name"]=recovered_name[:120]
+            except Exception as exc:
+                logger.warning("Independent ASIN identity recovery failed for %s: %s",asin,str(exc)[:300])
+        if not product["name"]:
+            product["name"] = f"Amazon product {asin_match.group(1).upper()}" if asin_match else "Product"
 
     product["description"] = f"Discover {product['name']}."
 
@@ -343,6 +354,30 @@ async def _url_ok(url: str) -> bool:
         return False
 
 
+async def search_independent_images(query: str, num: int = 10) -> List[Dict[str, Any]]:
+    """Independent image discovery fallback; never depends on COMPOSIO_SEARCH."""
+    endpoint="https://www.bing.com/images/search"
+    headers={"User-Agent":os.getenv("PIN_N_SEARCH_USER_AGENT","Mozilla/5.0"),"Accept":"text/html,application/xhtml+xml","Accept-Language":"en-US,en;q=0.9"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0,follow_redirects=True,headers=headers) as client:
+            response=await client.get(endpoint,params={"q":query[:120],"form":"HDRSC2"})
+            response.raise_for_status()
+        soup=BeautifulSoup(response.text,"lxml"); out=[]
+        for node in soup.select("a.iusc[m]"):
+            try:
+                meta=json.loads(node.get("m") or "{}")
+            except Exception:
+                continue
+            url=meta.get("murl") or ""
+            if not str(url).startswith("http"): continue
+            out.append({"url":url,"provider":"independent_bing_image","id":meta.get("purl") or "","width":0,"height":0,"source":meta.get("purl") or "","license":"web_search_verify_usage"})
+            if len(out)>=num: break
+        logger.info("Independent image search query=%s results=%s",query,len(out))
+        return out
+    except Exception as exc:
+        logger.warning("Independent image search failed: %s",str(exc)[:300])
+        return []
+
 async def search_composio_images(query: str, num: int = 10) -> List[Dict[str, Any]]:
     try:
         data = await run_composio_tool(
@@ -413,7 +448,7 @@ def score_candidate(c: Dict[str, Any], product: Dict[str, Any], strategy_key: st
             score += 10
         if any(w in src for w in name_l.split()[:2] if len(w) > 3):
             score += 5
-    if provider in ("pexels", "pixabay", "unsplash"):
+    if provider in ("pexels", "pixabay", "unsplash", "independent_bing_image"):
         score += 12
     if provider == "openai_dalle":
         score += 8
@@ -460,7 +495,16 @@ async def get_best_pin_image(
         if len(candidates) >= 6:
             break
 
-    # 3) Pexels if entity connected
+    # 3) Independent web-image fallback when Composio Search is unavailable
+    for q in (name, query):
+        found = await search_independent_images(q, num=8)
+        for f in found:
+            if f.get("url") and f["url"] not in used_urls:
+                candidates.append(f)
+        if len(candidates) >= 6:
+            break
+
+    # 4) Pexels if entity connected
     for f in await search_pexels(query):
         if f.get("url") and f["url"] not in used_urls:
             candidates.append(f)
