@@ -1,0 +1,63 @@
+name: Pin 2 Product Count - Direct Trigger
+
+on:
+  push:
+    paths:
+      - ".github/pin2-run-trigger"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[pin2-run]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Get GitHub OIDC token
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" -H "Accept: application/json; api-version=2.0" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          token=$(printf '%s' "$response" | jq -r '.value')
+          test -n "$token" && test "$token" != "null"
+          echo "ID_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Queue exactly Pin 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          request_id="pin-2-direct-${GITHUB_RUN_ID}"
+          response=$(curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 60 -H "Authorization: Bearer $ID_TOKEN" -H "Accept: application/json" -H "X-Pin-N-Request-ID: $request_id" -H "X-Pin-N-GitHub-Run-ID: $GITHUB_RUN_ID" -G "https://web-production-dae68.up.railway.app/amazon/pin-count" --data-urlencode "count=2" --data-urlencode "request_id=$request_id")
+          printf '%s\n' "$response" | jq .
+          test "$(printf '%s' "$response" | jq -r '.request_id // empty')" = "$request_id"
+          echo "REQUEST_ID=$request_id" >> "$GITHUB_ENV"
+
+      - name: Poll until Pin 2 terminal state
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 180); do
+            sleep 10
+            status=$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors -H "Authorization: Bearer $ID_TOKEN" -G "https://web-production-dae68.up.railway.app/amazon/pin-count/status" --data-urlencode "request_id=$REQUEST_ID")
+            printf '%s\n' "$status" | jq .
+            state=$(printf '%s' "$status" | jq -r '.status // "unknown"')
+            if [[ "$state" == "accepted" ]]; then
+              requested=$(printf '%s' "$status" | jq -r '.requested // 0')
+              discovered=$(printf '%s' "$status" | jq -r '.discovered // 0')
+              accepted=$(printf '%s' "$status" | jq -r '.accepted // 0')
+              test "$requested" -eq 2
+              test "$discovered" -eq 2
+              test "$accepted" -eq 2
+              echo "Pin 2 products accepted."
+              exit 0
+            fi
+            if [[ "$state" == "partial" || "$state" == "failed" ]]; then
+              echo "Pin 2 terminal state: $state" >&2
+              exit 1
+            fi
+          done
+          echo "Pin 2 timed out." >&2
+          exit 1
