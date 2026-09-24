@@ -61,7 +61,8 @@ BOARD_CATEGORY_KEYS={
 # popularity/quality scoring within those result sets. Older generic queries are
 # only fallback candidates.
 BOARD_SEARCH_PROFILES={
- "Appliances & Home":["new countertop ice maker","new air fryer","new coffee maker","new blender appliance","new toaster oven","countertop ice maker","air fryer","coffee maker","blender appliance","toaster oven"],\n "Watches & Clocks":["new wristwatch","new smartwatch","new digital watch","new analog watch","new alarm clock","new wall clock","wristwatch","smartwatch","digital watch","analog watch","alarm clock","wall clock"],
+ "Appliances & Home":["new countertop ice maker","new air fryer","new coffee maker","new blender appliance","new toaster oven","countertop ice maker","air fryer","coffee maker","blender appliance","toaster oven"],
+ "Watches & Clocks":["new wristwatch","new smartwatch","new digital watch","new analog watch","new alarm clock","new wall clock","wristwatch","smartwatch","digital watch","analog watch","alarm clock","wall clock"],
  "Automotive & Tools":["new car emergency tools","new automotive tools garage","new car accessories","car emergency tools","automotive tools garage","car accessories"],
  "Baby & Kids":["new baby wipes","new diapers","new baby bottle feeding","baby wipes","diapers","baby bottle feeding"],
  "Beauty & Personal Care":["new Mighty Patch acne patches","new skincare serum moisturizer","new hair care shampoo","Mighty Patch acne patches","skincare serum moisturizer","hair care shampoo"],
