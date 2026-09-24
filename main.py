@@ -271,7 +271,6 @@ async def amazon_manual_submit(body:BatchSubmitRequest,background_tasks:Backgrou
 
 @app.post("/pin-a")
 async def pin_a_trigger(
-    body: Optional[Dict[str,Any]]=None,
     authorization: Optional[str]=Header(None),
     x_pin_a_secret: Optional[str]=Header(None,alias="X-Pin-A-Secret"),
     x_scheduler_secret: Optional[str]=Header(None,alias="X-Scheduler-Secret"),
@@ -293,8 +292,8 @@ async def pin_a_trigger(
             if claims.get("repository")==GITHUB_REPO and claims.get("ref")=="refs/heads/main" and claims.get("event_name") in ("schedule","workflow_dispatch","repository_dispatch"): authorized=True
         except Exception as exc: logger.warning("Pin A GitHub OIDC authentication failed: %s",type(exc).__name__)
     if not authorized: raise HTTPException(status_code=401,detail="Invalid or missing Pin A authentication")
-    source=(x_pin_a_source or ((body or {}).get("source") if isinstance(body,dict) else None) or "unknown").strip()[:200]
-    request_id=(x_pin_a_request_id or ((body or {}).get("request_id") if isinstance(body,dict) else None) or str(uuid.uuid4())).strip()[:200]
+    source=(x_pin_a_source or "unknown").strip()[:200]
+    request_id=(x_pin_a_request_id or str(uuid.uuid4())).strip()[:200]
     day=daily_ledger.today_str()
     if cloudflare_authenticated:
         allowed,local_now=cloudflare_wake_allowed()
