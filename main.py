@@ -66,7 +66,7 @@ def verify_batch_secret(authorization:Optional[str]=Header(None),x_scheduler_sec
  token=authorization.split(" ",1)[1].strip()
  try:
   key=_jwks.get_signing_key_from_jwt(token).key;claims=jwt.decode(token,key,algorithms=["RS256"],issuer=GITHUB_ISSUER,audience=GITHUB_AUDIENCE,options={"require":["iss","sub","aud","exp","repository"]})
-  if claims.get("repository")!=GITHUB_REPO or claims.get("ref")!="refs/heads/main" or claims.get("event_name") not in ("schedule","workflow_dispatch"):raise ValueError("OIDC claims not authorized")
+  if claims.get("repository")!=GITHUB_REPO or claims.get("ref")!="refs/heads/main" or claims.get("event_name") not in ("schedule","workflow_dispatch","repository_dispatch"):raise ValueError("OIDC claims not authorized")
   return True
  except Exception as e:logger.warning("GitHub OIDC scheduler authentication failed: %s",type(e).__name__);raise HTTPException(status_code=401,detail="Invalid scheduler identity")
 def extract_url(text:str)->str:
