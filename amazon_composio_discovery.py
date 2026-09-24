@@ -99,9 +99,25 @@ async def _independent_web_search(query:str,page:int=1)->List[Dict[str,Any]]:
             if "uddg=" in href:
                 try: href=unquote(dict(parse_qsl(urlsplit(href).query)).get("uddg",""))
                 except Exception: pass
+            result_text=html.unescape(result.get_text(" ",strip=True))
             asin=_asin(href)
+            if not asin:
+                requested_asin=_asin(query)
+                if requested_asin and requested_asin in result_text.upper():
+                    asin=requested_asin
             if not asin: continue
-            out.append({"asin":asin,"link":href,"title":html.unescape(anchor.get_text(" ",strip=True)),"extracted_price":0,"rating":0,"reviews":0,"bought_last_month":"","badges":[],"position":len(out)+1,"_amazon_domain":"amazon.com","source":"independent_web_search_duckduckgo"})
+            raw_title=anchor.get("title") or anchor.get_text(" ",strip=True)
+            title=html.unescape(str(raw_title or "")).strip()
+            if title.lower() in {"amazon","amazon.com","amazon.com:"} or len(title)<20:
+                snippet=result.select_one(".result__snippet")
+                snippet_text=html.unescape(snippet.get_text(" ",strip=True) if snippet else result_text)
+                snippet_text=re.sub(r"\bAmazon(?:\.com)?\b[:\s-]*","",snippet_text,flags=re.I).strip(" -:|")
+                if len(snippet_text)>=20:
+                    title=snippet_text[:160]
+            if title.lower() in {"amazon","amazon.com","amazon.com:"}:
+                title=f"Product {asin}"
+            destination=f"https://www.amazon.com/dp/{asin}?tag={AFFILIATE_TAG}"
+            out.append({"asin":asin,"link":destination,"title":title,"extracted_price":0,"rating":0,"reviews":0,"bought_last_month":"","badges":[],"position":len(out)+1,"_amazon_domain":"amazon.com","source":"independent_web_search_duckduckgo"})
             if len(out)>=20: break
         logger.info("Independent Pin N search query=%s page=%s products=%s",query,page,len(out))
         return out
