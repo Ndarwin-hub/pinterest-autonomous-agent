@@ -143,15 +143,16 @@ async def lifespan(app:FastAPI):
    if job.status.value in ("completed","completed_partial","failed"):return {"status":job.status.value,"error":job.error,"result":job.result}
   return {"status":"timeout"}
  app.state.amazon_enqueue=_enqueue_for_amazon;app.state.amazon_list_boards=_list_boards_for_amazon;app.state.amazon_wait_job=_wait_job
- await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)\n await _resume_pin_n_requests()
+ await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)
+ pin_a_worker=asyncio.create_task(_pin_a_request_worker(),name="pin-a-durable-worker")
+ await _resume_pin_n_requests()
  yield
+ if pin_a_worker:
+  pin_a_worker.cancel()
+  try: await pin_a_worker
+  except asyncio.CancelledError: pass
  await amazon_scheduler.stop_daily_session()
- await amazon_scheduler.stop()
- if registration_task:
-  registration_task.cancel()
-  try:await registration_task
-  except asyncio.CancelledError:pass
- logger.info("Shutting down...")
+ await amazon_scheduler.stop()logger.info("Shutting down...")
 app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates four unique Pins with multi-provider images, publishes and verifies.",version="4.0.0",lifespan=lifespan)
 if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
