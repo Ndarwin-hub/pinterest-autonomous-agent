@@ -22,7 +22,7 @@ import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunsplit
 
 import httpx
 
@@ -210,6 +210,25 @@ async def probe_capabilities() -> Dict[str, Any]:
     return caps
 
 
+def _non_affiliate_research_url(url: str) -> str:
+    """Return a research-only URL without Associates attribution parameters."""
+    try:
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower().replace("www.", "")
+        if host not in {"amazon.com", "smile.amazon.com"}:
+            return url
+        blocked = {"tag", "ascsubtag", "linkcode", "creative", "creativeasin", "camp", "adid", "qid"}
+        query = []
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            low = key.lower()
+            if low in blocked or low == "tag" or low.startswith("ref_") or low.startswith("pf_rd_"):
+                continue
+            query.append((key, value))
+        return urlunsplit((parsed.scheme or "https", parsed.netloc, parsed.path, urlencode(query), ""))
+    except Exception:
+        return url
+
+
 async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[str, Any]:
     job_store.update(job_id, progress="Researching product page")
     product: Dict[str, Any] = {
@@ -235,7 +254,8 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
     for headers in header_sets:
         try:
             async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                resp = await client.get(url, headers=headers)
+                research_url = _non_affiliate_research_url(url)
+                resp = await client.get(research_url, headers=headers)
                 if resp.status_code < 400 and len(resp.text) > 400:
                     html = resp.text[:300000]
                     break
