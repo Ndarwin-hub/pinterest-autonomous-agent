@@ -53,27 +53,38 @@ async def notify_daily_not_started(day:str) -> bool:
     return await _send_daily_status(day,"not_started")
 
 
-async def notify_daily_failed(day:str) -> bool:
+async def notify_daily_final_status(day:str) -> bool:
+    """Send the single final daily status report instead of a FAILED alert."""
     from daily_ledger import ledger
-    if ledger.is_day_complete(day):
-        return True
     if not ledger.claim_daily_notification(day,"failed"):
         return True
     try:
         from agent import run_composio_tool
-        state=ledger.daily_status_state(day)
         status=ledger.get_day_status(day)
-        subject="Pinterest Amazon automation — FAILED"
-        body=(f"Pinterest Amazon automation — FAILED\n\n"
-              "The daily scheduler reached its final scheduled check without completing the required daily run.\n\n"
-              f"Checked (UTC): {datetime.now(timezone.utc).isoformat()}\n"
-              f"Successful slots: {status.get('success_count',0)}/50\n"
-              f"Started (UTC): {state.get('started_at')}\n\n"
-              "This is the only daily failure notification. Batch retry/failure emails are disabled.")
+        state=ledger.daily_status_state(day)
+        slots=status.get("slots",[])
+        published=sum(1 for s in slots if s.get("status")=="success" and s.get("pinterest_verified"))
+        recovery=sum(1 for s in slots if s.get("status") in ("deferred","partial","exhausted") or (s.get("error") or "").startswith("pinterest_"))
+        batches=status.get("batches",[])
+        processed=sum(1 for b in batches if b.get("status"))
+        subject="Pinterest Amazon automation — DAILY FINAL STATUS"
+        body=(f"Pinterest Amazon automation — DAILY FINAL STATUS\n\n"
+              f"Final check (UTC): {datetime.now(timezone.utc).isoformat()}\n"
+              "Final scheduled batch: Batch 10 — 13:20 Asia/Kathmandu\n\n"
+              f"Products published: {published}/50\n"
+              f"Products sent to recovery: {recovery}\n"
+              f"Batches processed: {processed}/10\n"
+              f"Daily session started (UTC): {state.get('started_at')}\n\n"
+              "This is the single daily final-status notification. Batch-level failure/retry emails remain disabled.")
         await run_composio_tool("GMAIL_SEND_EMAIL",{"recipient_email":RECIPIENT,"subject":subject,"body":body,"is_html":False})
         ledger.finish_daily_notification(day,"failed",True)
+        logger.info("Daily final status notification sent for %s",day)
         return True
     except Exception as exc:
         ledger.finish_daily_notification(day,"failed",False)
-        logger.error("Daily automation failed notification could not be sent: %s",exc)
+        logger.error("Daily final status notification could not be sent: %s",exc)
         return False
+
+async def notify_daily_failed(day:str) -> bool:
+    """Compatibility wrapper; final status is no longer labeled FAILED."""
+    return await notify_daily_final_status(day)
