@@ -152,7 +152,8 @@ async def lifespan(app:FastAPI):
   try: await pin_a_worker
   except asyncio.CancelledError: pass
  await amazon_scheduler.stop_daily_session()
- await amazon_scheduler.stop()logger.info("Shutting down...")
+ await amazon_scheduler.stop()
+ logger.info("Shutting down...")
 app=FastAPI(title="Pinterest Autonomous Agent",description="Submit a product/affiliate URL. Agent researches, creates four unique Pins with multi-provider images, publishes and verifies.",version="4.0.0",lifespan=lifespan)
 if MCP_PATH:app.include_router(mcp_router,prefix=MCP_PATH)
 class SubmitRequest(BaseModel):url:str=Field(...,description="Product/affiliate URL. Exact URL preserved as destination for all pins.")
