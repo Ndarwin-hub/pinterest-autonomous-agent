@@ -113,17 +113,6 @@ async def _disabled_amazon_html_search(query:str,page:int=1)->List[Dict[str,Any]
     logger.warning("Direct Amazon HTML discovery is permanently disabled.")
     return []
 
-
- url=f"https://www.amazon.com/s?k={quote_plus(query)}&page={max(1,int(page))}"
- headers={"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-          "Accept":"text/html,application/xhtml+xml","Accept-Language":"en-US,en;q=0.9","Cache-Control":"no-cache"}
- try:
-  async with httpx.AsyncClient(timeout=25,follow_redirects=True,headers=headers) as client:
-   r=await client.get(url); r.raise_for_status(); products=_parse_amazon_html(r.text,page)
-   logger.info("Direct Amazon HTML fallback query=%s page=%s products=%s",query,page,len(products))
-   return products
- except Exception as e:
-  logger.warning("Direct Amazon HTML fallback failed query=%s page=%s: %s",query,page,e); return []
 async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
  domain="amazon.com"; admin_blocked=False
  try:
