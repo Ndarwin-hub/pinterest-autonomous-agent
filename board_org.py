@@ -201,7 +201,12 @@ _FAMILY_RULES = [
         "wireless phone charger", "phone holder", "phone stand", "tablet stand", "stylus", "apple pencil",
         "tablet keyboard", "tablet cover", "phone battery", "replacement phone screen",
     )),
-    ("watches_clocks", (\n        "wristwatch", "wrist watches", "watches", "smartwatch", "smart watch",\n        "digital watch", "analog watch", "alarm clock", "wall clock", "desk clock",\n        "table clock", "mantel clock", "grandfather clock", "timepiece",\n    )),\n    ("electronics_root", (
+    ("watches_clocks", (
+        "wristwatch", "wrist watches", "watches", "smartwatch", "smart watch",
+        "digital watch", "analog watch", "alarm clock", "wall clock", "desk clock",
+        "table clock", "mantel clock", "grandfather clock", "timepiece",
+    )),
+    ("electronics_root", (
         "airpods", "earbuds", "earbud", "headphones", "headphone", "wireless earbuds",
         "bluetooth earbuds", "true wireless", "kindle", "e-reader", "e reader",
         "ereader", "ebook reader", "e-book reader", "paperwhite", "screen protector",
