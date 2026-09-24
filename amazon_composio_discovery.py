@@ -21,7 +21,11 @@ CATEGORY_QUERIES = {
  "Computers & Accessories":["USB-C charger"], "Video Games":["gaming headset"],
  "Musical Instruments":["wireless lavalier microphone"],
 }
-\n# Backward-compatible board query profiles used by the independent Pin N discovery layer.\n# Keep this additive: Pin A continues to use its dedicated board scheduler.\nBOARD_SEARCH_PROFILES = {k:list(v) for k,v in CATEGORY_QUERIES.items()}\ndef _asin(value: Any)->Optional[str]:
+
+# Backward-compatible board query profiles used by the independent Pin N discovery layer.
+# Keep this additive: Pin A continues to use its dedicated board scheduler.
+BOARD_SEARCH_PROFILES = {k:list(v) for k,v in CATEGORY_QUERIES.items()}
+def _asin(value: Any)->Optional[str]:
  m=ASIN_RE.search(str(value or "")); return m.group(1).upper() if m else None
 def _detail_url(link:str)->Optional[str]:
  p=urlsplit(str(link or "")); host=p.netloc.lower().replace("www.","")
