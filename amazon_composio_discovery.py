@@ -131,6 +131,32 @@ async def _independent_web_search(query:str,page:int=1)->List[Dict[str,Any]]:
         logger.warning("Independent Pin N search failed query=%s page=%s: %s",query,page,e)
         return []
 
+async def _independent_bing_product_search(query:str,page:int=1)->List[Dict[str,Any]]:
+    """Independent Bing web search fallback; never requests Amazon URLs."""
+    try:
+        endpoint="https://www.bing.com/search"
+        headers={"User-Agent":os.getenv("PIN_N_SEARCH_USER_AGENT","Mozilla/5.0"),"Accept":"text/html,application/xhtml+xml","Accept-Language":"en-US,en;q=0.9"}
+        async with httpx.AsyncClient(timeout=20.0,follow_redirects=True,headers=headers) as client:
+            response=await client.get(endpoint,params={"q":f"{query} Amazon US product","first":max(1,(int(page)-1)*10+1)})
+            response.raise_for_status()
+        soup=BeautifulSoup(response.text,"lxml"); out=[]
+        for result in soup.select("li.b_algo"):
+            anchor=result.select_one("h2 a[href]")
+            if not anchor: continue
+            href=anchor.get("href") or ""
+            text_blob=html.unescape(result.get_text(" ",strip=True))
+            asin=_asin(href) or (_asin(text_blob) if "amazon" in text_blob.lower() else None)
+            if not asin: continue
+            title=html.unescape(anchor.get_text(" ",strip=True))
+            if not title or len(title)<6: continue
+            out.append({"asin":asin,"link":f"https://www.amazon.com/dp/{asin}?tag={AFFILIATE_TAG}","title":title,"extracted_price":0,"rating":0,"reviews":0,"bought_last_month":"","badges":[],"position":len(out)+1,"_amazon_domain":"amazon.com","source":"independent_web_search_bing"})
+            if len(out)>=20: break
+        logger.info("Independent Bing product search query=%s page=%s products=%s",query,page,len(out))
+        return out
+    except Exception as exc:
+        logger.warning("Independent Bing product search failed query=%s page=%s: %s",query,page,str(exc)[:300])
+        return []
+
 async def _disabled_amazon_html_search(query:str,page:int=1)->List[Dict[str,Any]]:
     logger.warning("Direct Amazon HTML discovery is permanently disabled.")
     return []
@@ -165,7 +191,7 @@ async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
      if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
     return products
   except Exception as e: logger.warning("Composio Amazon Tool Router search failed: %s",str(e)[:500])
- return await _independent_web_search(query,page)
+ return (await _independent_web_search(query,page)) + (await _independent_bing_product_search(query,page))
 
 async def discover_category(category:str,exclude_asins:Optional[Set[str]]=None)->Optional[Dict[str,Any]]:
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
