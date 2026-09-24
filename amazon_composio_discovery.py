@@ -157,6 +157,31 @@ async def _independent_bing_product_search(query:str,page:int=1)->List[Dict[str,
         logger.warning("Independent Bing product search failed query=%s page=%s: %s",query,page,str(exc)[:300])
         return []
 
+async def _independent_jina_search(query:str,page:int=1)->List[Dict[str,Any]]:
+    """Independent Jina Reader search of search-engine results; never opens Amazon."""
+    try:
+        q=f'site:amazon.com/dp/ "{query}"'
+        target="https://r.jina.ai/http://www.google.com/search?q="+quote_plus(q)
+        async with httpx.AsyncClient(timeout=30.0,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0","Accept":"text/plain"}) as client:
+            response=await client.get(target)
+            response.raise_for_status()
+        text_body=response.text; out=[]
+        for match in re.finditer(r"\[([^\]]{6,200})\]\((https?://[^)\s]+)\)",text_body):
+            title=html.unescape(match.group(1)).strip()
+            href=match.group(2)
+            asin=_asin(href) or _asin(title)
+            if not asin:
+                around=text_body[max(0,match.start()-500):min(len(text_body),match.end()+500)]
+                asin=_asin(around)
+            if not asin: continue
+            out.append({"asin":asin,"link":f"https://www.amazon.com/dp/{asin}?tag={AFFILIATE_TAG}","title":title,"extracted_price":0,"rating":0,"reviews":0,"bought_last_month":"","badges":[],"position":len(out)+1,"_amazon_domain":"amazon.com","source":"independent_web_search_jina"})
+            if len(out)>=20: break
+        logger.info("Independent Jina search query=%s page=%s products=%s",query,page,len(out))
+        return out
+    except Exception as exc:
+        logger.warning("Independent Jina search failed query=%s page=%s: %s",query,page,str(exc)[:300])
+        return []
+
 async def _disabled_amazon_html_search(query:str,page:int=1)->List[Dict[str,Any]]:
     logger.warning("Direct Amazon HTML discovery is permanently disabled.")
     return []
@@ -191,7 +216,7 @@ async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
      if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
     return products
   except Exception as e: logger.warning("Composio Amazon Tool Router search failed: %s",str(e)[:500])
- return (await _independent_web_search(query,page)) + (await _independent_bing_product_search(query,page))
+ return (await _independent_web_search(query,page)) + (await _independent_bing_product_search(query,page)) + (await _independent_jina_search(query,page))
 
 async def discover_category(category:str,exclude_asins:Optional[Set[str]]=None)->Optional[Dict[str,Any]]:
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
