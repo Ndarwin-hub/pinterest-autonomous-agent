@@ -13,7 +13,7 @@ LEGACY_BOARD_NAMES = {"General Pins", "Stuff to buy", "Product Pins"}
 LEGACY_BOARD_IDS = {"987906936951142945", "987906936951144580"}
 PERMANENT_BOARD_IDS = {
     "Automotive & Tools": "987906936951148022",
-    "Watches & Clocks": "987906936951153832",
+    "Watches & Clocks": "987906936951155598",
     "Beauty & Personal Care": "987906936951153833",
     "Books & Learning": "987906936951145056",
     "Baby & Kids": "987906936951153816",
