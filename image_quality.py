@@ -14,7 +14,7 @@ MAX_CANDIDATES_PER_PIN=12
 MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
 BLANK_STDDEV_THRESHOLD=4.0
 BLANK_UNIQUE_COLOR_THRESHOLD=24
-VISUAL_DUPLICATE_THRESHOLD=0.12
+VISUAL_DUPLICATE_THRESHOLD=0.01
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
 
@@ -168,7 +168,7 @@ async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set
             if len(selected)>=MAX_CANDIDATES_PER_PIN:break
             continue
         distances=[_visual_distance(sig,s) for s in used_sigs+selected_sigs]
-        if distances and min(distances)<0.12:continue
+        if distances and min(distances)<VISUAL_DUPLICATE_THRESHOLD:continue
         c["visual_distance"]=round(min(distances),4) if distances else 1.0
         selected.append(c); selected_sigs.append(sig)
         if len(selected)>=MAX_CANDIDATES_PER_PIN:break
