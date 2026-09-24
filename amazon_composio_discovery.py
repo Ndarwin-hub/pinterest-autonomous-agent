@@ -160,8 +160,8 @@ async def _independent_bing_product_search(query:str,page:int=1)->List[Dict[str,
 async def _independent_jina_search(query:str,page:int=1)->List[Dict[str,Any]]:
     """Independent Jina Reader search of search-engine results; never opens Amazon."""
     try:
-        q=f'site:amazon.com/dp/ "{query}"'
-        target="https://r.jina.ai/http://www.google.com/search?q="+quote_plus(q)
+        q=f'site:amazon.com/dp/ OR site:amazon.com/gp/product/ "{query}"'
+        target="https://r.jina.ai/http://www.google.com/search?tbm=shop&q="+quote_plus(q)
         async with httpx.AsyncClient(timeout=30.0,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0","Accept":"text/plain"}) as client:
             response=await client.get(target)
             response.raise_for_status()
