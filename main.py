@@ -73,10 +73,44 @@ def extract_url(text:str)->str:
  if m:return m.group(0).rstrip(").,]',\"")
  if text.startswith("http"):return text
  raise ValueError("No valid http(s) URL found")
+async def _pin_a_request_worker():
+    """Durable Pin A executor: the database request survives Railway restarts/deployments."""
+    recovered=daily_ledger.recover_pin_a_requests()
+    if recovered: logger.warning("Recovered %s interrupted Pin A request(s) after process restart.",recovered)
+    while True:
+        req=None
+        try:
+            req=daily_ledger.claim_next_pin_a_request()
+            if not req:
+                await asyncio.sleep(5)
+                continue
+            request_id=req["request_id"]; day=req["day"]
+            logger.info("Pin A durable request claimed request_id=%s source=%s day=%s",request_id,req["source"],day)
+            result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=1)
+            logger.info("Pin A durable request started request_id=%s result=%s",request_id,result)
+            if result.get("status")=="ignored":
+                daily_ledger.finish_pin_a_request(request_id,"failed",str(result.get("reason") or "scheduler_ignored"))
+                continue
+            while (amazon_scheduler.status.get("daily_session") or {}).get("running"):
+                await asyncio.sleep(15)
+            if daily_ledger.is_day_complete(day):
+                daily_ledger.finish_pin_a_request(request_id,"completed")
+                logger.info("Pin A durable request completed request_id=%s day=%s",request_id,day)
+            else:
+                daily_ledger.finish_pin_a_request(request_id,"pending","daily session stopped before day completion; queued for retry")
+                await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Pin A durable worker error request_id=%s: %s",((req or {}).get("request_id")),exc)
+            if req: daily_ledger.finish_pin_a_request(req["request_id"],"pending",str(exc)[:1000])
+            await asyncio.sleep(30)
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
  logger.info("Pinterest Autonomous Agent v4.0.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
  registration_task=None
+ pin_a_worker=None
  if MCP_PATH:registration_task=asyncio.create_task(register_custom_mcp_with_retry())
  startup_pin_count=int(os.getenv("PIN_COMMAND_ON_START","0") or "0")
  if startup_pin_count>0:
@@ -241,54 +275,32 @@ async def pin_a_trigger(
     x_pin_a_source: Optional[str]=Header(None,alias="X-Pin-A-Source"),
     x_pin_a_request_id: Optional[str]=Header(None,alias="X-Pin-A-Request-ID"),
 ):
-    """Universal Pin A wake endpoint. Existing schedulers and independent callers may invoke it.
-    Authentication is source-agnostic: an authorized shared secret or GitHub OIDC is accepted.
-    The existing Railway scheduler/ledger remains the single owner of batch execution.
-    """
-    authorized=False
-    cloudflare_authenticated=False
+    """Durable Pin A wake endpoint. It persists the request; Railway owns execution and recovery."""
+    authorized=False; cloudflare_authenticated=False
     for candidate, expected in (
-        (x_pin_a_secret, API_SECRET),
-        (x_pin_a_secret, CLOUDFLARE_WAKE_SECRET),
-        (x_pin_a_secret, AMAZON_BATCH_SECRET),
-        (x_scheduler_secret, API_SECRET),
-        (x_scheduler_secret, CLOUDFLARE_WAKE_SECRET),
-        (x_scheduler_secret, AMAZON_BATCH_SECRET),
-    ):
-        if candidate and CLOUDFLARE_WAKE_SECRET and hmac.compare_digest(candidate, CLOUDFLARE_WAKE_SECRET):
-            cloudflare_authenticated=True
-        if candidate and expected and hmac.compare_digest(candidate, expected):
-            authorized=True
-            break
-    if not authorized:
-        if authorization and authorization.startswith("Bearer "):
-            token=authorization.split(" ",1)[1].strip()
-            try:
-                key=_jwks.get_signing_key_from_jwt(token).key
-                claims=jwt.decode(token,key,algorithms=["RS256"],issuer=GITHUB_ISSUER,audience=GITHUB_AUDIENCE,options={"require":["iss","sub","aud","exp","repository"]})
-                if claims.get("repository")==GITHUB_REPO and claims.get("ref")=="refs/heads/main" and claims.get("event_name") in ("schedule","workflow_dispatch"):
-                    authorized=True
-            except Exception as e:
-                logger.warning("Pin A GitHub OIDC authentication failed: %s",type(e).__name__)
-    if not authorized:
-        raise HTTPException(status_code=401,detail="Invalid or missing Pin A authentication")
+        (x_pin_a_secret,API_SECRET),(x_pin_a_secret,CLOUDFLARE_WAKE_SECRET),(x_pin_a_secret,AMAZON_BATCH_SECRET),
+        (x_scheduler_secret,API_SECRET),(x_scheduler_secret,CLOUDFLARE_WAKE_SECRET),(x_scheduler_secret,AMAZON_BATCH_SECRET)):
+        if candidate and CLOUDFLARE_WAKE_SECRET and hmac.compare_digest(candidate,CLOUDFLARE_WAKE_SECRET): cloudflare_authenticated=True
+        if candidate and expected and hmac.compare_digest(candidate,expected): authorized=True; break
+    if not authorized and authorization and authorization.startswith("Bearer "):
+        token=authorization.split(" ",1)[1].strip()
+        try:
+            key=_jwks.get_signing_key_from_jwt(token).key
+            claims=jwt.decode(token,key,algorithms=["RS256"],issuer=GITHUB_ISSUER,audience=GITHUB_AUDIENCE,options={"require":["iss","sub","aud","exp","repository"]})
+            if claims.get("repository")==GITHUB_REPO and claims.get("ref")=="refs/heads/main" and claims.get("event_name") in ("schedule","workflow_dispatch"): authorized=True
+        except Exception as exc: logger.warning("Pin A GitHub OIDC authentication failed: %s",type(exc).__name__)
+    if not authorized: raise HTTPException(status_code=401,detail="Invalid or missing Pin A authentication")
     source=(x_pin_a_source or ((body or {}).get("source") if isinstance(body,dict) else None) or "unknown").strip()[:200]
     request_id=(x_pin_a_request_id or ((body or {}).get("request_id") if isinstance(body,dict) else None) or str(uuid.uuid4())).strip()[:200]
     day=daily_ledger.today_str()
-    # Only an actually authenticated Cloudflare watchdog is time-window gated.
-    # Manual Run pin A (GitHub/OIDC, API secret, or other authorized caller) remains 24/7.
-    is_cloudflare=cloudflare_authenticated
-    if is_cloudflare:
+    if cloudflare_authenticated:
         allowed,local_now=cloudflare_wake_allowed()
         if not allowed:
-            logger.info("Cloudflare Pin A wake ignored outside scheduled window: local_time=%s window=06:00-14:00",local_now.isoformat())
             return {"status":"ignored","source":source,"request_id":request_id,"reason":"outside_cloudflare_watchdog_window","local_time":local_now.isoformat(),"window":"06:00-14:00 Asia/Kathmandu"}
     daily_ledger.record_scheduler_event(day=day,batch_requested=1,scheduler_run_id=f"pin-a:{request_id}",scheduled_local_time="pin-a",github_delay_seconds=0,github_queued_runs=0,github_active_runs=0,github_load_class="PIN_A")
-    logger.info("Pin A accepted source=%s request_id=%s",source,request_id)
-    if SCHEDULER_MODE!="external":
-        return {"status":"ignored","source":source,"request_id":request_id,"reason":"Amazon scheduler is not in external mode"}
-    result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=1)
-    return {**result,"pin_a":True,"source":source,"request_id":request_id,"scheduler":"railway_owned_daily_session","message":"Pin A wake accepted; Railway scheduler/ledger owns batch execution and duplicate prevention."}
+    req=daily_ledger.enqueue_pin_a_request(request_id,source,day)
+    logger.info("Pin A durable request accepted request_id=%s source=%s status=%s",request_id,source,req["status"])
+    return {"status":"accepted","pin_a":True,"source":source,"request_id":request_id,"day":day,"request_status":req["status"],"scheduler":"railway_durable_pin_a_worker","message":"Pin A request persisted; Railway worker owns execution and recovery."}
 
 @app.post("/amazon/run-batch")
 async def amazon_run_batch(body:BatchRequest,x_scheduler_secret:Optional[str]=Header(None,alias="X-Scheduler-Secret"),_:bool=Depends(verify_batch_secret)):
