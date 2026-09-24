@@ -17,7 +17,7 @@ CATEGORY_QUERIES = {
  "Beauty":["Mighty Patch acne patches"], "Home & Kitchen":["Stanley Quencher tumbler"],
  "Health & Household":["whey protein powder"], "Toys & Games":["LCD writing tablet kids"],
  "Sports & Outdoors":["reusable ice packs"], "Baby":["baby wipes"], "Pet Supplies":["cat litter"],
- "Appliances":["countertop ice maker"], "Cell Phones & Accessories":["phone screen protector"],
+ "Appliances":["countertop ice maker"], "Watches & Clocks":["wristwatch","smartwatch","digital watch","alarm clock","wall clock"], "Cell Phones & Accessories":["phone screen protector"],
  "Computers & Accessories":["USB-C charger"], "Video Games":["gaming headset"],
  "Musical Instruments":["wireless lavalier microphone"],
 }

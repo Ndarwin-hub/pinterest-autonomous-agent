@@ -80,3 +80,4 @@ All three surfaces must enter the same shared image-selection/publication pipeli
 - Run pin N is isolated product-count execution and must not alter Pin-A scheduling or ledger ownership.
 - GitHub is the command/fallback controller; Railway is the production execution service when available.
 - Railway failure triggers recovery/retry, not a false success.
+\n\n## Canonical Board Routing Rule\n- `Watches & Clocks` is the dedicated destination for watches, wristwatches, smartwatches, clocks, alarm clocks, wall clocks, desk clocks, and other timepieces.\n- Appliance products continue to route to `Home, Kitchen & Dining`; the old `Appliances & Home` board identity is no longer used by the automation.\n- ChatGPT, Grok, Gemini, Composio, Railway, GitHub, and Cloudflare must use the canonical resolver/board IDs rather than maintaining separate board maps.\n

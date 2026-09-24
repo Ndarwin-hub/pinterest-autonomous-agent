@@ -13,7 +13,7 @@ LEGACY_BOARD_NAMES = {"General Pins", "Stuff to buy", "Product Pins"}
 LEGACY_BOARD_IDS = {"987906936951142945", "987906936951144580"}
 PERMANENT_BOARD_IDS = {
     "Automotive & Tools": "987906936951148022",
-    "Appliances & Home": "987906936951153832",
+    "Watches & Clocks": "987906936951153832",
     "Beauty & Personal Care": "987906936951153833",
     "Books & Learning": "987906936951145056",
     "Baby & Kids": "987906936951153816",
@@ -56,7 +56,8 @@ CATEGORY_BOARD_MAP = {
     "smartphones_tablets": "Smartphones & Tablets",
     "health": "Health & Fitness",
     "home": "Home, Kitchen & Dining",
-    "appliances": "Appliances & Home",
+    "appliances": "Home, Kitchen & Dining",
+    "watches_clocks": "Watches & Clocks",
     "books": "Books & Learning",
     "games": "Sports, Games & Toys",
     "fashion": "Fashion & Lifestyle",
@@ -200,7 +201,7 @@ _FAMILY_RULES = [
         "wireless phone charger", "phone holder", "phone stand", "tablet stand", "stylus", "apple pencil",
         "tablet keyboard", "tablet cover", "phone battery", "replacement phone screen",
     )),
-    ("electronics_root", (
+    ("watches_clocks", (\n        "wristwatch", "wrist watches", "watches", "smartwatch", "smart watch",\n        "digital watch", "analog watch", "alarm clock", "wall clock", "desk clock",\n        "table clock", "mantel clock", "grandfather clock", "timepiece",\n    )),\n    ("electronics_root", (
         "airpods", "earbuds", "earbud", "headphones", "headphone", "wireless earbuds",
         "bluetooth earbuds", "true wireless", "kindle", "e-reader", "e reader",
         "ereader", "ebook reader", "e-book reader", "paperwhite", "screen protector",

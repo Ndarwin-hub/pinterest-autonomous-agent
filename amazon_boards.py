@@ -6,7 +6,7 @@ from typing import Any,Dict,List,Optional,Tuple
 from board_org import LEGACY_BOARD_IDS,LEGACY_BOARD_NAMES,PERMANENT_BOARD_IDS,DEFAULT_BOARD_NAME
 
 BOARD_SCOPES={
- "Appliances & Home":"Kitchen and household appliances: countertop ice makers, air fryers, coffee makers, blenders, toaster ovens, humidifiers, air purifiers, vacuums, dehumidifiers and other powered home appliances.",
+ "Watches & Clocks":"Watches, wristwatches, smartwatches, clocks, alarm clocks, wall clocks, desk clocks, and other timepieces.",
  "Automotive & Tools":"Automotive products and components: car emergency tools, garage tools, tire inflators, jump starters, OBD tools, car accessories and DIY hardware specifically for vehicles or garages.",
  "Baby & Kids":"Baby and child products: diapers, baby wipes, bottles, feeding supplies, pacifiers, strollers, carriers, baby monitors, nursery essentials and children-specific products.",
  "Beauty & Personal Care":"Beauty and personal-care products: skincare, acne/pimple patches, cosmetics, makeup, hair care, shampoo, conditioner, moisturizers, sunscreen, fragrance and grooming products.",
