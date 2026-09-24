@@ -12,6 +12,7 @@ class DailyLedger:
         with _lock:
             c=self._conn(); c.execute("CREATE TABLE IF NOT EXISTS daily_days(day TEXT PRIMARY KEY,status TEXT NOT NULL,success_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)"); c.execute("CREATE TABLE IF NOT EXISTS daily_slots(day TEXT NOT NULL,slot INTEGER NOT NULL,target_board_name TEXT,target_board_id TEXT,slot_kind TEXT NOT NULL,status TEXT NOT NULL,selected_asin TEXT,selected_url TEXT,affiliate_url TEXT,replacement_attempts INTEGER NOT NULL DEFAULT 0,job_id TEXT,pinterest_verified INTEGER DEFAULT 0,error TEXT,completed_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,slot))"); c.execute("CREATE TABLE IF NOT EXISTS batch_runs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,started_at TEXT,completed_at TEXT,result_json TEXT,error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(day,batch_index))")
             c.execute("CREATE TABLE IF NOT EXISTS scheduler_events(id INTEGER PRIMARY KEY AUTOINCREMENT,day TEXT NOT NULL,batch_requested INTEGER,scheduler_run_id TEXT,scheduled_local_time TEXT,github_delay_seconds INTEGER,github_queued_runs INTEGER,github_active_runs INTEGER,github_load_class TEXT,received_at TEXT NOT NULL)")
+            c.execute("CREATE TABLE IF NOT EXISTS pin_a_requests(request_id TEXT PRIMARY KEY,day TEXT NOT NULL,source TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,claimed_at TEXT,completed_at TEXT,last_error TEXT,updated_at TEXT NOT NULL)")
             c.execute("CREATE TABLE IF NOT EXISTS daily_status_notifications(day TEXT PRIMARY KEY,started_at TEXT,started_trigger_batch INTEGER,started_scheduled_local_time TEXT,started_claimed_at TEXT,started_notified_at TEXT,not_started_claimed_at TEXT,not_started_notified_at TEXT,failed_claimed_at TEXT,failed_notified_at TEXT,updated_at TEXT NOT NULL)")
             for col in ("failed_claimed_at","failed_notified_at"):
                 try:
@@ -50,6 +51,36 @@ class DailyLedger:
         if not d:return {"day":day,"status":"not_started","success_count":0,"slots":[],"batches":[]}
         keys=["slot","target_board_name","target_board_id","slot_kind","status","selected_asin","selected_url","affiliate_url","replacement_attempts","job_id","pinterest_verified","error","completed_at"]
         return {"day":d[0],"status":d[1],"success_count":d[2],"updated_at":d[3],"slots":[dict(zip(keys,r))|{"pinterest_verified":bool(r[10])} for r in rows],"batches":[{"batch":r[0],"status":r[1],"started_at":r[2],"completed_at":r[3],"error":r[4]} for r in batches]}
+    def enqueue_pin_a_request(self,request_id,source,day=None):
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("INSERT OR IGNORE INTO pin_a_requests(request_id,day,source,status,created_at,updated_at) VALUES(?,?,?,?,?,?)",(str(request_id),day,str(source or "unknown"),"pending",now,now))
+            row=c.execute("SELECT request_id,day,source,status,created_at,claimed_at,completed_at,last_error FROM pin_a_requests WHERE request_id=?",(str(request_id),)).fetchone(); c.commit(); c.close()
+        keys=["request_id","day","source","status","created_at","claimed_at","completed_at","last_error"]
+        return dict(zip(keys,row))
+
+    def recover_pin_a_requests(self):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("UPDATE pin_a_requests SET status='pending',claimed_at=NULL,updated_at=? WHERE status='running'",(now,)); n=c.execute("SELECT changes()").fetchone()[0]; c.commit(); c.close(); return int(n)
+
+    def claim_next_pin_a_request(self):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("BEGIN IMMEDIATE")
+            row=c.execute("SELECT request_id,day,source,status,created_at,claimed_at,completed_at,last_error FROM pin_a_requests WHERE status='pending' ORDER BY created_at LIMIT 1").fetchone()
+            if not row: c.commit(); c.close(); return None
+            rid=row[0]; cur=c.execute("UPDATE pin_a_requests SET status='running',claimed_at=?,updated_at=? WHERE request_id=? AND status='pending'",(now,now,rid))
+            if cur.rowcount!=1: c.commit(); c.close(); return None
+            c.commit(); c.close()
+        keys=["request_id","day","source","status","created_at","claimed_at","completed_at","last_error"]
+        return dict(zip(keys,row)) | {"status":"running","claimed_at":now}
+
+    def finish_pin_a_request(self,request_id,status="completed",error=None):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("UPDATE pin_a_requests SET status=?,completed_at=?,last_error=?,updated_at=? WHERE request_id=?",(status,now,error,now,str(request_id))); c.commit(); c.close()
+
     def record_scheduler_event(self,day=None,batch_requested=None,scheduler_run_id=None,scheduled_local_time=None,github_delay_seconds=0,github_queued_runs=0,github_active_runs=0,github_load_class="UNKNOWN"):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
