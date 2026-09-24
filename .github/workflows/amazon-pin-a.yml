@@ -134,20 +134,23 @@ PY
           test -n "$token" && test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      - name: Activate Pin A alongside the existing scheduled trigger
+      - name: Wake Pin A (non-blocking) and then activate the scheduler
         if: steps.select.outputs.action == 'run'
         env:
-          ID_TOKEN: ${{ steps.oidc.outputs.token }}
-          BATCH: ${{ steps.select.outputs.batch }}
-          SCHEDULED_LOCAL_TIME: ${{ steps.select.outputs.scheduled_local_time }}
-          GH_RUN_ID: ${{ github.run_id }}
-          GH_SCHEDULE: ${{ github.event.schedule || 'manual' }}
+          ID_TOKEN: ${{{ steps.oidc.outputs.token }}
+          BATCH: ${{{ steps.select.outputs.batch }}
+          SCHEDULED_LOCAL_TIME: ${{{ steps.select.outputs.scheduled_local_time }}
+          GH_RUN_ID: ${{{ github.run_id }}
+          GH_SCHEDULE: ${{{ github.event.schedule || 'manual' }}
         shell: bash
         run: |
           set -euo pipefail
-          response=$(curl --fail --silent --show-error --no-buffer \
+
+          # Pin A remains the universal compatibility wake. A transient
+          # Railway gateway/502 must never abort scheduled execution.
+          if pin_a_response=$(curl --silent --show-error --no-buffer \
             --connect-timeout 20 --max-time 120 \
-            --retry 5 --retry-delay 5 --retry-all-errors \
+            --retry 8 --retry-delay 5 --retry-all-errors \
             -H "Authorization: Bearer $ID_TOKEN" \
             -H 'Content-Type: application/json' \
             -H "X-Pin-A-Source: github-scheduled-trigger" \
@@ -155,19 +158,37 @@ PY
             -H "X-Pin-A-GitHub-Run-ID: $GH_RUN_ID" \
             -H "X-Pin-A-Event: $GH_SCHEDULE" \
             -X POST 'https://web-production-dae68.up.railway.app/pin-a' \
-            --data "{\"source\":\"github-scheduled-trigger\",\"request_id\":\"github:$GH_RUN_ID:$BATCH\"}")
-          printf '%s\n' "$response"
-          status=$(printf '%s' "$response" | jq -r '.status // empty')
-          case "$status" in
-            accepted|session_started|already_running|already_completed|ignored)
-              echo "Pin A scheduled activation accepted: $status"
+            --data "{\"source\":\"github-scheduled-trigger\",\"request_id\":\"github:$GH_RUN_ID:$BATCH\"}"); then
+            printf '%s\n' "$pin_a_response"
+            echo "Pin A compatibility wake returned: $(printf '%s' "$pin_a_response" | jq -r '.status // "unknown"')"
+          else
+            echo "Pin A compatibility wake failed after retries; continuing to mandatory scheduler activation."
+          fi
+
+          # Mandatory execution path: the SAME Railway-owned daily scheduler
+          # and ledger decide which unfinished batch is due. Repeated calls
+          # are safe and cannot create competing batch ownership.
+          batch_response=$(curl --fail --silent --show-error --no-buffer \
+            --connect-timeout 20 --max-time 180 \
+            --retry 10 --retry-delay 5 --retry-all-errors \
+            -H "Authorization: Bearer $ID_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -H "X-Scheduler-Secret: $ID_TOKEN" \
+            -H "X-Pin-A-Source: github-scheduled-trigger" \
+            -H "X-Pin-A-Request-ID: github:$GH_RUN_ID:$BATCH" \
+            -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch' \
+            --data "{\"batch\":$BATCH,\"scheduler_run_id\":\"github:$GH_RUN_ID:$BATCH\",\"scheduled_local_time\":\"$SCHEDULED_LOCAL_TIME\",\"github_delay_seconds\":${{ steps.select.outputs.delay }},\"github_queued_runs\":${{ steps.select.outputs.queued }},\"github_active_runs\":${{ steps.select.outputs.active }},\"github_load_class\":\"${{ steps.select.outputs.load_class }}\"}")
+          printf '%s\n' "$batch_response"
+          batch_status=$(printf '%s' "$batch_response" | jq -r '.status // empty')
+          case "$batch_status" in
+            session_started|already_running|already_completed|completed|partial|blocked|failed)
+              echo "Mandatory scheduler activation returned: $batch_status"
               ;;
             *)
-              echo "Pin A scheduled activation failed" >&2
+              echo "Unexpected scheduler response: $batch_response" >&2
               exit 1
               ;;
           esac
-
       - name: Final daily STARTED / NOT STARTED check
         if: steps.select.outputs.action == 'check'
         env:
