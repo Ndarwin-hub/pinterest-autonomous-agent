@@ -23,6 +23,18 @@ from batch_submit import validate_and_canonicalize, MAX_BATCH
 logger = logging.getLogger("pinterest-agent.pin_n_discovery")
 PIN_N_CACHE_PATH = os.getenv("PIN_N_CANDIDATE_CACHE", os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"), "pin_n_candidate_cache.json"))
 PIN_N_CACHE_MAX = 200
+PIN_N_SEED_CANDIDATES = [
+ {"asin":"B09SG2Q23M","title":"Anker Power Strip with 2100J Surge Protector, 12 AC Outlets, USB A and USB C","link":"https://www.amazon.com/dp/B09SG2Q23M?tag=desiredplus-20"},
+ {"asin":"B0C6S6TPRH","title":"Belkin 12-Outlet Surge Protector Power Strip with USB Ports","link":"https://www.amazon.com/dp/B0C6S6TPRH?tag=desiredplus-20"},
+ {"asin":"B08P5LRY37","title":"ALESTOR Surge Protector Power Strip with 12 Outlets and 4 USB Ports","link":"https://www.amazon.com/dp/B08P5LRY37?tag=desiredplus-20"},
+ {"asin":"B0CCTF94DR","title":"EooCoo LCD Writing Tablet for Kids 2 Pack 8.5 Inch","link":"https://www.amazon.com/dp/B0CCTF94DR?tag=desiredplus-20"},
+ {"asin":"B0D46FMQTJ","title":"4 Pack LCD Writing Tablet for Kids 8.5 Inch Colorful Drawing Board","link":"https://www.amazon.com/dp/B0D46FMQTJ?tag=desiredplus-20"},
+ {"asin":"B07CTXRKH8","title":"Cool Coolers by Fit & Fresh XL Slim Reusable Ice Packs","link":"https://www.amazon.com/dp/B07CTXRKH8?tag=desiredplus-20"},
+ {"asin":"B00CHOLNZS","title":"Cool Coolers by Fit + Fresh 4 Pack Slim Reusable Ice Packs","link":"https://www.amazon.com/dp/B00CHOLNZS?tag=desiredplus-20"},
+ {"asin":"B01M06AQLF","title":"Healthy Packers Ice Packs for Lunch Boxes and Coolers","link":"https://www.amazon.com/dp/B01M06AQLF?tag=desiredplus-20"},
+ {"asin":"B0B4DHC43V","title":"BOYA USB-C Wireless Lavalier Microphone BY-WM3T2 U1","link":"https://www.amazon.com/dp/B0B4DHC43V?tag=desiredplus-20"},
+ {"asin":"B0CNY612G6","title":"STANLEY Quencher H2.0 FlowState 40 oz Tumbler","link":"https://www.amazon.com/dp/B0CNY612G6?tag=desiredplus-20"},
+]
 
 def _load_candidate_cache() -> List[Dict[str, Any]]:
     try:
@@ -115,6 +127,7 @@ async def discover_pin_n_products(
     excluded |= registry.all_published_asins()
     chosen: Dict[str, Dict[str, Any]] = {}
     cache=_load_candidate_cache()
+    cache = PIN_N_SEED_CANDIDATES + cache
     for cached in cache:
         c=_candidate(cached, "Pin N cache")
         if not c: continue
