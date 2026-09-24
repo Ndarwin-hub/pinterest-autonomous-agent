@@ -266,11 +266,13 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
     # workflow. For direct /submit URLs, derive a deterministic name from
     # the product slug instead of fetching Amazon.
     if parts:
-        slug = parts[-2] if parts[-1].upper().startswith("B") and len(parts[-1]) == 10 and len(parts) > 1 else parts[-1]
-        slug = re.sub(r"[-_]+", " ", slug)
-        slug = re.sub(r"\\s+", " ", slug).strip()
-        if slug:
-            product["name"] = slug[:120]
+        last=parts[-1]
+        if not (last.upper().startswith("B") and len(last)==10):
+            slug = parts[-2] if len(parts)>1 and parts[-1].upper().startswith("B") and len(parts[-1])==10 else last
+            slug = re.sub(r"[-_]+", " ", slug)
+            slug = re.sub(r"\\s+", " ", slug).strip()
+            if slug:
+                product["name"] = slug[:120]
 
     if not product["name"]:
         asin_match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?]|$)", parsed.path, re.I)
