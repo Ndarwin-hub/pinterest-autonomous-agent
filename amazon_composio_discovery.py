@@ -45,7 +45,13 @@ def _candidate(raw:Dict[str,Any],category:str)->Optional[Dict[str,Any]]:
  link=_detail_url(raw.get("link","")); title=str(raw.get("title") or "").strip(); price=raw.get("extracted_price")
  independent = str(raw.get("source") or "").startswith("independent_web_search")
  if not asin or not link or len(title)<6 or (price in (None,"") and not independent) or registry.is_published(asin=asin,url=link): return None
- if independent and price in (None,""): price=0
+ if independent:
+  tl=title.lower().strip()
+  restricted=("pharmacy","prescription","prescribed","medication","medicine","drug","metformin","sitagliptin","fluticasone","vilanterol","insulin","antibiotic")
+  generic=(tl in {"amazon","amazon.com"} or tl == f"product {asin.lower()}" or len(re.findall(r"[a-zA-Z]{3,}",title)) < 2)
+  if generic or any(term in tl for term in restricted): return None
+  if len(title)<20: return None
+  if price in (None,""): price=0
  badges=raw.get("badges") or []; badges=[badges] if isinstance(badges,str) else badges; bt=" ".join(map(str,badges)).lower()
  if "unavailable" in bt:return None
  bought=_bought(raw.get("bought_last_month")); rating=float(raw.get("rating") or 0); reviews=int(raw.get("reviews") or 0)
