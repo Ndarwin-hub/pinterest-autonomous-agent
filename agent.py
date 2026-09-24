@@ -270,13 +270,21 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
         if asin_match:
             asin=asin_match.group(1).upper()
             try:
-                from amazon_composio_discovery import _independent_web_search
-                recovered=await _independent_web_search(asin,1)
-                recovered_name=next((str(x.get("title") or "").strip() for x in recovered if str(x.get("title") or "").strip() and str(x.get("title") or "").strip().lower() not in {"amazon","amazon.com"}), "")
-                if recovered_name:
-                    product["name"]=recovered_name[:120]
+                from pin_n_discovery import PIN_N_SEED_CANDIDATES
+                seed_name=next((str(x.get("title") or "").strip() for x in PIN_N_SEED_CANDIDATES if str(x.get("asin") or "").upper()==asin), "")
+                if seed_name:
+                    product["name"]=seed_name[:120]
             except Exception as exc:
-                logger.warning("Independent ASIN identity recovery failed for %s: %s",asin,str(exc)[:300])
+                logger.warning("Seed ASIN identity recovery failed for %s: %s",asin,str(exc)[:300])
+            if not product["name"]:
+                try:
+                    from amazon_composio_discovery import _independent_web_search
+                    recovered=await _independent_web_search(asin,1)
+                    recovered_name=next((str(x.get("title") or "").strip() for x in recovered if str(x.get("title") or "").strip() and str(x.get("title") or "").strip().lower() not in {"amazon","amazon.com"}), "")
+                    if recovered_name:
+                        product["name"]=recovered_name[:120]
+                except Exception as exc:
+                    logger.warning("Independent ASIN identity recovery failed for %s: %s",asin,str(exc)[:300])
         if not product["name"]:
             product["name"] = f"Amazon product {asin_match.group(1).upper()}" if asin_match else "Product"
 
