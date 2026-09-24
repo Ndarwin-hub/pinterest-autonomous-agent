@@ -290,7 +290,7 @@ async def pin_a_trigger(
         try:
             key=_jwks.get_signing_key_from_jwt(token).key
             claims=jwt.decode(token,key,algorithms=["RS256"],issuer=GITHUB_ISSUER,audience=GITHUB_AUDIENCE,options={"require":["iss","sub","aud","exp","repository"]})
-            if claims.get("repository")==GITHUB_REPO and claims.get("ref")=="refs/heads/main" and claims.get("event_name") in ("schedule","workflow_dispatch"): authorized=True
+            if claims.get("repository")==GITHUB_REPO and claims.get("ref")=="refs/heads/main" and claims.get("event_name") in ("schedule","workflow_dispatch","repository_dispatch"): authorized=True
         except Exception as exc: logger.warning("Pin A GitHub OIDC authentication failed: %s",type(exc).__name__)
     if not authorized: raise HTTPException(status_code=401,detail="Invalid or missing Pin A authentication")
     source=(x_pin_a_source or ((body or {}).get("source") if isinstance(body,dict) else None) or "unknown").strip()[:200]
