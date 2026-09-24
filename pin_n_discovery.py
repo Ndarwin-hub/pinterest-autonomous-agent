@@ -7,7 +7,7 @@ the existing shared enqueue/publish/verify pipeline.
 """
 from __future__ import annotations
 
-import logging
+import logging, os, json
 from typing import Any, Dict, List, Optional, Set
 
 from published_registry import registry
@@ -21,6 +21,26 @@ from amazon_composio_discovery import (
 from batch_submit import validate_and_canonicalize, MAX_BATCH
 
 logger = logging.getLogger("pinterest-agent.pin_n_discovery")
+PIN_N_CACHE_PATH = os.getenv("PIN_N_CANDIDATE_CACHE", os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"), "pin_n_candidate_cache.json"))
+PIN_N_CACHE_MAX = 200
+
+def _load_candidate_cache() -> List[Dict[str, Any]]:
+    try:
+        with open(PIN_N_CACHE_PATH, "r", encoding="utf-8") as f:
+            data=json.load(f)
+        return data if isinstance(data,list) else []
+    except Exception:
+        return []
+
+def _save_candidate_cache(items: List[Dict[str, Any]]) -> None:
+    try:
+        os.makedirs(os.path.dirname(PIN_N_CACHE_PATH), exist_ok=True)
+        tmp=PIN_N_CACHE_PATH+".tmp"
+        with open(tmp,"w",encoding="utf-8") as f: json.dump(items[-PIN_N_CACHE_MAX:],f,default=str,separators=(",",":"))
+        os.replace(tmp,PIN_N_CACHE_PATH)
+    except Exception as exc:
+        logger.warning("Pin N candidate cache write failed: %s",exc)
+
 
 # Keep the synchronous Pin N request safely below the Railway proxy timeout.
 # Pin N remains independent from Pin A; broader discovery can be resumed by
@@ -78,6 +98,15 @@ async def discover_pin_n_products(
     excluded = {str(a).upper() for a in (exclude_asins or set()) if a}
     excluded |= registry.all_published_asins()
     chosen: Dict[str, Dict[str, Any]] = {}
+    cache=_load_candidate_cache()
+    for cached in cache:
+        c=_candidate(cached, "Pin N cache")
+        if not c: continue
+        asin=str(c.get("asin") or "").upper()
+        if not asin or asin in excluded or asin in chosen: continue
+        c["balance_mode"]="pin_n_cache"
+        chosen[asin]=c
+        if len(chosen)>=n: break
     queries: List[str] = list(PIN_N_BROAD_QUERIES)
 
     # Add a small deterministic fallback pool without allowing the full Pin A
@@ -136,10 +165,12 @@ async def discover_pin_n_products(
             c["pin_n_category"] = board.get("category")
             c["pin_n_confidence"] = board.get("confidence")
             chosen[final_asin] = c
+            cache.append(c)
 
             if len(chosen) >= n:
                 break
 
+    _save_candidate_cache(cache)
     selected = sorted(chosen.values(), key=_score)[:n]
     logger.info(
         "Pin N discovery requested=%s eligible=%s queries=%s published_exclusions=%s",
