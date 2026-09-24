@@ -1,0 +1,75 @@
+name: Verify Pin 2 Publication
+
+on:
+  push:
+    paths:
+      - ".github/pin2-verify-trigger"
+  workflow_dispatch:
+    inputs:
+      job_ids:
+        description: "Comma-separated Railway job IDs to verify"
+        required: true
+        default: "ad72d989-a4fa-4a36-b7c6-ce8b06c5ebe2,5f45d2dc-308d-4d12-88b4-44832fe9c25b"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Get GitHub OIDC token
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -H 'Accept: application/json; api-version=2.0' \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          token=$(printf '%s' "$response" | jq -r '.value')
+          test -n "$token" && test "$token" != "null"
+          echo "ID_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Verify both Pin 2 publishing jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            job_ids=$(jq -r '.inputs.job_ids' "$GITHUB_EVENT_PATH")
+          else
+            job_ids="ad72d989-a4fa-4a36-b7c6-ce8b06c5ebe2,5f45d2dc-308d-4d12-88b4-44832fe9c25b"
+          fi
+          IFS=',' read -r -a jobs <<< "$job_ids"
+          test "${#jobs[@]}" -eq 2
+
+          for attempt in $(seq 1 180); do
+            all_done=true
+            all_published=true
+            echo "=== publication verification attempt $attempt ==="
+            for job_id in "${jobs[@]}"; do
+              status=$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors \
+                -H "Authorization: Bearer $ID_TOKEN" \
+                -G "https://web-production-dae68.up.railway.app/status/$job_id")
+              printf '%s\n' "$status" | jq .
+              state=$(printf '%s' "$status" | jq -r '.status // .state // "unknown"')
+              if [[ "$state" != "completed" && "$state" != "success" && "$state" != "published" && "$state" != "failed" && "$state" != "error" ]]; then
+                all_done=false
+              fi
+              if [[ "$state" != "completed" && "$state" != "success" && "$state" != "published" ]]; then
+                all_published=false
+              fi
+            done
+            if [[ "$all_done" == true ]]; then
+              if [[ "$all_published" == true ]]; then
+                echo "PIN_2_PUBLICATION_SUCCESS"
+                exit 0
+              fi
+              echo "PIN_2_PUBLICATION_FAILED" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "PIN_2_PUBLICATION_VERIFICATION_TIMEOUT" >&2
+          exit 1
