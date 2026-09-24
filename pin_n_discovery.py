@@ -50,6 +50,22 @@ PIN_N_BROAD_QUERIES = [
     "new releases Amazon",
     "new arrivals Amazon",
     "Amazon best sellers",
+    "electronics gadgets best sellers",
+    "home kitchen products",
+    "running shoes",
+    "wireless headphones",
+    "USB C charger",
+    "gaming headset",
+    "wireless microphone",
+    "fitness accessories",
+    "travel camping gear",
+    "pet supplies",
+    "baby products",
+    "office productivity products",
+    "smartphone accessories",
+    "computer accessories",
+    "countertop appliances",
+    "personal care products",
 ]
 
 def _priority(query: str) -> int:
