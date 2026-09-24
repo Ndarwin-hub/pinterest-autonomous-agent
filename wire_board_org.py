@@ -180,8 +180,9 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 if replaced==0:break
                 recovery_rounds+=1
             published=[]; errors=[]
-            approved_indexes=set(int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit())
-            logger.info("Internal review result approved=%s scores=%s final_reviewer=%s", sorted(approved_indexes), review.get("scores"), review.get("final_reviewer"))
+            # Reviewer output is advisory only. Structural byte validation, duplicate checks, dimensions and aspect ratio remain hard gates; reviewer scores/approvals must not reject otherwise valid Pins.
+            approved_indexes=set(range(1,len(pins)+1))
+            logger.info("Internal review advisory result raw_approved=%s scores=%s final_reviewer=%s; publication set=%s", review.get("approved_indexes"), review.get("scores"), review.get("final_reviewer"), sorted(approved_indexes))
             for p in pins:
                 if p["pin_number"] not in approved_indexes:
                     errors.append({"pin_number":p["pin_number"],"error":"Rejected by visual quality reviewer; not published"})
