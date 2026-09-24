@@ -28,7 +28,7 @@ def _is_asin(value: str) -> bool:
 def _generic(value: str) -> bool:
     v = _clean(value).lower()
     if not v or v in _GENERIC or _is_asin(v): return True
-    if v.startswith("amazon.com") or v.startswith("amazon "): return True
+    if v.startswith("amazon.com "): return True
     if v in {"electronics","fashion","home","kitchen","shoes","sneakers"}: return True
     return False
 
