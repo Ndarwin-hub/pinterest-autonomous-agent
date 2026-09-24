@@ -1,41 +1,82 @@
-# Pin URL command
+# Pin command contract
 
-## Canonical command/tool
-`PINTEREST_SUBMIT_URL`
+## 1. Run pin URL
 
-## Input
-```json
-{"url":"<exact product-or-affiliate-url>"}
-```
+Canonical command/tool: `PINTEREST_SUBMIT_URL`
 
-## Behavior
-- Accept exactly one `http://` or `https://` product/affiliate URL.
+Behavior:
+- Accept exactly one HTTP(S) product/affiliate URL.
 - Preserve the URL unchanged as the Pinterest destination URL.
-- Forward it to the existing Railway `POST /submit` workflow.
-- The existing workflow researches the product, attempts the four-Pin workflow, publishes each Pin independently, and verifies each published Pin independently.
-- Successfully published Pins are kept. There is no all-or-nothing rollback or unpublish step.
-- Final job status is based on verified published Pins: `completed` for 4/4, `completed_partial` for 1-3/4, and `failed` for 0/4.
-- A failed or unverified Pin is never falsely marked successful, but it does not invalidate or remove other Pins that were successfully published and verified.
-- Existing durable publication idempotency and image-diversity guards remain in the workflow.
-- Manual `/submit` behavior remains intact.
-- The same result/status contract is used by manual `/submit`, scheduled Amazon automation, and the Composio-connected Amazon automation path because they all enqueue through the same job pipeline.
+- Forward it to the existing Railway POST `/submit` workflow.
+- Research the product, create up to four Pins, publish each independently, and independently verify each published Pin.
+- Keep successful Pins; never unpublish them because another Pin failed.
+- `completed` = 4/4 verified, `completed_partial` = 1-3/4 verified, `failed` = 0/4.
+- Manual `/submit` remains intact and isolated.
 
-## Railway endpoint
-`https://web-production-dae68.up.railway.app/submit`
+Railway endpoint: `https://web-production-dae68.up.railway.app/submit`
 
-## MCP bridge
-The Railway service contains the Composio Custom MCP bridge. Its exposed tool is `PINTEREST_SUBMIT_URL`; the bridge forwards the exact URL to `/submit` with the configured Railway API secret. The bridge is intentionally a thin control surface and does not duplicate the Pinterest workflow.
+Do not shorten, rewrite, strip affiliate parameters, substitute another product URL, bypass `/submit`, or unpublish successful Pins.
 
-## Important
-Do not shorten, rewrite, strip affiliate parameters, substitute another product URL, bypass `/submit`, or unpublish successful Pins when using this command.
+---
 
+## 2. Run pin N
 
-## Pin N product-count command
-- `Pin N` means N distinct Amazon US products, not N total Pins.
-- Railway discovers N currently buyable Amazon US product-detail listings, rejects duplicate ASINs against the durable publication registry, injects/preserves affiliate tag `desiredplus-20`, and submits each accepted product to the existing Pinterest job pipeline.
-- For each product, the existing image workflow prioritizes the best verified imagery in this order: native 12K/8K/4K imagery when available, then other verified high-quality imagery, then the native product-page image only as the final image-source fallback.
-- Image URLs are verified by fetching the actual image and checking dimensions; the same image URL is not reused within a product's Pin set.
-- A product is not discarded merely because fewer than four usable images are available. Every usable, individually verified Pin is published and retained. The product job is `completed_partial` when at least one verified Pin is published but fewer than four are available; zero verified Pins is failure.
-- Railway waits for the product jobs and returns the actual per-product Pin counts and verification results.
-- The existing manual `Pin + [product URL]` / `PINTEREST_SUBMIT_URL` path is unchanged.
-- The Composio Custom MCP bridge exposes `PINTEREST_PIN_COUNT` for this command. `Pin N` remains a product-count command; each product now targets four Pins.
+`Run pin N` means N distinct Amazon US products, not N total Pins.
+- Pin 1 = 1 product; Pin 2 = 2 products; ... Pin 10 = 10 products.
+- Each accepted product targets four Pins.
+
+### Primary execution
+1. Start from the assistant/GitHub command path.
+2. Request Pin-N work through the dedicated durable `/amazon/pin-count` endpoint.
+3. Use a unique request ID and poll durable status.
+4. Discover currently buyable Amazon US product-detail listings, exclude published ASINs, and preserve/inject `desiredplus-20`.
+5. Send each accepted product through the existing shared Pinterest publication pipeline.
+6. Verify actual Pinterest publication before reporting success.
+
+### Railway-failure fallback
+- `Run pin N` must not stop merely because Railway HTTP/proxy/deployment access temporarily fails.
+- The assistant/GitHub layer is the fallback controller: retry safely, inspect durable status, and resume unfinished products without touching Pin A or manual `/submit`.
+- When the production service is unavailable, continue from the GitHub side using the repository's existing executable workflow and configured credentials/capabilities when available.
+- Never fabricate product discovery, Pin IDs, image verification, or publication status.
+- Never consume Pin-A daily ledger slots or restart Batch 1.
+- Never bypass shared publication guards.
+- Requested products are successful only after actual Pinterest verification. Partial completion is never reported as success.
+
+---
+
+## 3. Unified latest Railway image-selection model
+
+The current Railway image-selection model is the single shared image-selection contract for:
+**Run pin URL → Run pin N / assistant-side execution → Railway fallback**.
+
+Priority:
+1. Composio Image Search native 8K+ imagery.
+2. Composio Image Search native 4K+ imagery.
+3. Other executable genuine image providers, ranked by verified resolution.
+4. Existing executable AI image generation/editing, only when actually configured.
+5. Verified 4K local upscale/derivative of the best genuine external image.
+6. Native Amazon product-page imagery only as the final image-source fallback.
+7. No placeholder or invented image.
+
+Mandatory checks:
+- Fetch actual image bytes before trusting dimensions.
+- Prefer genuine 12K/8K/4K imagery when available.
+- Reject broken, inaccessible, invalid, undersized, or visually duplicate candidates.
+- Never reuse the same image URL within one product's Pin set.
+- Register visual fingerprints and prevent near-duplicate reuse.
+- AI/external reviewers are advisory only; they cannot by themselves reject an otherwise structurally valid Pin.
+- Byte validation, dimensions, aspect ratio, and duplicate/fingerprint checks remain hard gates.
+- If fewer than four valid images exist, publish every valid individually verified Pin instead of failing the whole product.
+- Product-page imagery remains last resort; Pillow/placeholder images are never publishable.
+
+### Single-source implementation rule
+All three surfaces must enter the same shared image-selection/publication pipeline. No route may maintain a separate legacy image selector or bypass the current Railway image-selection model.
+
+---
+
+## 4. Isolation rules
+- Pin A scheduler is unchanged; its daily ledger remains authoritative.
+- Run pin URL remains the existing manual `/submit` route.
+- Run pin N is isolated product-count execution and must not alter Pin-A scheduling or ledger ownership.
+- GitHub is the command/fallback controller; Railway is the production execution service when available.
+- Railway failure triggers recovery/retry, not a false success.
