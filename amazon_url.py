@@ -151,12 +151,18 @@ def resolve_amazon_product_url(url: str, tag: str = AFFILIATE_TAG) -> str:
         except ValueError:
             pass
 
-    try:
-        final_url, status = _safe_follow(original)
-    except Exception as e:
+    # Do not resolve Amazon short/redirect URLs by requesting the Amazon
+    # destination from Railway. That can create an Amazon session without a
+    # customer click. Callers should supply a full Amazon US product URL/ASIN.
+    if is_amazon_short_url(original):
         raise RuntimeError(
-            f"Failed to resolve Amazon URL {original!r}: {type(e).__name__}: {e}"
-        ) from e
+            "Amazon short URLs cannot be resolved automatically; provide the full "
+            "Amazon US /dp/ASIN product URL so the automation never opens Amazon."
+        )
+
+    raise RuntimeError(
+        f"Unsupported Amazon URL for offline canonicalization: {original!r}"
+    )
 
     logger.info(
         "Amazon short/redirect resolved status=%s final=%s",
