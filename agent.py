@@ -230,7 +230,14 @@ def _non_affiliate_research_url(url: str) -> str:
 
 
 async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[str, Any]:
-    job_store.update(job_id, progress="Researching product page")
+    """Build product metadata without requesting Amazon pages.
+
+    Amazon Special Links are destinations for real customers, not research
+    endpoints. This workflow deliberately does not open Amazon product pages
+    from Railway. Product discovery supplies the title/ASIN, while image
+    providers supply publishable images independently.
+    """
+    job_store.update(job_id, progress="Researching product metadata (no Amazon page request)")
     product: Dict[str, Any] = {
         "source_url": url,
         "name": None,
@@ -241,101 +248,30 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
         "brand": None,
     }
 
-    header_sets = [
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-        {"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"},
+    parsed = urlparse(url)
+    path = parsed.path.strip("/")
+    parts = [
+        p for p in path.split("/")
+        if p and p.lower() not in ("dp", "gp", "product", "listing", "p")
     ]
 
-    html = ""
-    for headers in header_sets:
-        try:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                research_url = _non_affiliate_research_url(url)
-                resp = await client.get(research_url, headers=headers)
-                if resp.status_code < 400 and len(resp.text) > 400:
-                    html = resp.text[:300000]
-                    break
-        except Exception as e:
-            logger.warning(f"Fetch failed: {e}")
+    # Product discovery normally supplies the title before this shared
+    # workflow. For direct /submit URLs, derive a deterministic name from
+    # the product slug instead of fetching Amazon.
+    if parts:
+        slug = parts[-2] if parts[-1].upper().startswith("B") and len(parts[-1]) == 10 and len(parts) > 1 else parts[-1]
+        slug = re.sub(r"[-_]+", " ", slug)
+        slug = re.sub(r"\\s+", " ", slug).strip()
+        if slug:
+            product["name"] = slug[:120]
 
-    if html:
-        try:
-            from bs4 import BeautifulSoup
+    if not product["name"]:
+        asin_match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?]|$)", parsed.path, re.I)
+        product["name"] = f"Amazon product {asin_match.group(1).upper()}" if asin_match else "Product"
 
-            soup = BeautifulSoup(html, "lxml")
-            for script in soup.find_all("script", type="application/ld+json"):
-                try:
-                    ld = json.loads(script.string or "")
-                    candidates = ld if isinstance(ld, list) else [ld]
-                    for obj in candidates:
-                        if not isinstance(obj, dict):
-                            continue
-                        t = obj.get("@type")
-                        if t == "Product" or (isinstance(t, list) and "Product" in t):
-                            if obj.get("name") and not product["name"]:
-                                product["name"] = str(obj["name"])[:200]
-                            if obj.get("description") and not product["description"]:
-                                product["description"] = str(obj["description"])[:500]
-                            brand = obj.get("brand")
-                            if isinstance(brand, dict):
-                                product["brand"] = brand.get("name")
-                            elif isinstance(brand, str):
-                                product["brand"] = brand
-                            img = obj.get("image")
-                            if img:
-                                if isinstance(img, list) and img:
-                                    img = img[0]
-                                if isinstance(img, dict):
-                                    img = img.get("url") or img.get("contentUrl")
-                                if isinstance(img, str) and img.startswith("http"):
-                                    product["images"].append(img)
-                except Exception:
-                    pass
+    product["description"] = f"Discover {product['name']}."
 
-            title = soup.find("title")
-            if title and not product["name"]:
-                name = title.get_text(strip=True)
-                name = re.sub(r"\s*[:\|]\s*Amazon\.?com.*$", "", name, flags=re.I)
-                name = re.sub(r"\s*-\s*Amazon\.com.*$", "", name, flags=re.I)
-                if "not found" not in name.lower():
-                    product["name"] = name[:200]
-
-            meta_desc = soup.find("meta", attrs={"name": "description"}) or soup.find(
-                "meta", attrs={"property": "og:description"}
-            )
-            if meta_desc and meta_desc.get("content") and not product["description"]:
-                product["description"] = meta_desc["content"][:500]
-
-            for prop in ("og:image", "og:image:secure_url", "twitter:image"):
-                tag = soup.find("meta", attrs={"property": prop}) or soup.find("meta", attrs={"name": prop})
-                if tag and tag.get("content") and tag["content"].startswith("http"):
-                    product["images"].append(tag["content"])
-
-            if not product["images"]:
-                img = soup.select_one("#landingImage, #imgTagWrapperId img, img[data-old-hires]")
-                if img:
-                    src = img.get("data-old-hires") or img.get("src") or ""
-                    if src.startswith("//"):
-                        src = "https:" + src
-                    if src.startswith("http"):
-                        product["images"].append(src)
-        except Exception as e:
-            logger.warning(f"Parse failed: {e}")
-
-    if not product["name"] or "not found" in (product["name"] or "").lower():
-        path = urlparse(url).path.strip("/")
-        parts = [p for p in path.split("/") if p and p.lower() not in ("dp", "gp", "product", "listing", "p")]
-        guess = parts[-1].replace("-", " ").replace("_", " ") if parts else product["site"]
-        product["name"] = re.sub(r"\s+", " ", guess)[:80] or "Product"
-
-    if not product["description"]:
-        product["description"] = f"Discover {product['name']}."
-
-    name_l = (product["name"] or "").lower()
+    name_l = product["name"].lower()
     for key, cat in [
         ("headphone", "audio"),
         ("earbud", "audio"),
@@ -351,15 +287,7 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
             product["category"] = cat
             break
 
-    seen = set()
-    clean = []
-    for im in product["images"]:
-        if im not in seen:
-            seen.add(im)
-            clean.append(im)
-    product["images"] = clean[:10]
     return product
-
 
 def build_four_seo(product: Dict[str, Any]) -> List[Dict[str, str]]:
     name = (product.get("name") or "Product").strip()
