@@ -1,6 +1,7 @@
 """Amazon discovery facade using Composio only for scheduled discovery."""
 from __future__ import annotations
 import asyncio
+import os
 from typing import Optional, Set
 import logging
 logger=logging.getLogger("pinterest-agent.amazon_discovery")
@@ -47,7 +48,10 @@ _BOARD_CATEGORY={
  "Sports, Games & Toys":"Toys & Games","Fashion & Lifestyle":"Clothing/Shoes",
  "Pet Supplies":"Pet Supplies","Baby & Kids":"Baby","Automotive & Tools":"Electronics",
  "Office & Productivity":"Computers & Accessories","Travel & Camping":"Clothing/Shoes","Books & Learning":"Home & Kitchen"}
-def is_dormant()->bool:return not (amazon_credentials_present() or composio_ready())
+def is_dormant()->bool:
+    # Amazon-native HTML, Best Sellers, and the durable reservoir are valid
+    # discovery paths even when Composio/API credentials are unavailable.
+    return os.getenv("AMAZON_DISCOVERY_DISABLED","0").strip().lower() in {"1","true","yes"}
 BOARD_CATEGORY_KEYS={
  "Appliances & Home":"home","Watches & Clocks":"watches_clocks","Automotive & Tools":"automotive","Baby & Kids":"health_baby_kids",
  "Beauty & Personal Care":"health_beauty_personal","Books & Learning":"books","Electronics & Gadgets":"electronics_root",
