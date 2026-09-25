@@ -119,11 +119,20 @@ class AmazonScheduler:
    except asyncio.CancelledError: pass
    self._daily_task=None
  def gate_status(self,live_boards=None):
-  amazon_source_ready=not is_dormant();ready=amazon_source_ready and SCHEDULER_ENABLED;info=classify_live_boards(live_boards or []);reasons=[]
+  # Discovery is intentionally fail-open to the five-layer Amazon chain.
+  # Composio/Creators credentials are optional; the scheduler must not stop
+  # before discover_for_board gets a chance to use direct Amazon, reservoir,
+  # and Best Sellers fallbacks.
+  discovery_enabled=os.getenv("AMAZON_DISCOVERY_DISABLED","0").strip().lower() not in ("1","true","yes")
+  ready=discovery_enabled and SCHEDULER_ENABLED
+  info=classify_live_boards(live_boards or []);reasons=[]
   if not SCHEDULER_ENABLED:reasons.append("AMAZON_SCHEDULER_ENABLED is false")
-  if not amazon_source_ready:reasons.append("Composio Amazon connection/configuration is not available")
+  if not discovery_enabled:reasons.append("AMAZON_DISCOVERY_DISABLED is enabled")
   if live_boards is not None and not info["scheduler_ready"]:reasons.append(f"Need {REQUIRED_PRIMARY_SLOTS} approved primary boards; have {info['primary_count']}")
-  return {"credentials_present":amazon_source_ready,"scheduler_enabled_flag":SCHEDULER_ENABLED,"mode":SCHEDULER_MODE,"source":"amazon_api_primary_composio_fallback" if amazon_credentials_present() else "composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),"blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
+  return {"credentials_present":discovery_enabled,"scheduler_enabled_flag":SCHEDULER_ENABLED,"mode":SCHEDULER_MODE,
+          "source":"five_layer_amazon_discovery","amazon_api_credentials_present":amazon_credentials_present(),
+          "board_info":info,"ready":ready and (live_boards is None or info["scheduler_ready"]),
+          "blocking_reasons":reasons,"slot_interval_sec":SLOT_INTERVAL_SEC,"daily_target":SLOT_COUNT}
  async def start(self,*,enqueue,list_boards,wait_job=None):
   if SCHEDULER_MODE!="continuous":self.status.update({"mode":SCHEDULER_MODE,"running":False,"dormant_reason":"external_mode"});return
   if self._task and not self._task.done():return
@@ -182,8 +191,9 @@ class AmazonScheduler:
 
  async def run_batch(self,batch_index:int,enqueue,list_boards,wait_job):
   if batch_index < 1 or batch_index > (SLOT_COUNT // BATCH_SIZE):raise ValueError(f"batch must be 1..{SLOT_COUNT // BATCH_SIZE}")
-  if is_dormant():
-   self.status["dormant_reason"]="no_composio";await send_failure_alert(batch=batch_index,reason="Composio Amazon discovery is unavailable");return {"status":"failed","batch":batch_index,"reason":"Composio Amazon discovery is unavailable"}
+  # Do not gate the batch on Composio/API credentials. discover_for_board()
+  # owns the five-layer Amazon discovery chain and can continue when layer 1
+  # is administratively disabled.
   live=await list_boards();gate=self.gate_status(live)
   if not gate["ready"]:
    self.status["dormant_reason"]="; ".join(gate["blocking_reasons"]);await send_failure_alert(batch=batch_index,reason="scheduler gate blocked",details="; ".join(gate["blocking_reasons"]));return {"status":"blocked","batch":batch_index,"reasons":gate["blocking_reasons"]}
@@ -216,7 +226,7 @@ class AmazonScheduler:
        ledger.mark_slot(remaining,status="deferred",day=day,error="pinterest_circuit_breaker_active")
      break
    status="completed" if attempted>0 and successes>=attempted and not errors else ("partial_failure" if successes>0 else "failed")
-   result={"status":status,"day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted,"source":"composio_amazon","board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"slot_order":slot_order,"snapshot":balance_meta.get("snapshot")}}
+   result={"status":status,"day":day,"batch":batch_index,"attempted":attempted,"successes":successes,"errors":errors,"slots_required":attempted,"source":"five_layer_amazon_discovery","board_balance":{"available":balance_meta.get("available"),"state":balance_meta.get("state"),"spread":balance_meta.get("spread"),"message":balance_meta.get("message"),"slot_order":slot_order,"snapshot":balance_meta.get("snapshot")}}
    ledger.complete_batch(day,batch_index,owner,status=status,result_json=json.dumps(result,separators=(",",":")))
    if status!="completed":await send_failure_alert(batch=batch_index,reason=status,details=json.dumps(result))
    return result
