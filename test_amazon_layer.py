@@ -8,7 +8,7 @@ from amazon_client import amazon_credentials_present,extract_detail_page_url
 from amazon_discovery import is_dormant,assert_url_unmodified
 from amazon_boards import classify_live_boards,build_slot_specs,REQUIRED_PRIMARY_SLOTS
 class Tests(unittest.TestCase):
- def test_dormant(self): self.assertFalse(amazon_credentials_present()); self.assertTrue(is_dormant())
+ def test_not_dormant_without_api_credentials(self): self.assertFalse(amazon_credentials_present()); self.assertFalse(is_dormant())
  def test_asin_and_exact_url(self):
   u="https://www.amazon.com/dp/B0ABCDEFGH?tag=desiredplus-20&x=1"; self.assertEqual(extract_asin(u),"B0ABCDEFGH"); self.assertEqual(extract_detail_page_url({"asin":"B0ABCDEFGH","detailPageURL":u}),u); self.assertTrue(assert_url_unmodified(u,u))
  def test_registry_duplicate(self):
