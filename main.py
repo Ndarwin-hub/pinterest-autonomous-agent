@@ -75,9 +75,16 @@ def extract_url(text:str)->str:
  if text.startswith("http"):return text
  raise ValueError("No valid http(s) URL found")
 async def _pin_a_request_worker():
-    """Durable Pin A executor: the database request survives Railway restarts/deployments."""
+    """Non-blocking durable Pin A dispatcher.
+
+    The queue request only wakes/coalesces the daily session. It never waits for
+    the multi-hour session itself, so duplicate GitHub/Railway/Cloudflare wakes
+    cannot starve later requests. The daily scheduler remains the single owner
+    of the day's 10-batch execution.
+    """
     recovered=daily_ledger.recover_pin_a_requests()
-    if recovered: logger.warning("Recovered %s interrupted Pin A request(s) after process restart.",recovered)
+    if recovered:
+        logger.warning("Recovered %s interrupted Pin A request(s) after process restart.",recovered)
     while True:
         req=None
         try:
@@ -87,25 +94,31 @@ async def _pin_a_request_worker():
                 continue
             request_id=req["request_id"]; day=req["day"]
             logger.info("Pin A durable request claimed request_id=%s source=%s day=%s",request_id,req["source"],day)
-            result=await amazon_scheduler.start_daily_session(app.state.amazon_enqueue,app.state.amazon_list_boards,app.state.amazon_wait_job,trigger_batch=1)
-            logger.info("Pin A durable request started request_id=%s result=%s",request_id,result)
-            if result.get("status")=="ignored":
+            result=await amazon_scheduler.start_daily_session(
+                app.state.amazon_enqueue,app.state.amazon_list_boards,
+                app.state.amazon_wait_job,trigger_batch=1
+            )
+            logger.info("Pin A durable request dispatch result request_id=%s result=%s",request_id,result)
+            status=str(result.get("status") or "")
+            if status=="ignored":
                 daily_ledger.finish_pin_a_request(request_id,"failed",str(result.get("reason") or "scheduler_ignored"))
-                continue
-            while (amazon_scheduler.status.get("daily_session") or {}).get("running"):
-                await asyncio.sleep(15)
-            if daily_ledger.is_day_complete(day):
+            elif status in ("session_started","already_running","already_completed"):
+                # A request is satisfied once it successfully wakes, joins, or
+                # observes the authoritative daily session. It must not remain
+                # queued until that session completes.
                 daily_ledger.finish_pin_a_request(request_id,"completed")
-                logger.info("Pin A durable request completed request_id=%s day=%s",request_id,day)
             else:
-                daily_ledger.finish_pin_a_request(request_id,"pending","daily session stopped before day completion; queued for retry")
-                await asyncio.sleep(30)
+                daily_ledger.finish_pin_a_request(request_id,"pending",f"dispatch returned {status or 'unknown'}")
+            # Immediately drain duplicate pending wakes without waiting for the
+            # daily session. This is intentional request coalescing.
+            await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("Pin A durable worker error request_id=%s: %s",((req or {}).get("request_id")),exc)
-            if req: daily_ledger.finish_pin_a_request(req["request_id"],"pending",str(exc)[:1000])
-            await asyncio.sleep(30)
+            logger.exception("Pin A durable dispatcher error request_id=%s: %s",((req or {}).get("request_id")),exc)
+            if req:
+                daily_ledger.finish_pin_a_request(req["request_id"],"pending",str(exc)[:1000])
+            await asyncio.sleep(5)
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
