@@ -187,37 +187,12 @@ async def _disabled_amazon_html_search(query:str,page:int=1)->List[Dict[str,Any]
     return []
 
 async def _search(query:str,page:int=1)->List[Dict[str,Any]]:
- domain="amazon.com"; admin_blocked=False
- try:
-  from agent import run_composio_tool
-  data=await run_composio_tool("COMPOSIO_SEARCH_AMAZON",{"query":query,"amazon_domain":domain,"page":page},retries=0)
-  if isinstance(data,dict) and isinstance(data.get("data"),dict): data=data["data"]
-  products=list(data.get("products") or []) if isinstance(data,dict) else []
-  if products:
-   for p in products:
-    if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
-   return products
-  logger.warning("Direct Composio Amazon search returned no products; trying alternate discovery")
- except Exception as e:
-  msg=str(e); admin_blocked=("403" in msg or "temporarily disabled by the administrator" in msg.lower() or "execution of toolkit" in msg.lower())
-  logger.warning("Direct Composio Amazon search failed admin_blocked=%s: %s",admin_blocked,msg[:500])
- if not admin_blocked:
-  try:
-   from mcp_bridge import composio_router_search_amazon
-   data=await composio_router_search_amazon(query,domain,page)
-   if isinstance(data,dict) and isinstance(data.get("data"),dict): data=data["data"]
-   products=list(data.get("products") or []) if isinstance(data,dict) else []
-   if not products and isinstance(data,dict):
-    for item in (data.get("results") or []):
-     response=item.get("response") if isinstance(item,dict) else None; payload=response.get("data") if isinstance(response,dict) else None
-     if isinstance(payload,dict): products.extend(payload.get("products") or [])
-   if products:
-    for p in products:
-     if isinstance(p,dict): p.setdefault("_amazon_domain",domain)
-    return products
-  except Exception as e: logger.warning("Composio Amazon Tool Router search failed: %s",str(e)[:500])
- return (await _independent_web_search(query,page)) + (await _independent_bing_product_search(query,page)) + (await _independent_jina_search(query,page))
-
+    """Five-layer Amazon discovery with legacy search engines outside the primary chain."""
+    from amazon_five_layer import search as five_layer_search
+    products=await five_layer_search(query,page)
+    if products:
+        return products
+    return (await _independent_web_search(query,page)) + (await _independent_bing_product_search(query,page)) + (await _independent_jina_search(query,page))
 async def discover_category(category:str,exclude_asins:Optional[Set[str]]=None)->Optional[Dict[str,Any]]:
  excluded={x.upper() for x in (exclude_asins or set())}|registry.all_published_asins(); candidates=[]
  for q in CATEGORY_QUERIES.get(category,[category]):
