@@ -688,6 +688,8 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
                     "strategy": strategy["name"],
                     "image_provider": image.get("provider"),
                     "image_id": image.get("id"),
+                    "image_url": image.get("value") if image.get("mode")=="url" else "",
+                    "image_mode": image.get("mode"),
                     "image_score": image.get("score"),
                     "license": image.get("license"),
                     "title": seo["title"],
