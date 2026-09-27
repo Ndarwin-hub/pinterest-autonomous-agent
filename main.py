@@ -35,6 +35,7 @@ from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
 from amazon_boards import REQUIRED_PRIMARY_SLOTS,BOARD_SCOPES
 from daily_ledger import ledger as daily_ledger,BATCH_SIZE
+from video_fallback import pair_status
 import publication_guard
 import image_diversity_guard
 publication_guard.install(agent_module)
@@ -270,9 +271,6 @@ def _video_auth(secret):
 @app.post("/video/batch")
 async def video_batch(body:VideoBatchRequest,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
  _video_auth(x_video_secret); day=daily_ledger.today_str(); batch=int(body.batch); jobs=daily_ledger.video_batch(day,batch)
- # First priority is always the authoritative Pinterest daily ledger. If the normal
- # Pinterest->video enqueue was missed, reconstruct the exact selected products here
- # before any independent fallback discovery is considered.
  try:
   selected=daily_ledger.selected_video_source_batch(day,batch); existing_slots={int(j.get("slot") or 0) for j in jobs}
   for item in selected:
@@ -281,21 +279,13 @@ async def video_batch(body:VideoBatchRequest,x_video_secret:Optional[str]=Header
   jobs=daily_ledger.video_batch(day,batch)
  except Exception as exc:
   logger.exception("Video follower could not reconstruct Pinterest-selected slots: %s",exc)
- if len(jobs)>=BATCH_SIZE: return {"status":"ready","day":day,"batch":batch,"source":"pinterest" if all(j.get("source")=="pinterest" for j in jobs[:BATCH_SIZE]) else "mixed","jobs":jobs[:BATCH_SIZE]}
- if not body.fallback: return {"status":"waiting","day":day,"batch":batch,"jobs":jobs}
- try:
-  cycle=[x for x in BOARD_SCOPES.keys() if x!="Everything Else"]+["Everything Else"]; first=(batch-1)*BATCH_SIZE; wanted=[{"target_board_name":cycle[(n-1)%len(cycle)]} for n in range(first+1,first+BATCH_SIZE+1)]; exclude=set(daily_ledger.historical_selected_asins(exclude_day=day))|daily_ledger.video_selected_asins(day)
-  for idx,spec in enumerate(wanted,start=first+1):
-   if any(int(j.get("slot") or 0)==idx for j in jobs): continue
-   candidate=await discover_for_board(str(spec.get("target_board_name") or "Everything Else"),exclude_asins=exclude)
-   if not candidate: continue
-   asin=str(candidate.get("asin") or "").upper()
-   if not asin: continue
-   exclude.add(asin); product_url=candidate.get("product_url") or candidate.get("affiliate_url"); affiliate=candidate.get("affiliate_url") or product_url
-   daily_ledger.enqueue_video_job(day,batch,idx,asin,product_url,affiliate_url=affiliate,title=candidate.get("title"),source="video_fallback")
-  jobs=daily_ledger.video_batch(day,batch); return {"status":"ready" if len(jobs)>=BATCH_SIZE else "partial","day":day,"batch":batch,"source":"video_fallback","jobs":jobs[:BATCH_SIZE]}
- except Exception as exc:
-  logger.exception("Independent video fallback discovery failed batch=%s: %s",batch,exc); return {"status":"failed","day":day,"batch":batch,"jobs":jobs,"error":str(exc)[:500]}
+ if len(jobs)>=BATCH_SIZE:
+  return {"status":"ready","day":day,"batch":batch,"source":"pinterest","jobs":jobs[:BATCH_SIZE]}
+ return {"status":"waiting","day":day,"batch":batch,"jobs":jobs[:BATCH_SIZE],"fallback_discovery_disabled":True}
+
+@app.get("/video/fallback/status")
+async def video_fallback_status():
+ return pair_status()
 
 @app.post("/video/job/{batch}/{slot}/claim")
 async def video_job_claim(batch:int,slot:int,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
@@ -543,6 +533,17 @@ async def run_job(job_id:str,url:str):
  try:
   job_store.update(job_id,status=JobStatus.RUNNING,progress=f"Starting {PINS_PER_PRODUCT}-pin workflow")
   result=await process_pinterest_job(job_id,url,job_store)
+  try:
+   image_items=[]
+   for pin in result.get("pins") or []:
+    if isinstance(pin,dict) and pin.get("image_url"):
+     image_items.append({"url":pin.get("image_url"),"provider":pin.get("image_provider"),"id":pin.get("image_id"),"score":pin.get("image_score"),"license":pin.get("license"),"pin_number":pin.get("pin_number"),"strategy":pin.get("strategy")})
+   asin=extract_asin(url) or extract_asin(str(result.get("source_url") or ""))
+   if asin and image_items:
+    attached=daily_ledger.attach_video_images(daily_ledger.today_str(),asin,image_items)
+    logger.info("Video image handoff asin=%s images=%s rows=%s",asin,len(image_items),attached)
+  except Exception as image_handoff_error:
+   logger.warning("Video image handoff skipped for job %s: %s",job_id,image_handoff_error)
   quota.record_job(bool(result.get("pins_published")))
   result["quota"]=quota.snapshot()
   supervisor_status=str(result.get("pin_supervisor_status") or "")
