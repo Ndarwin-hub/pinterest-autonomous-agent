@@ -302,6 +302,27 @@ class DailyLedger:
             c=self._conn(); c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,PRIMARY KEY(day,batch_index,slot))"""); rows=c.execute("SELECT DISTINCT asin FROM video_jobs WHERE day=?",(day,)).fetchall(); c.close()
         return {str(r[0]).upper() for r in rows if r and r[0]}
 
+
+    def next_video_music(self,track_ids):
+        track_ids=[str(x) for x in track_ids if str(x)]
+        if not track_ids: raise ValueError("track_ids required")
+        with _lock:
+            c=self._conn(); c.execute("""CREATE TABLE IF NOT EXISTS video_music_state(id INTEGER PRIMARY KEY CHECK(id=1),used_json TEXT NOT NULL,cycle INTEGER NOT NULL DEFAULT 0,last_track TEXT)""")
+            row=c.execute("SELECT used_json,cycle,last_track FROM video_music_state WHERE id=1").fetchone()
+            used=[]; cycle=0; last=None
+            if row:
+                try: used=json.loads(row[0] or "[]") if row[0] else []
+                except Exception: used=[]
+                cycle=int(row[1] or 0); last=row[2]
+            used=[x for x in used if x in track_ids]
+            unused=[x for x in track_ids if x not in used]
+            if not unused:
+                cycle+=1; used=[]; unused=list(track_ids)
+            if len(unused)>1 and last in unused: unused.remove(last)
+            chosen=unused[0]; used.append(chosen)
+            c.execute("INSERT INTO video_music_state(id,used_json,cycle,last_track) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET used_json=excluded.used_json,cycle=excluded.cycle,last_track=excluded.last_track",(json.dumps(used,separators=(",",":")),cycle,chosen)); c.commit(); c.close()
+        return {"track_id":chosen,"cycle":cycle,"used_count":len(used),"pool_size":len(track_ids)}
+
     def historical_selected_asins(self,exclude_day=None):
         """ASINs selected by prior daily allocations; prevents a new day from resuming old work."""
         exclude_day=exclude_day or self.today_str()
