@@ -304,7 +304,7 @@ async def video_publish(request:Request,x_video_secret:Optional[str]=Header(None
  with open(path,"wb") as f:f.write(data)
  try:
   from video_publisher import publish_video
-  return await asyncio.to_thread(publish_video,path,title,text)
+  return await asyncio.to_thread(publish_video,path,title,text,pending_platforms)
  finally:
   try: os.remove(path)
   except Exception: pass
