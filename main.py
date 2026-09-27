@@ -33,7 +33,7 @@ from pin_n_discovery import discover_pin_n_products
 from pin_config import PINS_PER_PRODUCT
 from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
-from amazon_boards import REQUIRED_PRIMARY_SLOTS
+from amazon_boards import REQUIRED_PRIMARY_SLOTS,BOARD_SCOPES
 from daily_ledger import ledger as daily_ledger,BATCH_SIZE
 import publication_guard
 import image_diversity_guard
@@ -273,7 +273,7 @@ async def video_batch(body:VideoBatchRequest,x_video_secret:Optional[str]=Header
  if len(jobs)>=BATCH_SIZE: return {"status":"ready","day":day,"batch":batch,"source":"pinterest" if all(j.get("source")=="pinterest" for j in jobs[:BATCH_SIZE]) else "mixed","jobs":jobs[:BATCH_SIZE]}
  if not body.fallback: return {"status":"waiting","day":day,"batch":batch,"jobs":jobs}
  try:
-  live=await app.state.amazon_list_boards(); specs,_=__import__("amazon_boards").build_slot_specs(live); first=(batch-1)*BATCH_SIZE; wanted=specs[first:first+BATCH_SIZE]; exclude=set(daily_ledger.historical_selected_asins(exclude_day=day))|daily_ledger.video_selected_asins(day)
+  cycle=[x for x in BOARD_SCOPES.keys() if x!="Everything Else"]+["Everything Else"]; first=(batch-1)*BATCH_SIZE; wanted=[{"target_board_name":cycle[(n-1)%len(cycle)]} for n in range(first+1,first+BATCH_SIZE+1)]; exclude=set(daily_ledger.historical_selected_asins(exclude_day=day))|daily_ledger.video_selected_asins(day)
   for idx,spec in enumerate(wanted,start=first+1):
    if any(int(j.get("slot") or 0)==idx for j in jobs): continue
    candidate=await discover_for_board(str(spec.get("target_board_name") or "Everything Else"),exclude_asins=exclude)
