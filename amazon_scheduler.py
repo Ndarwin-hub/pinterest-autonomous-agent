@@ -252,6 +252,11 @@ class AmazonScheduler:
     result=await enqueue(url,target_board_id,target_board_name);logger.info("Amazon slot %s enqueue accepted board=%s job_id=%s status=%s",n,target_board_name,result.get("job_id"),result.get("status"))
    except Exception as e:attempts+=1;logger.exception("Amazon slot %s enqueue failed",n);ledger.mark_slot(n,status="failed_open",day=day,error=str(e)[:500]);continue
    job_id=result.get("job_id")
+   try:
+    ledger.enqueue_video_job(day,(n-1)//BATCH_SIZE+1,n,candidate.get("asin"),url,affiliate_url=url,title=candidate.get("title"),source="pinterest")
+    logger.info("Video follower queued day=%s batch=%s slot=%s asin=%s",day,(n-1)//BATCH_SIZE+1,n,candidate.get("asin"))
+   except Exception as video_queue_error:
+    logger.exception("Video follower queue failed for slot %s; Pinterest continues unaffected: %s",n,video_queue_error)
    if self.is_pinterest_block_error(json.dumps(result,separators=(",",":"))):
     self.activate_pinterest_circuit(json.dumps(result,separators=(",",":")))
     ledger.mark_slot(n,status="deferred",day=day,job_id=job_id,error="pinterest_rate_or_spam_block")
