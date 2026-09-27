@@ -390,15 +390,11 @@ async def amazon_run_batch(body:BatchRequest,x_scheduler_secret:Optional[str]=He
  return {**result,"pin_a":True,"pin_a_source":pin_a_source,"scheduler":"railway_owned_daily_session","github_trigger_batch":body.batch,"day":day,"message":"Existing scheduler trigger also activates the Pin A layer; Railway owns the remaining daily batches and duplicate prevention."}
 @app.post("/amazon/notification-check")
 async def amazon_notification_check(_:bool=Depends(verify_batch_secret)):
-    """Final reconciliation check: sends exactly one daily STARTED, NOT STARTED, or FAILED status notification."""
+    """Send the single consolidated final report for the current Nepal day."""
     day=daily_ledger.today_str()
-    from amazon_alerts import notify_daily_started,notify_daily_not_started,notify_daily_final_status
-    state=daily_ledger.daily_status_state(day)
-    if state.get("started"):
-        await notify_daily_final_status(day)
-        return {"status":"final_status","day":day,"notification":"final_status"}
-    await notify_daily_not_started(day)
-    return {"status":"not_started","day":day,"notification":"not_started"}
+    from amazon_alerts import notify_daily_final_status
+    ok=await notify_daily_final_status(day)
+    return {"status":"final_status" if ok else "final_status_send_failed","day":day,"notification":"single_daily_report"}
 
 @app.post("/batch-submit")
 async def batch_submit(body:BatchSubmitRequest,background_tasks:BackgroundTasks,_:bool=Depends(verify_secret)):
