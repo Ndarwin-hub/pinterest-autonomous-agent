@@ -4,7 +4,7 @@ on:
   # Nepal local times converted explicitly to UTC for GitHub Actions:
   # 06:08 NPT=00:23 UTC, 06:56=01:11, 07:44=01:59, 08:32=02:47,
   # 09:20=03:35, 10:08=04:23, 10:56=05:11, 11:44=05:59,
-  # 12:32=06:47, 13:20=07:35; reconciliation/final checks follow.
+  # 12:32=06:47, 13:20=07:35; the single final report is 14:00 NPT=08:15 UTC.
   schedule:
     - cron: '23 0 * * *'
     - cron: '11 1 * * *'
@@ -16,10 +16,7 @@ on:
     - cron: '59 5 * * *'
     - cron: '47 6 * * *'
     - cron: '35 7 * * *'
-    - cron: '51 7 * * *'
-    - cron: '3 8 * * *'
     - cron: '15 8 * * *'
-    - cron: '20 8 * * *'
   repository_dispatch:
     types: [amazon-batch]
   workflow_dispatch:
@@ -73,11 +70,10 @@ jobs:
               '59 5 * * *') echo "batch=8" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=11:44" >> "$GITHUB_OUTPUT" ;;
               '47 6 * * *') echo "batch=9" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=12:32" >> "$GITHUB_OUTPUT" ;;
               '35 7 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=13:20" >> "$GITHUB_OUTPUT" ;;
-              '51 7 * * *'|'3 8 * * *'|'15 8 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=reconcile" >> "$GITHUB_OUTPUT"; echo "action=run" >> "$GITHUB_OUTPUT" ;;
-              '20 8 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=final-check" >> "$GITHUB_OUTPUT"; echo "action=check" >> "$GITHUB_OUTPUT" ;;
+              '15 8 * * *') echo "batch=10" >> "$GITHUB_OUTPUT"; echo "scheduled_local_time=14:00" >> "$GITHUB_OUTPUT"; echo "action=check" >> "$GITHUB_OUTPUT" ;;
               *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
             esac
-            if [[ "${{ github.event.schedule }}" != "20 8 * * *" && "${{ github.event.schedule }}" != "51 7 * * *" && "${{ github.event.schedule }}" != "3 8 * * *" && "${{ github.event.schedule }}" != "15 8 * * *" ]]; then echo "action=run" >> "$GITHUB_OUTPUT"; fi
+            if [[ "${{ github.event.schedule }}" != "15 8 * * *" ]]; then echo "action=run" >> "$GITHUB_OUTPUT"; fi
           fi
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
@@ -189,7 +185,7 @@ PY
               exit 1
               ;;
           esac
-      - name: Final daily STARTED / NOT STARTED check
+      - name: Single daily final report at 14:00 Nepal time
         if: steps.select.outputs.action == 'check'
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
