@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio, json, logging, os, tempfile
 from pathlib import Path
-from daily_ledger import daily_ledger, BATCH_SIZE
+from daily_ledger import ledger as daily_ledger, BATCH_SIZE
 from video_renderer import render_video, affiliate_url, make_music
 from video_publisher import publish_video
 
