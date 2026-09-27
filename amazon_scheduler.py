@@ -8,7 +8,7 @@ from amazon_boards import build_slot_specs,REQUIRED_PRIMARY_SLOTS,classify_live_
 from amazon_discovery import MAX_REPLACEMENTS_PER_SLOT,discover_for_board,discover_global,is_dormant
 from amazon_composio_discovery import discover_category
 from daily_ledger import ledger
-from video_fallback import on_pinterest_batch_start,SLOT_COUNT,BATCH_SIZE
+from video_fallback import on_pinterest_batch_start
 from published_registry import registry
 from amazon_alerts import send_failure_alert,notify_daily_started
 from pin_config import PINS_PER_PRODUCT
