@@ -270,6 +270,17 @@ def _video_auth(secret):
 @app.post("/video/batch")
 async def video_batch(body:VideoBatchRequest,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
  _video_auth(x_video_secret); day=daily_ledger.today_str(); batch=int(body.batch); jobs=daily_ledger.video_batch(day,batch)
+ # First priority is always the authoritative Pinterest daily ledger. If the normal
+ # Pinterest->video enqueue was missed, reconstruct the exact selected products here
+ # before any independent fallback discovery is considered.
+ try:
+  selected=daily_ledger.selected_video_source_batch(day,batch); existing_slots={int(j.get("slot") or 0) for j in jobs}
+  for item in selected:
+   if item["slot"] not in existing_slots:
+    daily_ledger.enqueue_video_job(day,batch,item["slot"],item["asin"],item["product_url"],affiliate_url=item.get("affiliate_url"),source="pinterest",title=None)
+  jobs=daily_ledger.video_batch(day,batch)
+ except Exception as exc:
+  logger.exception("Video follower could not reconstruct Pinterest-selected slots: %s",exc)
  if len(jobs)>=BATCH_SIZE: return {"status":"ready","day":day,"batch":batch,"source":"pinterest" if all(j.get("source")=="pinterest" for j in jobs[:BATCH_SIZE]) else "mixed","jobs":jobs[:BATCH_SIZE]}
  if not body.fallback: return {"status":"waiting","day":day,"batch":batch,"jobs":jobs}
  try:
