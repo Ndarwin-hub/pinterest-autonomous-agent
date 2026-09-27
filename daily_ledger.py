@@ -260,6 +260,48 @@ class DailyLedger:
             c.execute("UPDATE daily_slots SET status=?,selected_asin=COALESCE(?,selected_asin),selected_url=COALESCE(?,selected_url),affiliate_url=COALESCE(?,affiliate_url),replacement_attempts=?,job_id=COALESCE(?,job_id),pinterest_verified=?,error=?,completed_at=CASE WHEN ? IN ('success','exhausted') THEN ? ELSE completed_at END,updated_at=? WHERE day=? AND slot=?",(status,selected_asin,selected_url,affiliate_url,attempts,job_id,1 if pinterest_verified else 0,error,status,now,now,day,slot))
             if status=="success" and old_status!="success": c.execute("UPDATE daily_days SET success_count=success_count+1,updated_at=? WHERE day=?",(now,day))
             c.execute("UPDATE daily_days SET status='complete',updated_at=? WHERE day=? AND success_count>=?",(now,day,SLOT_COUNT)); c.commit(); c.close()
+
+    def enqueue_video_job(self,day,batch,slot,asin,product_url,affiliate_url=None,source="pinterest",title=None):
+        day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn()
+            c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,PRIMARY KEY(day,batch_index,slot))""")
+            c.execute("""INSERT OR IGNORE INTO video_jobs(day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",(day,int(batch),int(slot),str(asin).upper(),str(product_url),affiliate_url,title,source,"queued",now,now))
+            if source=="pinterest":
+                c.execute("""UPDATE video_jobs SET asin=?,product_url=?,affiliate_url=COALESCE(?,affiliate_url),title=COALESCE(?,title),source='pinterest',updated_at=? WHERE day=? AND batch_index=? AND slot=? AND status IN ('queued','failed')""",(str(asin).upper(),str(product_url),affiliate_url,title,now,day,int(batch),int(slot)))
+            row=c.execute("""SELECT day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,attempts,claim_owner,claimed_at,last_error,created_at,updated_at,completed_at,publication_json FROM video_jobs WHERE day=? AND batch_index=? AND slot=?""",(day,int(batch),int(slot))).fetchone(); c.commit(); c.close()
+        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json"]; return dict(zip(keys,row))
+
+    def video_batch(self,day=None,batch=1):
+        day=day or self.today_str()
+        with _lock:
+            c=self._conn(); c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,PRIMARY KEY(day,batch_index,slot))"""); rows=c.execute("""SELECT day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,attempts,claim_owner,claimed_at,last_error,created_at,updated_at,completed_at,publication_json FROM video_jobs WHERE day=? AND batch_index=? ORDER BY slot""",(day,int(batch))).fetchall(); c.close()
+        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json"]; return [dict(zip(keys,r)) for r in rows]
+
+    def claim_video_job(self,day,batch,slot,owner):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("BEGIN IMMEDIATE"); row=c.execute("SELECT status,attempts,claim_owner,claimed_at FROM video_jobs WHERE day=? AND batch_index=? AND slot=?",(day,int(batch),int(slot))).fetchone()
+            if not row: c.commit(); c.close(); return None
+            status,attempts,old_owner,claimed=row
+            if status=="completed": c.commit(); c.close(); return {"claimed":False,"status":"completed"}
+            if status=="processing" and claimed:
+                try: age=time.time()-datetime.fromisoformat(claimed).timestamp()
+                except Exception: age=999999
+                if age < int(os.getenv("VIDEO_JOB_LEASE_SEC","7200")): c.commit(); c.close(); return {"claimed":False,"status":"processing","owner":old_owner}
+            cur=c.execute("""UPDATE video_jobs SET status='processing',attempts=attempts+1,claim_owner=?,claimed_at=?,updated_at=? WHERE day=? AND batch_index=? AND slot=? AND status IN ('queued','failed','processing')""",(owner,now,now,day,int(batch),int(slot))); ok=cur.rowcount==1; c.commit(); c.close(); return {"claimed":ok,"status":"processing" if ok else "busy","owner":owner if ok else old_owner}
+
+    def mark_video_job(self,day,batch,slot,status,owner=None,error=None,publication_json=None):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); c.execute("""UPDATE video_jobs SET status=?,last_error=?,publication_json=COALESCE(?,publication_json),completed_at=CASE WHEN ? IN ('completed','failed') THEN ? ELSE completed_at END,updated_at=? WHERE day=? AND batch_index=? AND slot=? AND (claim_owner=? OR ? IS NULL)""",(status,error,publication_json,status,now,now,day,int(batch),int(slot),owner,owner)); c.commit(); c.close()
+
+    def video_selected_asins(self,day=None):
+        day=day or self.today_str()
+        with _lock:
+            c=self._conn(); c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,PRIMARY KEY(day,batch_index,slot))"""); rows=c.execute("SELECT DISTINCT asin FROM video_jobs WHERE day=?",(day,)).fetchall(); c.close()
+        return {str(r[0]).upper() for r in rows if r and r[0]}
+
     def historical_selected_asins(self,exclude_day=None):
         """ASINs selected by prior daily allocations; prevents a new day from resuming old work."""
         exclude_day=exclude_day or self.today_str()
