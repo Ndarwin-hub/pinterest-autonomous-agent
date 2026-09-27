@@ -31,7 +31,7 @@ def _next_pointer():
 
 async def on_pinterest_batch_start(day,batch):
     start=_next_pointer()
-    if start not in PAIR_STARTS or batch not in (start,start+1):
+    if start not in PAIR_STARTS or batch != start+1:
         return {"status":"ignored","reason":"not_current_video_pair","next_pair_start":start}
     key=f"{day}:{start}"
     if ACTIVE.get(key):
@@ -54,6 +54,9 @@ async def _run_pair(day,start):
     try:
         daily_ledger.start_video_pair(day,start,owner)
         for batch in _pair_for(start):
+            deadline=asyncio.get_running_loop().time()+int(os.getenv("VIDEO_BATCH_READY_WAIT_SEC","1800"))
+            while not daily_ledger.video_batch(day,batch) and asyncio.get_running_loop().time()<deadline:
+                await asyncio.sleep(int(os.getenv("VIDEO_BATCH_READY_CHECK_SEC","30")))
             await _run_batch(day,start,batch,owner)
         daily_ledger.advance_video_pair(start,day,reason="railway_pair_processed")
     except Exception as exc:
@@ -87,6 +90,13 @@ def _process_product(day,pair_start,batch,row,owner):
     root=Path(os.getenv("VIDEO_WORK_DIR","/data/video-runs"))/day/f"batch_{batch}"/f"slot_{row['slot']}"
     root.mkdir(parents=True,exist_ok=True)
     output=root/f"{row['asin']}.mp4"
+    prior=json.loads(row.get("publication_json") or "{}") if row.get("publication_json") else {}
+    prior_statuses=prior.get("platforms") or {}
+    failed=[p for p in PLATFORMS if p in prior_statuses and str(prior_statuses[p].get("status","")).upper() not in ("PUBLISHED","SUCCESS","SUBMITTED")]
+    targets=failed or [p for p in PLATFORMS if p not in prior_statuses]
+    if not targets and prior_statuses:
+        daily_ledger.mark_video_job(day,batch,row["slot"],"completed",owner=owner,publication_json=json.dumps(prior,separators=(",",":"))[:12000])
+        return
     track_state=daily_ledger.next_video_music([f"track{i:02d}" for i in range(1,17)])
     music=make_music(track_state["track_id"],root/"music")
     try:
@@ -95,11 +105,12 @@ def _process_product(day,pair_start,batch,row,owner):
         caption=(f"{(row.get('title') or row['asin'])[:150]}\n"
                  f"Shop now: {aff}\n\n"
                  "As an Amazon Associate I earn from qualifying purchases.")
-        result=publish_video(str(output),row.get("title") or row["asin"],caption,PLATFORMS)
-        statuses=result.get("platforms") or {}
-        daily_ledger.mark_video_job(day,batch,row["slot"],"completed" if all(
-            str(statuses.get(p,{}).get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for p in PLATFORMS if p in statuses
-        ) and statuses else "failed",owner=owner,publication_json=json.dumps(result,separators=(",",":"))[:12000])
+        result=publish_video(str(output),row.get("title") or row["asin"],caption,targets)
+        merged=dict(prior_statuses)
+        merged.update(result.get("platforms") or {})
+        combined=dict(result); combined["platforms"]=merged
+        ok=bool(merged) and all(str(v.get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for v in merged.values())
+        daily_ledger.mark_video_job(day,batch,row["slot"],"completed" if ok else "failed",owner=owner,publication_json=json.dumps(combined,separators=(",",":"))[:12000])
         if output.exists(): output.unlink()
         if root.exists():
             for p in sorted(root.rglob("*"),reverse=True):
