@@ -261,6 +261,13 @@ class DailyLedger:
             if status=="success" and old_status!="success": c.execute("UPDATE daily_days SET success_count=success_count+1,updated_at=? WHERE day=?",(now,day))
             c.execute("UPDATE daily_days SET status='complete',updated_at=? WHERE day=? AND success_count>=?",(now,day,SLOT_COUNT)); c.commit(); c.close()
 
+
+    def selected_video_source_batch(self,day=None,batch=1):
+        day=day or self.today_str(); first=(int(batch)-1)*BATCH_SIZE+1; last=first+BATCH_SIZE-1
+        with _lock:
+            c=self._conn(); rows=c.execute("""SELECT slot,target_board_name,selected_asin,selected_url,affiliate_url FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? AND selected_asin IS NOT NULL ORDER BY slot""",(day,first,last)).fetchall(); c.close()
+        return [{"slot":int(r[0]),"target_board_name":r[1],"asin":str(r[2]).upper(),"product_url":r[3],"affiliate_url":r[4]} for r in rows]
+
     def enqueue_video_job(self,day,batch,slot,asin,product_url,affiliate_url=None,source="pinterest",title=None):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
