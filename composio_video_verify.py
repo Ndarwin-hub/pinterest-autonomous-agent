@@ -14,14 +14,12 @@ def _expected(run_id):
     db=Path(os.getenv("JOB_DB_PATH", "/data/pinterest_agent_jobs.db"))
     if not db.exists():return {}
     c=sqlite3.connect(str(db)); rows=c.execute("SELECT asin,platform_results_json FROM kaggle_video_jobs WHERE run_id=?",(run_id,)).fetchall()
-    if not rows:
-        rows=c.execute("SELECT asin,publication_json FROM video_jobs WHERE claim_owner=?",(f"kaggle-{run_id}",)).fetchall()
+    if not rows:rows=c.execute("SELECT asin,publication_json FROM video_jobs WHERE claim_owner=?",(f"kaggle-{run_id}",)).fetchall()
     c.close(); out={}
     for asin,raw in rows:
         try:out[str(asin).upper()]=json.loads(raw or "{}")
         except Exception:out[str(asin).upper()]={}
     return out
-
 def verify_run(run_id,project=None):
     project=project or _cfg()[2]
     if not project:return {"available":False,"complete":False,"reason":"woop_social_project_missing","products":{}}
@@ -53,5 +51,10 @@ def verify_run(run_id,project=None):
                 if isinstance(vals,dict) and any(str(v.get("external_post_id") or "") == ext for v in vals.values() if isinstance(v,dict)):asin=candidate; break
         if not asin:continue
         products.setdefault(asin,{"platforms":{}})["platforms"][str(p.get("platform") or "").lower()]={"status":p.get("delivery_status"),"external_post_id":p.get("external_post_id"),"url":p.get("external_post_url"),"error":p.get("error_message")}
-    complete=bool(expected) and all(asin in products and products[asin].get("platforms") and all(str(v.get("status") or "").upper()=="PUBLISHED" for v in products[asin]["platforms"].values()) for asin in expected)
+    complete=bool(expected)
+    for asin,raw in expected.items():
+        vals=raw.get("platforms") if isinstance(raw,dict) else raw
+        expected_platforms={str(k).lower() for k in vals.keys()} if isinstance(vals,dict) else set()
+        actual=products.get(asin,{}).get("platforms",{})
+        if not actual or any(p not in actual or str(actual[p].get("status") or "").upper()!="PUBLISHED" for p in expected_platforms):complete=False; break
     return {"available":True,"complete":complete,"products":products,"matched_deliveries":len(found)}
