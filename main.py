@@ -34,13 +34,13 @@ from pin_config import PINS_PER_PRODUCT
 from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
 from amazon_boards import REQUIRED_PRIMARY_SLOTS
-from daily_ledger import ledger as daily_ledger
+from daily_ledger import ledger as daily_ledger,BATCH_SIZE
 import publication_guard
 import image_diversity_guard
 publication_guard.install(agent_module)
 image_diversity_guard.install(agent_module)
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO"),format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-PIN_N_REQUEST_DIR=os.getenv("PIN_N_REQUEST_DIR",os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"),"pin_n_requests"))
+VIDEO_BRIDGE_SECRET=os.getenv("VIDEO_BRIDGE_SECRET","").strip();PIN_N_REQUEST_DIR=os.getenv("PIN_N_REQUEST_DIR",os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"),"pin_n_requests"))
 logger=logging.getLogger("pinterest-agent");_pin_n_tasks:Dict[str,asyncio.Task]={};job_store=JobStore();_enqueue_lock=asyncio.Lock();API_SECRET=os.getenv("API_SECRET","").strip();AMAZON_BATCH_SECRET=os.getenv("AMAZON_BATCH_SECRET","").strip();CLOUDFLARE_WAKE_SECRET=os.getenv("CLOUDFLARE_WAKE_SECRET","").strip();GITHUB_REPO="Ndarwin-hub/pinterest-autonomous-agent";GITHUB_ISSUER="https://token.actions.githubusercontent.com";CLOUDFLARE_TZ="Asia/Kathmandu";CLOUDFLARE_WINDOW_START_MIN=6*60;CLOUDFLARE_WINDOW_END_MIN=14*60;
 def cloudflare_wake_allowed(now=None):
  from zoneinfo import ZoneInfo
@@ -258,6 +258,57 @@ async def status(job_id:str,_:bool=Depends(verify_secret)):
  job=job_store.get(job_id)
  if not job:raise HTTPException(status_code=404,detail="Job not found")
  return StatusResponse(job_id=job.job_id,status=job.status.value,progress=job.progress,result=job.result,error=job.error,created_at=job.created_at,updated_at=job.updated_at)
+
+class VideoBatchRequest(BaseModel):
+ batch:int=Field(1,ge=1,le=10)
+ fallback:bool=False
+
+def _video_auth(secret):
+ if VIDEO_BRIDGE_SECRET and secret and hmac.compare_digest(secret,VIDEO_BRIDGE_SECRET): return True
+ raise HTTPException(status_code=401,detail="Invalid or missing video bridge authentication")
+
+@app.post("/video/batch")
+async def video_batch(body:VideoBatchRequest,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
+ _video_auth(x_video_secret); day=daily_ledger.today_str(); batch=int(body.batch); jobs=daily_ledger.video_batch(day,batch)
+ if len(jobs)>=BATCH_SIZE: return {"status":"ready","day":day,"batch":batch,"source":"pinterest" if all(j.get("source")=="pinterest" for j in jobs[:BATCH_SIZE]) else "mixed","jobs":jobs[:BATCH_SIZE]}
+ if not body.fallback: return {"status":"waiting","day":day,"batch":batch,"jobs":jobs}
+ try:
+  live=await app.state.amazon_list_boards(); specs,_=__import__("amazon_boards").build_slot_specs(live); first=(batch-1)*BATCH_SIZE; wanted=specs[first:first+BATCH_SIZE]; exclude=set(daily_ledger.historical_selected_asins(exclude_day=day))|daily_ledger.video_selected_asins(day)
+  for idx,spec in enumerate(wanted,start=first+1):
+   if any(int(j.get("slot") or 0)==idx for j in jobs): continue
+   candidate=await discover_for_board(str(spec.get("target_board_name") or "Everything Else"),exclude_asins=exclude)
+   if not candidate: continue
+   asin=str(candidate.get("asin") or "").upper()
+   if not asin: continue
+   exclude.add(asin); product_url=candidate.get("product_url") or candidate.get("affiliate_url"); affiliate=candidate.get("affiliate_url") or product_url
+   daily_ledger.enqueue_video_job(day,batch,idx,asin,product_url,affiliate_url=affiliate,title=candidate.get("title"),source="video_fallback")
+  jobs=daily_ledger.video_batch(day,batch); return {"status":"ready" if len(jobs)>=BATCH_SIZE else "partial","day":day,"batch":batch,"source":"video_fallback","jobs":jobs[:BATCH_SIZE]}
+ except Exception as exc:
+  logger.exception("Independent video fallback discovery failed batch=%s: %s",batch,exc); return {"status":"failed","day":day,"batch":batch,"jobs":jobs,"error":str(exc)[:500]}
+
+@app.post("/video/job/{batch}/{slot}/claim")
+async def video_job_claim(batch:int,slot:int,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
+ _video_auth(x_video_secret); day=daily_ledger.today_str(); owner=f"kaggle-{uuid.uuid4().hex}"; return {"day":day,"batch":batch,"slot":slot,"owner":owner,"claim":daily_ledger.claim_video_job(day,batch,slot,owner)}
+
+@app.post("/video/job/{batch}/{slot}/status")
+async def video_job_status(batch:int,slot:int,status:str,owner:Optional[str]=None,error:Optional[str]=None,publication_json:Optional[str]=None,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
+ _video_auth(x_video_secret); day=daily_ledger.today_str(); daily_ledger.mark_video_job(day,batch,slot,status,owner,error,publication_json); return {"status":"recorded","day":day,"batch":batch,"slot":slot}
+
+@app.post("/video/publish")
+async def video_publish(request:Request,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
+ _video_auth(x_video_secret); form=await request.form(); upload=form.get("file")
+ if upload is None or not hasattr(upload,"read"): raise HTTPException(status_code=400,detail="multipart file is required")
+ title=str(form.get("title") or "Amazon Product Find")[:180]; text=str(form.get("text") or "Shop now — link in post.")[:4000]; filename=str(getattr(upload,"filename","video.mp4") or "video.mp4"); data=await upload.read()
+ if len(data)>100*1024*1024: raise HTTPException(status_code=413,detail="video exceeds 100 MB")
+ bridge_dir=os.path.join(os.getenv("DATA_DIR","/data"),"video_bridge"); os.makedirs(bridge_dir,exist_ok=True); path=os.path.join(bridge_dir,f"{uuid.uuid4().hex}_{re.sub(r'[^A-Za-z0-9_.-]','_',filename)}")
+ with open(path,"wb") as f:f.write(data)
+ try:
+  from video_publisher import publish_video
+  return await asyncio.to_thread(publish_video,path,title,text)
+ finally:
+  try: os.remove(path)
+  except Exception: pass
+
 @app.get("/amazon/status")
 async def amazon_status(_:bool=Depends(verify_secret)):
  return {"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"daily":daily_ledger.get_day_status(),"scheduler_events":daily_ledger.latest_scheduler_events(),"published_count":registry.count_success(),"required_primary_boards":REQUIRED_PRIMARY_SLOTS}
