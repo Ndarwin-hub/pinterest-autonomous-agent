@@ -309,6 +309,10 @@ async def video_publish(request:Request,x_video_secret:Optional[str]=Header(None
   try: os.remove(path)
   except Exception: pass
 
+
+@app.post("/video/music/next")
+async def video_music_next(x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
+ _video_auth(x_video_secret); return daily_ledger.next_video_music([f"track{i:02d}" for i in range(1,17)])
 @app.get("/amazon/status")
 async def amazon_status(_:bool=Depends(verify_secret)):
  return {"credentials_present":not amazon_discovery_dormant(),"source":"composio_amazon","amazon_api_credentials_present":amazon_credentials_present(),"scheduler":amazon_scheduler.status,"scheduler_mode":SCHEDULER_MODE,"daily":daily_ledger.get_day_status(),"scheduler_events":daily_ledger.latest_scheduler_events(),"published_count":registry.count_success(),"required_primary_boards":REQUIRED_PRIMARY_SLOTS}
