@@ -10,7 +10,7 @@ from amazon_composio_discovery import discover_category
 from daily_ledger import ledger
 from video_fallback import on_pinterest_batch_start
 from published_registry import registry
-from amazon_alerts import send_failure_alert,notify_daily_started
+from amazon_alerts import send_failure_alert
 from pin_config import PINS_PER_PRODUCT
 logger=logging.getLogger("pinterest-agent.amazon_scheduler")
 SLOT_INTERVAL_SEC=int(os.getenv("AMAZON_SLOT_INTERVAL_SEC",str(48*60)));PIN_BLOCK_COOLDOWN_MIN=int(os.getenv("PINTEREST_BLOCK_COOLDOWN_MIN","30") or "30");PIN_BLOCK_MAX_COOLDOWN_MIN=int(os.getenv("PINTEREST_BLOCK_MAX_COOLDOWN_MIN","360") or "360");SCHEDULER_ENABLED=os.getenv("AMAZON_SCHEDULER_ENABLED","true").lower() in ("1","true","yes");SCHEDULER_MODE=os.getenv("AMAZON_SCHEDULER_MODE","external").strip().lower()
@@ -53,7 +53,6 @@ class AmazonScheduler:
    logger.warning("Fresh-day slot initialization deferred to batch execution: %s",e)
   self._daily_day=day;self._daily_stop.clear()
   self.status["daily_session"]={"running":True,"day":day,"started_at":datetime.now(timezone.utc).isoformat(),"completed_at":None,"next_batch":ledger.next_unfinished_batch(day)}
-  await notify_daily_started(day,trigger_batch or 0,None)
   self._daily_task=asyncio.create_task(self._daily_loop(enqueue,list_boards,wait_job,day,trigger_batch),name=f"amazon-daily-session-{day}")
   return {"status":"session_started","day":day,"next_batch":self.status["daily_session"]["next_batch"]}
  async def _daily_loop(self,enqueue,list_boards,wait_job,day,trigger_batch=None):
