@@ -8,12 +8,23 @@ from kaggle_video_handshake import get_pair_run, run_is_stale, pair_product_stat
 from composio_video_verify import verify_run
 
 log=logging.getLogger(__name__)
-PAIR_STARTS=(1,3,5,7,9)
-PLATFORMS=("facebook","instagram","youtube","x","tiktok")
-ACTIVE={}
+PAIR_STARTS=(1,3,5,7,9);PLATFORMS=("facebook","instagram","youtube","x","tiktok");ACTIVE={}
+_ORIGINAL_CLAIM=daily_ledger.claim_video_job;_ORIGINAL_MARK=daily_ledger.mark_video_job
 
-def _pair_for(start): return (start,start+1)
-def _next_pointer(): return int(daily_ledger.get_video_pair_state().get("next_pair_start") or 1)
+def _claim_video_job_with_run(day,batch,slot,owner):
+    normalized=owner
+    if str(owner).startswith("kaggle-"): normalized=f"kaggle-{day}-pair-{((int(batch)-1)//2)*2+1}"
+    return _ORIGINAL_CLAIM(day,batch,slot,normalized)
+
+def _mark_video_job_with_run(day,batch,slot,status,owner=None,error=None,publication_json=None):
+    normalized=owner
+    if owner and str(owner).startswith("kaggle-"): normalized=f"kaggle-{day}-pair-{((int(batch)-1)//2)*2+1}"
+    return _ORIGINAL_MARK(day,batch,slot,status,normalized,error,publication_json)
+
+daily_ledger.claim_video_job=_claim_video_job_with_run;daily_ledger.mark_video_job=_mark_video_job_with_run
+
+def _pair_for(start):return (start,start+1)
+def _next_pointer():return int(daily_ledger.get_video_pair_state().get("next_pair_start") or 1)
 def _kaggle_decision(day,start):
     run=get_pair_run(day,start)
     if not run:return "missing",None
@@ -30,35 +41,28 @@ async def on_pinterest_batch_start(day,batch):
     if ACTIVE.get(key):return {"status":"already_active","pair":_pair_for(start)}
     decision,run=_kaggle_decision(day,start)
     if decision=="completed":
-        internal=pair_product_statuses(day,start,run.get("run_id")); external=verify_run(run.get("run_id"))
+        internal=pair_product_statuses(day,start,run.get("run_id"));external=verify_run(run.get("run_id"))
         if internal.get("complete") and external.get("available") and external.get("complete"):
-            daily_ledger.advance_video_pair(start,day,reason="kaggle_completed_composio_verified")
-            return {"status":"kaggle_completed_verified","pair":_pair_for(start),"verification":{"internal":internal,"composio":external}}
-        if not external.get("available"):
-            return {"status":"kaggle_completed_unverified","pair":_pair_for(start),"verification":{"internal":internal,"composio":external}}
-        task=asyncio.create_task(_run_pair(day,start,run.get("run_id")));ACTIVE[key]=task
-        return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id"),"verification":{"internal":internal,"composio":external}}
+            daily_ledger.advance_video_pair(start,day,reason="kaggle_completed_composio_verified");return {"status":"kaggle_completed_verified","pair":_pair_for(start),"verification":{"internal":internal,"composio":external}}
+        if not external.get("available"):return {"status":"kaggle_completed_unverified","pair":_pair_for(start),"verification":{"internal":internal,"composio":external}}
+        task=asyncio.create_task(_run_pair(day,start,run.get("run_id")));ACTIVE[key]=task;return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id"),"verification":{"internal":internal,"composio":external}}
     if decision=="running":return {"status":"kaggle_running","pair":_pair_for(start),"run_id":run.get("run_id")}
     if decision=="unknown":return {"status":"kaggle_status_unknown","pair":_pair_for(start)}
-    task=asyncio.create_task(_run_pair(day,start,run.get("run_id") if run else None));ACTIVE[key]=task
-    return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
+    task=asyncio.create_task(_run_pair(day,start,run.get("run_id") if run else None));ACTIVE[key]=task;return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
 
 async def _run_pair(day,start,kaggle_run_id=None):
     key=f"{day}:{start}";owner=f"railway-video-{start}-{uuid.uuid4().hex[:8]}"
     try:
-        daily_ledger.start_video_pair(day,start,owner);external=verify_run(kaggle_run_id) if kaggle_run_id else {"available":False,"products":{}}
-        results=[await _run_batch(day,start,batch,owner,kaggle_run_id,external) for batch in _pair_for(start)]
+        daily_ledger.start_video_pair(day,start,owner);external=verify_run(kaggle_run_id) if kaggle_run_id else {"available":False,"products":{}};results=[await _run_batch(day,start,batch,owner,kaggle_run_id,external) for batch in _pair_for(start)]
         if all(results):daily_ledger.advance_video_pair(start,day,reason="railway_pair_processed")
         else:daily_ledger.finish_video_pair(day,start,owner,"incomplete","One or more pair batches had no durable video handoff jobs")
-    except Exception as exc:
-        log.exception("Railway video pair %s failed: %s",start,exc);daily_ledger.finish_video_pair(day,start,owner,"failed",str(exc)[:1000])
+    except Exception as exc:log.exception("Railway video pair %s failed: %s",start,exc);daily_ledger.finish_video_pair(day,start,owner,"failed",str(exc)[:1000])
     finally:ACTIVE.pop(key,None)
 
 def _terminal(row):return str(row.get("status") or "").lower() in {"completed","failed"}
 async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None):
     rows=daily_ledger.video_batch(day,batch)
-    if not rows:
-        log.warning("Video pair %s: batch %s has no durable Pinterest video handoff; pair will not advance",pair_start,batch);return False
+    if not rows:log.warning("Video pair %s: batch %s has no durable Pinterest video handoff; pair will not advance",pair_start,batch);return False
     for row in rows[:BATCH_SIZE]:
         if _terminal(row):continue
         claim=daily_ledger.claim_video_job(day,batch,row["slot"],owner)
@@ -72,16 +76,10 @@ def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=
     if len(urls)<4:raise RuntimeError("VIDEO_IMAGE_HANDOFF_MISSING: fewer than 4 Pinterest-associated images")
     root=Path(os.getenv("VIDEO_WORK_DIR","/data/video-runs"))/day/f"batch_{batch}"/f"slot_{row['slot']}";root.mkdir(parents=True,exist_ok=True);output=root/f"{row['asin']}.mp4"
     try:
-        prior=json.loads(row.get("publication_json") or "{}") if row.get("publication_json") else {};prior_statuses=prior.get("platforms") or {}
-        kaggle_status=(pair_product_statuses(day,pair_start,kaggle_run_id).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {}
-        composio_status=((external or {}).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {}
-        combined_statuses=dict(kaggle_status.get("platforms") or {});combined_statuses.update(composio_status.get("platforms") or {});combined_statuses.update(prior_statuses)
-        failed=[p for p in PLATFORMS if p in combined_statuses and str(combined_statuses[p].get("status","")).upper() not in ("PUBLISHED","SUCCESS","SUBMITTED")];targets=failed or [p for p in PLATFORMS if p not in combined_statuses]
-        if not targets and combined_statuses:
-            daily_ledger.mark_video_job(day,batch,row["slot"],"completed",owner=owner,publication_json=json.dumps({"platforms":combined_statuses,"source":"kaggle+composio"},separators=(",",":"))[:12000]);return
-        track_state=daily_ledger.next_video_music([f"track{i:02d}" for i in range(1,17)]);music=make_music(track_state["track_id"],root/"music");render_video(urls,output,row.get("title") or "",music);aff=affiliate_url(row["asin"])
-        marker=f"[video-run:{kaggle_run_id or 'railway'}][asin:{str(row['asin']).upper()}][batch:{batch}]";caption=f"{(row.get('title') or row['asin'])[:150]}\nShop now: {aff}\n{marker}\n\nAs an Amazon Associate I earn from qualifying purchases."
-        result=publish_video(str(output),row.get("title") or row["asin"],caption,targets);merged=dict(combined_statuses);merged.update(result.get("platforms") or {});ok=bool(merged) and all(str(v.get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for v in merged.values());combined=dict(result);combined["platforms"]=merged;combined["run_id"]=kaggle_run_id or "railway";combined["source"]="railway_fallback";daily_ledger.mark_video_job(day,batch,row["slot"],"completed" if ok else "failed",owner=owner,publication_json=json.dumps(combined,separators=(",",":"))[:12000])
+        prior=json.loads(row.get("publication_json") or "{}") if row.get("publication_json") else {};prior_statuses=prior.get("platforms") or {};kaggle_status=(pair_product_statuses(day,pair_start,kaggle_run_id).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {};composio_status=((external or {}).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {}
+        combined_statuses=dict(kaggle_status.get("platforms") or {});combined_statuses.update(composio_status.get("platforms") or {});combined_statuses.update(prior_statuses);failed=[p for p in PLATFORMS if p in combined_statuses and str(combined_statuses[p].get("status","")).upper() not in ("PUBLISHED","SUCCESS","SUBMITTED")];targets=failed or [p for p in PLATFORMS if p not in combined_statuses]
+        if not targets and combined_statuses:daily_ledger.mark_video_job(day,batch,row["slot"],"completed",owner=owner,publication_json=json.dumps({"platforms":combined_statuses,"source":"kaggle+composio"},separators=(",",":"))[:12000]);return
+        track_state=daily_ledger.next_video_music([f"track{i:02d}" for i in range(1,17)]);music=make_music(track_state["track_id"],root/"music");render_video(urls,output,row.get("title") or "",music);aff=affiliate_url(row["asin"]);marker=f"[video-run:{kaggle_run_id or 'railway'}][asin:{str(row['asin']).upper()}][batch:{batch}]";caption=f"{(row.get('title') or row['asin'])[:150]}\nShop now: {aff}\n{marker}\n\nAs an Amazon Associate I earn from qualifying purchases.";result=publish_video(str(output),row.get("title") or row["asin"],caption,targets);merged=dict(combined_statuses);merged.update(result.get("platforms") or {});ok=bool(merged) and all(str(v.get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for v in merged.values());combined=dict(result);combined["platforms"]=merged;combined["run_id"]=kaggle_run_id or "railway";combined["source"]="railway_fallback";daily_ledger.mark_video_job(day,batch,row["slot"],"completed" if ok else "failed",owner=owner,publication_json=json.dumps(combined,separators=(",",":"))[:12000])
     finally:shutil.rmtree(root,ignore_errors=True)
 
 def pair_status(day=None):
