@@ -268,22 +268,88 @@ class DailyLedger:
             c=self._conn(); rows=c.execute("""SELECT slot,target_board_name,selected_asin,selected_url,affiliate_url FROM daily_slots WHERE day=? AND slot BETWEEN ? AND ? AND selected_asin IS NOT NULL ORDER BY slot""",(day,first,last)).fetchall(); c.close()
         return [{"slot":int(r[0]),"target_board_name":r[1],"asin":str(r[2]).upper(),"product_url":r[3],"affiliate_url":r[4]} for r in rows]
 
+    def _ensure_video_schema(self,c):
+        c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,image_urls_json TEXT,image_meta_json TEXT,PRIMARY KEY(day,batch_index,slot))""")
+        cols={str(r[1]) for r in c.execute("PRAGMA table_info(video_jobs)").fetchall()}
+        if "image_urls_json" not in cols:
+            c.execute("ALTER TABLE video_jobs ADD COLUMN image_urls_json TEXT")
+        if "image_meta_json" not in cols:
+            c.execute("ALTER TABLE video_jobs ADD COLUMN image_meta_json TEXT")
+
     def enqueue_video_job(self,day,batch,slot,asin,product_url,affiliate_url=None,source="pinterest",title=None):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
             c=self._conn()
-            c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,PRIMARY KEY(day,batch_index,slot))""")
+            self._ensure_video_schema(c)
             c.execute("""INSERT OR IGNORE INTO video_jobs(day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",(day,int(batch),int(slot),str(asin).upper(),str(product_url),affiliate_url,title,source,"queued",now,now))
             if source=="pinterest":
                 c.execute("""UPDATE video_jobs SET asin=?,product_url=?,affiliate_url=COALESCE(?,affiliate_url),title=COALESCE(?,title),source='pinterest',updated_at=? WHERE day=? AND batch_index=? AND slot=? AND status IN ('queued','failed')""",(str(asin).upper(),str(product_url),affiliate_url,title,now,day,int(batch),int(slot)))
-            row=c.execute("""SELECT day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,attempts,claim_owner,claimed_at,last_error,created_at,updated_at,completed_at,publication_json FROM video_jobs WHERE day=? AND batch_index=? AND slot=?""",(day,int(batch),int(slot))).fetchone(); c.commit(); c.close()
-        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json"]; return dict(zip(keys,row))
+            row=c.execute("""SELECT day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,attempts,claim_owner,claimed_at,last_error,created_at,updated_at,completed_at,publication_json,image_urls_json,image_meta_json FROM video_jobs WHERE day=? AND batch_index=? AND slot=?""",(day,int(batch),int(slot))).fetchone(); c.commit(); c.close()
+        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json","image_urls_json","image_meta_json"]; return dict(zip(keys,row))
 
     def video_batch(self,day=None,batch=1):
         day=day or self.today_str()
         with _lock:
             c=self._conn(); c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,PRIMARY KEY(day,batch_index,slot))"""); rows=c.execute("""SELECT day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,attempts,claim_owner,claimed_at,last_error,created_at,updated_at,completed_at,publication_json FROM video_jobs WHERE day=? AND batch_index=? ORDER BY slot""",(day,int(batch))).fetchall(); c.close()
-        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json"]; return [dict(zip(keys,r)) for r in rows]
+        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json","image_urls_json","image_meta_json"]; return [dict(zip(keys,r)) for r in rows]
+
+    def attach_video_images(self,day,asin,image_items):
+        urls=[]; meta=[]
+        for item in image_items or []:
+            if isinstance(item,str):
+                u=item; m={}
+            else:
+                u=item.get("url") or item.get("value") or ""
+                m={k:item.get(k) for k in ("provider","id","score","license","pin_number","strategy") if item.get(k) is not None}
+            if str(u).startswith(("http://","https://")) and u not in urls:
+                urls.append(str(u)); meta.append(m)
+        if not urls: return 0
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); self._ensure_video_schema(c)
+            cur=c.execute("UPDATE video_jobs SET image_urls_json=?,image_meta_json=?,updated_at=? WHERE day=? AND asin=? AND status IN ('queued','failed','processing')",
+                          (json.dumps(urls,separators=(",",":")),json.dumps(meta,separators=(",",":")),now,day,str(asin).upper()))
+            c.commit(); c.close()
+        return int(cur.rowcount)
+
+    def get_video_pair_state(self):
+        with _lock:
+            c=self._conn()
+            c.execute("""CREATE TABLE IF NOT EXISTS video_pair_state(id INTEGER PRIMARY KEY CHECK(id=1),next_pair_start INTEGER NOT NULL DEFAULT 1,active_pair_start INTEGER,status TEXT,last_day TEXT,last_trigger_batch INTEGER,updated_at TEXT NOT NULL)""")
+            row=c.execute("SELECT id,next_pair_start,active_pair_start,status,last_day,last_trigger_batch,updated_at FROM video_pair_state WHERE id=1").fetchone()
+            if not row:
+                now=datetime.now(timezone.utc).isoformat()
+                c.execute("INSERT INTO video_pair_state(id,next_pair_start,status,updated_at) VALUES(1,1,'idle',?)",(now,))
+                row=c.execute("SELECT id,next_pair_start,active_pair_start,status,last_day,last_trigger_batch,updated_at FROM video_pair_state WHERE id=1").fetchone()
+            c.commit(); c.close()
+        return dict(zip(["id","next_pair_start","active_pair_start","status","last_day","last_trigger_batch","updated_at"],row))
+
+    def start_video_pair(self,day,pair_start,owner):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn()
+            c.execute("""CREATE TABLE IF NOT EXISTS video_pair_state(id INTEGER PRIMARY KEY CHECK(id=1),next_pair_start INTEGER NOT NULL DEFAULT 1,active_pair_start INTEGER,status TEXT,last_day TEXT,last_trigger_batch INTEGER,updated_at TEXT NOT NULL)""")
+            c.execute("UPDATE video_pair_state SET active_pair_start=?,status='running',last_day=?,updated_at=? WHERE id=1 AND next_pair_start=?",
+                      (int(pair_start),day,now,int(pair_start)))
+            c.commit(); c.close()
+
+    def finish_video_pair(self,day,pair_start,owner,status,error=None):
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn()
+            c.execute("UPDATE video_pair_state SET status=?,last_day=?,updated_at=? WHERE id=1 AND active_pair_start=?",(status,day,now,int(pair_start)))
+            c.commit(); c.close()
+
+    def advance_video_pair(self,pair_start,day,reason="processed"):
+        starts=[1,3,5,7,9]
+        if int(pair_start) not in starts: return
+        nxt=starts[(starts.index(int(pair_start))+1)%len(starts)]
+        now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn()
+            c.execute("UPDATE video_pair_state SET next_pair_start=?,active_pair_start=NULL,status=?,last_day=?,updated_at=? WHERE id=1 AND next_pair_start=?",
+                      (nxt,reason,day,now,int(pair_start)))
+            c.commit(); c.close()
 
     def claim_video_job(self,day,batch,slot,owner):
         now=datetime.now(timezone.utc).isoformat()
