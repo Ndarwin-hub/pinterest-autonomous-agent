@@ -18,10 +18,12 @@ from __future__ import annotations
 import base64
 import io
 import json
+import sqlite3
 import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, datetime, timezone
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunsplit
 
 import httpx
@@ -48,6 +50,32 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
 
 DEFAULT_BOARD_NAME = "Product Pins"
+
+def _composio_usage_db():
+    return os.getenv("DAILY_LEDGER_DB_PATH", os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"),"amazon_daily_ledger.db"))
+
+def _record_composio_usage(success: bool):
+    try:
+        con=sqlite3.connect(_composio_usage_db(),timeout=10)
+        con.execute("CREATE TABLE IF NOT EXISTS composio_usage_daily(day TEXT PRIMARY KEY,calls INTEGER NOT NULL DEFAULT 0,successes INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)")
+        day=date.today().isoformat(); now=datetime.now(timezone.utc).isoformat()
+        con.execute("INSERT OR IGNORE INTO composio_usage_daily(day,calls,successes,failures,updated_at) VALUES(?,?,?,?,?)",(day,0,0,0,now))
+        con.execute("UPDATE composio_usage_daily SET calls=calls+1,successes=successes+?,failures=failures+?,updated_at=? WHERE day=?",(1 if success else 0,0 if success else 1,now,day))
+        con.commit(); con.close()
+    except Exception as exc:
+        logger.debug("Composio usage counter unavailable: %s",exc)
+
+def composio_usage_snapshot(day=None):
+    try:
+        con=sqlite3.connect(_composio_usage_db(),timeout=10)
+        con.execute("CREATE TABLE IF NOT EXISTS composio_usage_daily(day TEXT PRIMARY KEY,calls INTEGER NOT NULL DEFAULT 0,successes INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)")
+        row=con.execute("SELECT calls,successes,failures FROM composio_usage_daily WHERE day=?",(day or date.today().isoformat(),)).fetchone()
+        con.close()
+        if row: return {"calls":int(row[0]),"successes":int(row[1]),"failures":int(row[2])}
+    except Exception:
+        pass
+    return {"calls":0,"successes":0,"failures":0}
+
 
 STRATEGIES = [
     {"id": 1, "key": "hero", "name": "Product Hero", "focus": "product-focused hero shot"},
@@ -105,9 +133,12 @@ async def run_composio_tool(tool_slug: str, arguments: Dict[str, Any], retries: 
                     raise RuntimeError(f"{tool_slug} unsuccessful: {err}")
 
                 if isinstance(data, dict) and "data" in data:
+                    _record_composio_usage(True)
                     return data["data"] if data["data"] is not None else {}
+                _record_composio_usage(True)
                 return data if isinstance(data, dict) else {"result": data}
         except Exception as e:
+            _record_composio_usage(False)
             last_err = e
             logger.warning(f"{tool_slug} attempt {attempt + 1} failed: {e}")
             if attempt >= retries:
