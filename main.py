@@ -313,6 +313,9 @@ async def video_github_checkpoint(body:KaggleVideoCheckpointRequest,_:bool=Depen
   from composio_video_verify import verify_run
   external=verify_run(body.run_id)
   if external.get("available") and external.get("complete"):
+   state=daily_ledger.get_video_pair_state(); next_start=int(state.get("next_pair_start") or 1)
+   if next_start!=int(body.pair_start):
+    return {"status":"kaggle_completed_already_advanced","kaggle":row,"composio":external,"advanced":False,"pair_status":pair_status(day)}
    advanced=daily_ledger.advance_video_pair(int(body.pair_start),day,reason="github_kaggle_completed_composio_verified")
    return {"status":"kaggle_completed_verified","kaggle":row,"composio":external,"advanced":advanced,"pair_status":pair_status(day)}
   fallback=await on_pinterest_batch_start(day,int(body.pair_start)+1)
