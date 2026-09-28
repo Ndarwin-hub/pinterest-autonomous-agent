@@ -225,3 +225,7 @@ class AmazonScheduler:
     continue
    attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,error="job_not_completed",inc_replacement=True)
   ledger.mark_slot(n,status="exhausted",day=day,error="replacement_limit_reached",inc_replacement=False);return False
+
+
+# Single authoritative scheduler instance used by main.py and the FastAPI lifespan.
+amazon_scheduler = AmazonScheduler()
