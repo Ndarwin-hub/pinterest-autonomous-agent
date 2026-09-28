@@ -1,0 +1,48 @@
+name: Daily automation final report
+
+on:
+  schedule:
+    - cron: '15 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: daily-automation-final-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Request GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          token=$(printf '%s' "$response" | jq -r '.value')
+          test -n "$token" && test "$token" != "null"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Send consolidated daily report
+        env:
+          ID_TOKEN: ${{ steps.oidc.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl --fail --silent --show-error --retry 8 --retry-delay 5 --retry-all-errors             --connect-timeout 20 --max-time 180             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -H 'X-Pin-A-Source: github-daily-final-report'             -X POST 'https://web-production-dae68.up.railway.app/amazon/notification-check'             -d '{}')
+          printf '%s\n' "$response"
+          status=$(printf '%s' "$response" | jq -r '.status // empty')
+          case "$status" in
+            sent|already_sent|completed|ok)
+              echo "Daily final report result: $status"
+              ;;
+            *)
+              echo "Daily final report failed: ${status:-<empty>}" >&2
+              exit 1
+              ;;
+          esac
