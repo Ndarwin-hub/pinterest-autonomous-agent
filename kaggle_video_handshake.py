@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, sqlite3, time
+import json, os, sqlite3, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +17,7 @@ def report_job(run_id,batch,slot,asin,status,render_status=None,quality_status=N
     init(); now=datetime.now(timezone.utc).isoformat(); c=_conn(); c.execute("INSERT INTO kaggle_video_jobs(run_id,batch_index,slot,asin,status,render_status,quality_status,publishing_status,platform_results_json,last_error,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,batch_index,slot) DO UPDATE SET status=excluded.status,render_status=excluded.render_status,quality_status=excluded.quality_status,publishing_status=excluded.publishing_status,platform_results_json=excluded.platform_results_json,last_error=excluded.last_error,updated_at=excluded.updated_at",(run_id,int(batch),int(slot),str(asin).upper(),status,render_status,quality_status,publishing_status,json.dumps(platform_results or {},separators=(",",":")),error,now)); c.execute("UPDATE kaggle_video_runs SET heartbeat_at=? WHERE run_id=?",(now,run_id)); c.commit(); c.close()
 def complete_run(run_id,status="COMPLETED",error=None):
     init(); now=datetime.now(timezone.utc).isoformat(); c=_conn(); c.execute("UPDATE kaggle_video_runs SET status=?,heartbeat_at=?,completed_at=?,last_error=? WHERE run_id=?",(status,now,now,error,run_id)); c.commit(); r=_row(c,run_id); c.close(); return r
+
 def get_run(run_id): init(); c=_conn(); r=_row(c,run_id); c.close(); return r
 
 def _derived_pair_run(day,pair_start):
@@ -29,7 +30,11 @@ def _derived_pair_run(day,pair_start):
     return {"run_id":run_id,"day":day,"pair_start":int(pair_start),"status":"COMPLETED" if success else ("INCOMPLETE" if terminal else "RUNNING"),"started_at":min((r[5] or latest) for r in relevant),"heartbeat_at":latest,"completed_at":latest if terminal else None,"last_error":next((r[8] for r in relevant if r[8]),None),"metadata_json":"{}"}
 
 def get_pair_run(day,pair_start):
-    init(); c=_conn(); r=c.execute("SELECT run_id,day,pair_start,status,started_at,heartbeat_at,completed_at,last_error,metadata_json FROM kaggle_video_runs WHERE day=? AND pair_start=? ORDER BY started_at DESC LIMIT 1",(day,int(pair_start))).fetchone(); c.close(); return dict(zip(["run_id","day","pair_start","status","started_at","heartbeat_at","completed_at","last_error","metadata_json"],r)) if r else _derived_pair_run(day,pair_start)
+    init(); c=_conn(); r=c.execute("SELECT run_id,day,pair_start,status,started_at,heartbeat_at,completed_at,last_error,metadata_json FROM kaggle_video_runs WHERE day=? AND pair_start=? ORDER BY started_at DESC LIMIT 1",(day,int(pair_start))).fetchone(); c.close()
+    if r:
+        return dict(zip(["run_id","day","pair_start","status","started_at","heartbeat_at","completed_at","last_error","metadata_json"],r))
+    return _derived_pair_run(day,pair_start)
+
 def run_is_stale(run):
     if not run:return True
     try:return time.time()-datetime.fromisoformat(run["heartbeat_at"]).timestamp()>STALE_SEC
