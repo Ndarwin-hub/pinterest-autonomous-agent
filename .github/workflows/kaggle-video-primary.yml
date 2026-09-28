@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: kaggle-video-primary
@@ -71,6 +72,33 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "pair=${start}+$((start+1))" >> "$GITHUB_OUTPUT"
 
+      - name: Request GitHub OIDC token for the Railway video bridge
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -H 'Accept: application/json; api-version=2.0' \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          token=$(printf '%s' "$response" | jq -r '.value')
+          test -n "$token" && test "$token" != "null"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Register Kaggle run with the durable Railway handshake
+        env:
+          ID_TOKEN: ${{ steps.oidc.outputs.token }}
+          RUN_ID: ${{ steps.pair.outputs.run_id }}
+          PAIR_START: ${{ steps.pair.outputs.start }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors \
+            -H "Authorization: Bearer $ID_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -X POST 'https://web-production-dae68.up.railway.app/video/github-checkpoint' \
+            -d "{\"pair_start\":$PAIR_START,\"run_id\":\"$RUN_ID\",\"status\":\"RUNNING\"}"
+
       - name: Pull the exact production Kaggle kernel
         shell: bash
         run: |
@@ -120,6 +148,7 @@ jobs:
           kaggle kernels push -p /tmp/kaggle-video
 
       - name: Wait for the Kaggle execution result
+        id: wait
         shell: bash
         run: |
           set -euo pipefail
@@ -140,6 +169,37 @@ jobs:
           done
           echo "Kaggle video primary timed out waiting for completion."
           exit 1
+
+      - name: Mark Kaggle completion and independently verify publication
+        env:
+          ID_TOKEN: ${{ steps.oidc.outputs.token }}
+          RUN_ID: ${{ steps.pair.outputs.run_id }}
+          PAIR_START: ${{ steps.pair.outputs.start }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors \
+            -H "Authorization: Bearer $ID_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -X POST 'https://web-production-dae68.up.railway.app/video/github-checkpoint' \
+            -d "{\"pair_start\":$PAIR_START,\"run_id\":\"$RUN_ID\",\"status\":\"COMPLETED\"}" | tee /tmp/video-checkpoint.json
+          cat /tmp/video-checkpoint.json
+
+      - name: Request Railway fallback after Kaggle failure
+        if: failure()
+        env:
+          ID_TOKEN: ${{ steps.oidc.outputs.token }}
+          RUN_ID: ${{ steps.pair.outputs.run_id }}
+          PAIR_START: ${{ steps.pair.outputs.start }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors \
+            -H "Authorization: Bearer $ID_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -X POST 'https://web-production-dae68.up.railway.app/video/github-checkpoint' \
+            -d "{\"pair_start\":$PAIR_START,\"run_id\":\"$RUN_ID\",\"status\":\"FAILED\",\"error\":\"GitHub Kaggle primary workflow failed\"}" | tee /tmp/video-fallback.json
+          cat /tmp/video-fallback.json
 
       - name: Record completion context
         shell: bash
