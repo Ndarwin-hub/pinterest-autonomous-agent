@@ -1,6 +1,6 @@
 """Fail-closed visual image validation and selection shared by every publication path."""
 from __future__ import annotations
-import asyncio, io, logging, os, re, math, hashlib
+import asyncio, io, logging, os, re, math, hashlib, json
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from PIL import Image, ImageFile
@@ -194,6 +194,30 @@ async def search_pexels(query:str,agent_mod:Any)->List[Dict[str,Any]]:
             if u:out.append({"url":u,"provider":"pexels","id":str(p.get("id") or ""),"source":"pexels","license":"Pexels License","original":True})
         return out
     except Exception:return []
+async def search_independent_bing_images(query:str,num:int=12)->List[Dict[str,Any]]:
+    """Independent web-image fallback that does not depend on Composio."""
+    try:
+        endpoint="https://www.bing.com/images/search"
+        headers={"User-Agent":os.getenv("PIN_N_SEARCH_USER_AGENT","Mozilla/5.0"),"Accept":"text/html,application/xhtml+xml","Accept-Language":"en-US,en;q=0.9"}
+        async with httpx.AsyncClient(timeout=20,follow_redirects=True,headers=headers) as client:
+            r=await client.get(endpoint,params={"q":query[:120],"form":"HDRSC2"})
+            r.raise_for_status()
+        out=[]
+        for node in re.findall(r'<a[^>]+class=["\']iisc[^>]*>.*?</a>',r.text,re.I|re.S):
+            m=re.search(r'\bm=["\']([^"\']+)["\']',node,re.I)
+            if not m: continue
+            try: meta=json.loads(m.group(1).replace("&quot;","\""))
+            except Exception: continue
+            u=str(meta.get("murl") or "")
+            if not u.startswith(("http://","https://")): continue
+            out.append({"url":u,"provider":"independent_bing_image","id":str(meta.get("purl") or ""),"source":str(meta.get("purl") or ""),"license":"web_search_verify_usage"})
+            if len(out)>=num: break
+        logger.info("Independent Bing image search query=%s results=%s",query,len(out))
+        return out
+    except Exception as exc:
+        logger.warning("Independent Bing image search failed query=%s: %s",query,str(exc)[:300])
+        return []
+
 async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any]]:
     """Direct Amazon image extraction fallback used only when normal image search is unavailable."""
     url=str(product.get("url") or "").strip()
@@ -237,35 +261,51 @@ def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
         f"{base} clean high resolution product photo",
     ]
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
-    """Search multiple independent query angles, merge all candidates, hard-validate, then rank globally.
-
-    The caller's Composio budget limits actual executions. Existing image-search queries remain available when the provider works; a direct Amazon product-image fallback is always available before publication.
-    No candidate is accepted merely because it was found: dimensions/aspect and the
-    minimum score gate still apply before ranking.
+    """Canonical five-source selector: Composio -> independent web -> Pexels -> Amazon -> product page.
+    Every candidate is byte-validated, fingerprint-checked, and visually de-duplicated.
+    Provider failure advances to the next source; it never aborts the product by itself.
     """
     raw=[]
+    product_page=[]
     for u in product.get("images") or []:
-        if u and u not in used_urls:raw.append({"url":u,"provider":"product_page","source":"product page","license":"product_page","original":True})
-    # Preserve the existing search order, but add a direct Amazon product-image
-    # fallback before any AI/placeholder generation. This survives administrator-disabled
-    # COMPOSIO_SEARCH_IMAGE without weakening the content gate.
-    raw.extend(await search_amazon_product_images(product))
+        if u and u not in used_urls:
+            product_page.append({"url":u,"provider":"product_page","source":"product page","license":"product_page","original":True})
     queries=_search_queries(product,strategy)
-    composio_empty_streak=0
+
+    # 1) Composio image search (preferred when executable).
     for query in queries:
         try:
             found=await agent_mod.search_composio_images(query,num=10)
             if found:
-                raw.extend(found); composio_empty_streak=0
-            else:
-                composio_empty_streak+=1
-                if composio_empty_streak>=1: break
-        except Exception:
+                raw.extend(found)
+                break
+        except Exception as exc:
+            logger.warning("Composio image source unavailable; advancing to next source: %s",str(exc)[:300])
             break
-    if not COMPOSIO_API_KEY:
-        # Only use the direct/credentialed Pexels path when Composio is not the active
-        # image-search route, avoiding duplicate quota use in the normal production path.
-        raw.extend(await search_pexels(queries[0],agent_mod))
+
+    # 2) Independent web-image search. This is deliberately outside Composio.
+    if not raw:
+        for query in queries[:2]:
+            found=await search_independent_bing_images(query,num=12)
+            if found:
+                raw.extend(found)
+                break
+
+    # 3) Pexels, using direct credentials when present or the existing Composio
+    # route when available. It is a genuine external image source, not a placeholder.
+    if not raw:
+        try:
+            raw.extend(await search_pexels(queries[0],agent_mod))
+        except Exception:
+            pass
+
+    # 4) Verified native Amazon product imagery. It is the recovery source when
+    # external image discovery is unavailable or produces no valid candidate.
+    raw.extend(await search_amazon_product_images(product))
+
+    # 5) Native product-page imagery is the final source, never an invented image.
+    raw.extend(product_page)
+
     valid=await validate_many(raw)
     from image_fingerprint import known_fingerprints, similarity
     known=known_fingerprints()
@@ -273,14 +313,17 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     for c in valid:
         fp=c.get("_fingerprint")
         if not fp: continue
-        if any(similarity(fp,old_fp)>=0.999 for old_fp in known):
-            continue
-        if any(similarity(fp,other.get("_fingerprint"))>=0.999 for other in filtered if other.get("_fingerprint")):
-            continue
+        if any(similarity(fp,old_fp)>=0.999 for old_fp in known): continue
+        if any(similarity(fp,other.get("_fingerprint"))>=0.999 for other in filtered if other.get("_fingerprint")): continue
         filtered.append(c)
     valid=filtered
-    for c in valid:c["score"]=score(c,product,strategy.get("key",""))
-    valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls]
+    for c in valid:
+        c["score"]=score(c,product,strategy.get("key",""))
+
+    # Source priority is intentional: genuine external images first, Amazon
+    # recovery second-last, native product-page imagery last. Resolution still
+    # ranks within each source tier.
+    source_rank={"composio_search_image":0,"independent_bing_image":1,"pexels":2,"amazon_direct":3,"product_page":4}
     def _resolution_tier(x):
         m=max(int(x.get("width") or 0),int(x.get("height") or 0))
         if m>=6000:return 4
@@ -288,10 +331,10 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         if m>=2000:return 2
         if m>=1200:return 1
         return 0
-    valid.sort(key=lambda x:(_resolution_tier(x),x.get("score",0),x.get("original",False)),reverse=True)
+    valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls]
+    valid.sort(key=lambda x:(source_rank.get(str(x.get("provider") or ""),9),-_resolution_tier(x),-int(x.get("score",0)),not bool(x.get("original",False))))
     diverse=await _remove_visual_duplicates(valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
-    if diverse:return diverse[:MAX_CANDIDATES_PER_PIN]
-    return []
+    return diverse[:MAX_CANDIDATES_PER_PIN] if diverse else []
 
 async def validate_base64_image(value:str)->Optional[Dict[str,Any]]:
     if not value:return None
