@@ -328,7 +328,18 @@ async def video_job_claim(batch:int,slot:int,x_video_secret:Optional[str]=Header
 
 @app.post("/video/job/{batch}/{slot}/status")
 async def video_job_status(batch:int,slot:int,status:str,owner:Optional[str]=None,error:Optional[str]=None,publication_json:Optional[str]=None,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
- _video_auth(x_video_secret); day=daily_ledger.today_str(); daily_ledger.mark_video_job(day,batch,slot,status,owner,error,publication_json); return {"status":"recorded","day":day,"batch":batch,"slot":slot}
+ _video_auth(x_video_secret)
+ day=daily_ledger.today_str()
+ daily_ledger.mark_video_job(day,batch,slot,status,owner,error,publication_json)
+ fallback=None
+ if str(status).lower()=="failed" and owner and str(owner).startswith("kaggle-"):
+  try:
+   from video_fallback import on_kaggle_job_failure
+   fallback=await on_kaggle_job_failure(day,int(batch),int(slot),error)
+  except Exception as exc:
+   logger.exception("Kaggle job fallback dispatch failed batch=%s slot=%s: %s",batch,slot,exc)
+   fallback={"status":"railway_fallback_dispatch_failed","error":str(exc)[:1000]}
+ return {"status":"recorded","day":day,"batch":batch,"slot":slot,"fallback":fallback}
 
 @app.post("/video/publish")
 async def video_publish(request:Request,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
