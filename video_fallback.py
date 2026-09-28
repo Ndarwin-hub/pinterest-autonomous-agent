@@ -8,7 +8,7 @@ from kaggle_video_handshake import get_pair_run, run_is_stale, pair_product_stat
 from composio_video_verify import verify_run
 
 log=logging.getLogger(__name__)
-PAIR_STARTS=(1,3,5,7,9);PLATFORMS=("facebook","instagram","youtube","x","tiktok");ACTIVE={}
+PAIR_STARTS=(1,3,5,7,9);PLATFORMS=("facebook","instagram","youtube","x","tiktok");ACTIVE={};SINGLE_ACTIVE=set()
 _ORIGINAL_CLAIM=daily_ledger.claim_video_job;_ORIGINAL_MARK=daily_ledger.mark_video_job
 
 def _claim_video_job_with_run(day,batch,slot,owner):
@@ -49,6 +49,27 @@ async def on_pinterest_batch_start(day,batch):
     if decision=="running":return {"status":"kaggle_running","pair":_pair_for(start),"run_id":run.get("run_id")}
     if decision=="unknown":return {"status":"kaggle_status_unknown","pair":_pair_for(start)}
     task=asyncio.create_task(_run_pair(day,start,run.get("run_id") if run else None));ACTIVE[key]=task;return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
+
+async def on_kaggle_job_failure(day,batch,slot,error=None):
+    """Take over exactly one failed Kaggle video job; never re-run successful Kaggle jobs."""
+    key=f"{day}:{int(batch)}:{int(slot)}"
+    if key in SINGLE_ACTIVE:return {"status":"already_active","batch":int(batch),"slot":int(slot)}
+    rows=daily_ledger.video_batch(day,int(batch))
+    row=next((r for r in rows if int(r.get("slot") or 0)==int(slot)),None)
+    if not row:return {"status":"ignored","reason":"video_job_not_found","batch":int(batch),"slot":int(slot)}
+    if _terminal(row) and str(row.get("status")).lower()=="completed":return {"status":"already_completed","batch":int(batch),"slot":int(slot)}
+    owner=f"railway-video-fallback-{int(batch)}-{int(slot)}-{uuid.uuid4().hex[:8]}"
+    claim=daily_ledger.claim_video_job(day,int(batch),int(slot),owner)
+    if not claim or not claim.get("claimed"):return {"status":"claim_lost","batch":int(batch),"slot":int(slot)}
+    SINGLE_ACTIVE.add(key)
+    try:
+        await asyncio.to_thread(_process_product,day,((int(batch)-1)//2)*2+1,int(batch),row,owner,None,None)
+        return {"status":"railway_fallback_completed","batch":int(batch),"slot":int(slot)}
+    except Exception as exc:
+        daily_ledger.mark_video_job(day,int(batch),int(slot),"failed",owner=owner,error=str(exc)[:1000])
+        return {"status":"railway_fallback_failed","batch":int(batch),"slot":int(slot),"error":str(exc)[:1000]}
+    finally:
+        SINGLE_ACTIVE.discard(key)
 
 async def _run_pair(day,start,kaggle_run_id=None):
     key=f"{day}:{start}";owner=f"railway-video-{start}-{uuid.uuid4().hex[:8]}"
