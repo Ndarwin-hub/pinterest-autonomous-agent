@@ -35,7 +35,7 @@ from amazon_discovery import is_dormant as amazon_discovery_dormant
 from amazon_scheduler import amazon_scheduler,SCHEDULER_MODE
 from amazon_boards import REQUIRED_PRIMARY_SLOTS,BOARD_SCOPES
 from daily_ledger import ledger as daily_ledger,BATCH_SIZE
-from video_fallback import pair_status
+from video_fallback import pair_status,on_pinterest_batch_start
 import publication_guard
 import image_diversity_guard
 publication_guard.install(agent_module)
@@ -264,6 +264,12 @@ class VideoBatchRequest(BaseModel):
  batch:int=Field(1,ge=1,le=10)
  fallback:bool=False
 
+class KaggleVideoCheckpointRequest(BaseModel):
+ pair_start:int=Field(...,description="One of 1,3,5,7,9")
+ run_id:str=Field(...,min_length=8,max_length=200)
+ status:str=Field(...,min_length=2,max_length=32)
+ error:Optional[str]=None
+
 def _video_auth(secret):
  if VIDEO_BRIDGE_SECRET and secret and hmac.compare_digest(secret,VIDEO_BRIDGE_SECRET): return True
  raise HTTPException(status_code=401,detail="Invalid or missing video bridge authentication")
@@ -286,6 +292,32 @@ async def video_batch(body:VideoBatchRequest,x_video_secret:Optional[str]=Header
 @app.get("/video/fallback/status")
 async def video_fallback_status():
  return pair_status()
+
+@app.post("/video/github-checkpoint")
+async def video_github_checkpoint(body:KaggleVideoCheckpointRequest,_:bool=Depends(verify_manual_oidc)):
+ if int(body.pair_start) not in (1,3,5,7,9):
+  raise HTTPException(status_code=400,detail="pair_start must be 1,3,5,7,9")
+ status=str(body.status).upper()
+ day=daily_ledger.today_str()
+ from kaggle_video_handshake import upsert_run,complete_run,get_run
+ if status=="RUNNING":
+  row=upsert_run(body.run_id,day,int(body.pair_start),status="RUNNING",metadata={"source":"github-actions","run_id":body.run_id})
+  return {"status":"recorded","kaggle":row,"pair_status":pair_status(day)}
+ if status in ("FAILED","INCOMPLETE"):
+  row=complete_run(body.run_id,status,status if body.error else None)
+  result=await on_pinterest_batch_start(day,int(body.pair_start)+1)
+  return {"status":"fallback_requested","kaggle":row,"fallback":result,"pair_status":pair_status(day)}
+ if status=="COMPLETED":
+  upsert_run(body.run_id,day,int(body.pair_start),status="RUNNING",metadata={"source":"github-actions","run_id":body.run_id})
+  row=complete_run(body.run_id,"COMPLETED",None)
+  from composio_video_verify import verify_run
+  external=verify_run(body.run_id)
+  if external.get("available") and external.get("complete"):
+   advanced=daily_ledger.advance_video_pair(int(body.pair_start),day,reason="github_kaggle_completed_composio_verified")
+   return {"status":"kaggle_completed_verified","kaggle":row,"composio":external,"advanced":advanced,"pair_status":pair_status(day)}
+  fallback=await on_pinterest_batch_start(day,int(body.pair_start)+1)
+  return {"status":"kaggle_completed_unverified","kaggle":row,"composio":external,"fallback":fallback,"pair_status":pair_status(day)}
+ raise HTTPException(status_code=400,detail="status must be RUNNING, COMPLETED, FAILED, or INCOMPLETE")
 
 @app.post("/video/job/{batch}/{slot}/claim")
 async def video_job_claim(batch:int,slot:int,x_video_secret:Optional[str]=Header(None,alias="X-Video-Secret")):
