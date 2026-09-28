@@ -17,7 +17,6 @@ def report_job(run_id,batch,slot,asin,status,render_status=None,quality_status=N
     init(); now=datetime.now(timezone.utc).isoformat(); c=_conn(); c.execute("INSERT INTO kaggle_video_jobs(run_id,batch_index,slot,asin,status,render_status,quality_status,publishing_status,platform_results_json,last_error,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,batch_index,slot) DO UPDATE SET status=excluded.status,render_status=excluded.render_status,quality_status=excluded.quality_status,publishing_status=excluded.publishing_status,platform_results_json=excluded.platform_results_json,last_error=excluded.last_error,updated_at=excluded.updated_at",(run_id,int(batch),int(slot),str(asin).upper(),status,render_status,quality_status,publishing_status,json.dumps(platform_results or {},separators=(",",":")),error,now)); c.execute("UPDATE kaggle_video_runs SET heartbeat_at=? WHERE run_id=?",(now,run_id)); c.commit(); c.close()
 def complete_run(run_id,status="COMPLETED",error=None):
     init(); now=datetime.now(timezone.utc).isoformat(); c=_conn(); c.execute("UPDATE kaggle_video_runs SET status=?,heartbeat_at=?,completed_at=?,last_error=? WHERE run_id=?",(status,now,now,error,run_id)); c.commit(); r=_row(c,run_id); c.close(); return r
-
 def get_run(run_id): init(); c=_conn(); r=_row(c,run_id); c.close(); return r
 
 def _derived_pair_run(day,pair_start):
@@ -29,11 +28,27 @@ def _derived_pair_run(day,pair_start):
     latest=max((r[6] for r in relevant),default=datetime.now(timezone.utc).isoformat()); terminal=len(relevant)>=10 and all(str(r[3]).lower() in ("completed","failed") for r in relevant); success=len(relevant)>=10 and all(str(r[3]).lower()=="completed" for r in relevant)
     return {"run_id":run_id,"day":day,"pair_start":int(pair_start),"status":"COMPLETED" if success else ("INCOMPLETE" if terminal else "RUNNING"),"started_at":min((r[5] or latest) for r in relevant),"heartbeat_at":latest,"completed_at":latest if terminal else None,"last_error":next((r[8] for r in relevant if r[8]),None),"metadata_json":"{}"}
 
+def _auto_start_kaggle(day,pair_start):
+    if not os.getenv("KAGGLE_VIDEO_KERNEL_ID") or not (os.getenv("KAGGLE_API_TOKEN") or os.getenv("KAGGLE_USERNAME")):
+        return None
+    run_id=f"kaggle-{day}-pair-{int(pair_start)}-{uuid.uuid4().hex[:10]}"
+    upsert_run(run_id,day,pair_start,status="RUNNING",metadata={"source":"railway_kaggle_trigger"})
+    try:
+        from kaggle_video_launcher import launch_existing_kernel
+        launch_existing_kernel(run_id,day,pair_start)
+        return get_run(run_id)
+    except Exception as exc:
+        complete_run(run_id,"FAILED",str(exc)[:1000])
+        return get_run(run_id)
+
 def get_pair_run(day,pair_start):
     init(); c=_conn(); r=c.execute("SELECT run_id,day,pair_start,status,started_at,heartbeat_at,completed_at,last_error,metadata_json FROM kaggle_video_runs WHERE day=? AND pair_start=? ORDER BY started_at DESC LIMIT 1",(day,int(pair_start))).fetchone(); c.close()
-    if r:
-        return dict(zip(["run_id","day","pair_start","status","started_at","heartbeat_at","completed_at","last_error","metadata_json"],r))
-    return _derived_pair_run(day,pair_start)
+    if r:return dict(zip(["run_id","day","pair_start","status","started_at","heartbeat_at","completed_at","last_error","metadata_json"],r))
+    derived=_derived_pair_run(day,pair_start)
+    if derived:return derived
+    # A missing run is no longer treated as an immediate Railway failure.
+    # If Kaggle execution is configured, start the primary first.
+    return _auto_start_kaggle(day,pair_start)
 
 def run_is_stale(run):
     if not run:return True
