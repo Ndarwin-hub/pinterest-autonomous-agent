@@ -38,7 +38,7 @@ jobs:
           printf '%s\n' "$response"
           status=$(printf '%s' "$response" | jq -r '.status // empty')
           case "$status" in
-            sent|already_sent|completed|ok)
+            sent|already_sent|completed|ok|final_status)
               echo "Daily final report result: $status"
               ;;
             *)
