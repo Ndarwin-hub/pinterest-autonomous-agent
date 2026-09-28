@@ -196,11 +196,32 @@ class AmazonScheduler:
    job_id=result.get("job_id")
    try:ledger.enqueue_video_job(day,(n-1)//BATCH_SIZE+1,n,candidate.get("asin"),url,affiliate_url=url,title=candidate.get("title"),source="pinterest");logger.info("Video follower queued day=%s batch=%s slot=%s asin=%s",day,(n-1)//BATCH_SIZE+1,n,candidate.get("asin"))
    except Exception as video_queue_error:logger.exception("Video follower queue failed for slot %s; Pinterest continues unaffected: %s",n,video_queue_error)
-   if self.is_pinterest_block_error(json.dumps(result,separators=(",",":"))):
-    self.activate_pinterest_circuit(json.dumps(result,separators=(",",":")));ledger.mark_slot(n,status="deferred",day=day,error="pinterest_circuit_breaker_active");return False
-   verified=pinterest_any_verified(result)
-   if verified:
-    ledger.mark_slot(n,status="completed",day=day,selected_asin=candidate.get("asin"),selected_url=url,affiliate_url=url,pinterest_verified=True,job_id=job_id)
-    return True
-   attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,error="pinterest_verification_failed",inc_replacement=True)
+   initial_json=json.dumps(result,separators=(",",":"))
+   if self.is_pinterest_block_error(initial_json):
+    self.activate_pinterest_circuit(initial_json);ledger.mark_slot(n,status="deferred",day=day,error="pinterest_circuit_breaker_active",job_id=job_id);return False
+   # The enqueue response normally acknowledges the job before Pinterest publishing finishes.
+   # Never classify an accepted asynchronous job as failed until its final result is available.
+   if str(result.get("status") or "")=="completed" and pinterest_target_verified(result):
+    ledger.mark_slot(n,status="success",day=day,selected_asin=candidate.get("asin"),selected_url=url,affiliate_url=url,pinterest_verified=True,job_id=job_id);return True
+   if wait_job and job_id:
+    logger.info("Amazon slot %s waiting for job_id=%s",n,job_id)
+    try:
+     final=await wait_job(job_id)
+    except Exception as e:
+     attempts+=1;logger.exception("Amazon slot %s wait failed job_id=%s",n,job_id);ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(e)[:500],inc_replacement=True);continue
+    logger.info("Amazon slot %s job_id=%s finished status=%s",n,job_id,final.get("status"))
+    final_result=final.get("result") or {}
+    combined_error=json.dumps(final_result,separators=(",",":"))+" "+str(final.get("error") or "")
+    if self.is_pinterest_block_error(combined_error):
+     self.activate_pinterest_circuit(combined_error);ledger.mark_slot(n,status="deferred",day=day,job_id=job_id,error="pinterest_rate_or_spam_block");return False
+    if pinterest_target_verified(final_result):
+     ledger.mark_slot(n,status="success",day=day,selected_asin=candidate.get("asin"),selected_url=url,affiliate_url=url,pinterest_verified=True,job_id=job_id);return True
+    if str(final.get("status") or "")=="completed_partial" and pinterest_any_verified(final_result):
+     ledger.mark_slot(n,status="partial",day=day,selected_asin=candidate.get("asin"),selected_url=url,affiliate_url=url,pinterest_verified=True,job_id=job_id,error="partial_pinterest_publish");return False
+    attempts+=1
+    ledger.mark_slot(n,status="failed_open",day=day,job_id=job_id,error=str(final.get("error") or "pinterest_verification_failed")[:500],inc_replacement=True)
+    try: registry.record_blocked(asin=candidate.get("asin"),product_url=url,affiliate_url=url,job_id=job_id,notes="no_verified_pin_published")
+    except Exception: pass
+    continue
+   attempts+=1;ledger.mark_slot(n,status="failed_open",day=day,error="job_not_completed",inc_replacement=True)
   ledger.mark_slot(n,status="exhausted",day=day,error="replacement_limit_reached",inc_replacement=False);return False
