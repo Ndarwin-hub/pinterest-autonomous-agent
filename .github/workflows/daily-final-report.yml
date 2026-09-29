@@ -3,6 +3,8 @@ name: Daily automation final report
 on:
   schedule:
     - cron: '15 8 * * *'
+    - cron: '25 8 * * *'
+    - cron: '45 8 * * *'
   workflow_dispatch:
 
 permissions:
