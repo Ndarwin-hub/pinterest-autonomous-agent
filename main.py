@@ -121,11 +121,39 @@ async def _pin_a_request_worker():
                 daily_ledger.finish_pin_a_request(req["request_id"],"pending",str(exc)[:1000])
             await asyncio.sleep(5)
 
+async def _daily_final_report_worker():
+    """Railway-owned daily report trigger; GitHub remains only a backup trigger.
+    Sends once after 14:00 Nepal time and retries failed Gmail delivery.
+    """
+    from zoneinfo import ZoneInfo
+    from amazon_alerts import notify_daily_final_status
+    while True:
+        try:
+            now=datetime.now(timezone.utc).astimezone(ZoneInfo(CLOUDFLARE_TZ))
+            if now.hour < 14:
+                minutes_until_14=(13-now.hour)*60+(60-now.minute)
+                await asyncio.sleep(max(30,min(3600,minutes_until_14*60)))
+                continue
+            day=now.date().isoformat()
+            ok=await notify_daily_final_status(day)
+            if ok:
+                logger.info("Railway daily final report check complete for %s",day)
+                await asyncio.sleep(3600)
+            else:
+                logger.warning("Railway daily final report send failed for %s; retrying in 5 minutes.",day)
+                await asyncio.sleep(300)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Daily final report worker error: %s",exc)
+            await asyncio.sleep(300)
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
  logger.info("Pinterest Autonomous Agent v4.0.0 starting... quality_patch=%s",QUALITY_PATCH_VERSION);logger.info("Quota governor: %s",quota.snapshot());logger.info("Amazon layer source=composio amazon_api_credentials_present=%s mode=%s",amazon_credentials_present(),SCHEDULER_MODE)
  registration_task=None
  pin_a_worker=None
+ daily_report_worker=None
  if MCP_PATH:registration_task=asyncio.create_task(register_custom_mcp_with_retry())
  startup_pin_count=int(os.getenv("PIN_COMMAND_ON_START","0") or "0")
  if startup_pin_count>0:
@@ -160,8 +188,13 @@ async def lifespan(app:FastAPI):
  app.state.amazon_enqueue=_enqueue_for_amazon;app.state.amazon_list_boards=_list_boards_for_amazon;app.state.amazon_wait_job=_wait_job
  await amazon_scheduler.start(enqueue=_enqueue_for_amazon,list_boards=_list_boards_for_amazon,wait_job=_wait_job)
  pin_a_worker=asyncio.create_task(_pin_a_request_worker(),name="pin-a-durable-worker")
+ daily_report_worker=asyncio.create_task(_daily_final_report_worker(),name="daily-final-report-worker")
  await _resume_pin_n_requests()
  yield
+ if daily_report_worker:
+  daily_report_worker.cancel()
+  try: await daily_report_worker
+  except asyncio.CancelledError: pass
  if pin_a_worker:
   pin_a_worker.cancel()
   try: await pin_a_worker
