@@ -171,10 +171,10 @@ async def lifespan(app:FastAPI):
    except Exception as exc:logger.exception("STARTUP PIN %s FAILED: %s",startup_pin_count,exc)
   asyncio.create_task(_run_startup_pin_command(),name=f"startup-pin-{startup_pin_count}")
  else:logger.warning("MCP bridge disabled: MCP_BRIDGE_TOKEN is not configured") if not MCP_PATH else logger.info("MCP bridge enabled at configured protected endpoint")
- async def _enqueue_for_amazon(url:str,target_board_id:str|None=None,target_board_name:str|None=None):
+ async def _enqueue_for_amazon(url:str,target_board_id:str|None=None,target_board_name:str|None=None,force_new:bool=False):
   class _BG:
    def add_task(self,fn,*args):asyncio.create_task(fn(*args))
-  r=await enqueue_job(url,_BG(),target_board_id=target_board_id,target_board_name=target_board_name);return {"job_id":r.job_id,"status":r.status,"message":r.message}
+  r=await enqueue_job(url,_BG(),target_board_id=target_board_id,target_board_name=target_board_name,force_new=force_new);return {"job_id":r.job_id,"status":r.status,"message":r.message}
  async def _list_boards_for_amazon():
   try:
    data=await agent_module.run_composio_tool("PINTEREST_LIST_BOARDS",{});return data.get("items") or data.get("boards") or []
