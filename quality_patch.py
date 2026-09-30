@@ -29,6 +29,7 @@ def _generic(value: str) -> bool:
     v = _clean(value).lower()
     if not v or v in _GENERIC or _is_asin(v): return True
     if v.startswith("amazon.com "): return True
+    if re.fullmatch(r"amazon product\s+[A-Z0-9]{10}", v, flags=re.I): return True
     if v in {"electronics","fashion","home","kitchen","shoes","sneakers"}: return True
     return False
 
