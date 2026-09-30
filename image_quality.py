@@ -261,9 +261,10 @@ async def search_amazon_asin_cdn_images(product:Dict[str,Any])->List[Dict[str,An
     for shot in range(1,10):
         n=f"{shot:02d}"
         for host in ("https://images-na.ssl-images-amazon.com/images/P","https://m.media-amazon.com/images/P"):
-            u=f"{host}/{asin}.{n}.LZZZZZZZ.jpg"
-            if u not in [x["url"] for x in out]:
-                out.append({"url":u,"provider":"amazon_asin_cdn","source":"Amazon ASIN CDN gallery","license":"Amazon product listing","original":True})
+            for suffix in (".LZZZZZZZ.jpg",".jpg","._SL1500_.jpg"):
+                u=f"{host}/{asin}.{n}{suffix}"
+                if u not in [x["url"] for x in out]:
+                    out.append({"url":u,"provider":"amazon_asin_cdn","source":"Amazon ASIN CDN gallery","license":"Amazon product listing","original":True})
     logger.info("Amazon ASIN CDN gallery asin=%s candidates=%s",asin,len(out))
     return out
 
