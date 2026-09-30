@@ -62,7 +62,7 @@ jobs:
           printf '%s\n' "$response"
           status=$(printf '%s' "$response" | jq -r '.status // empty')
           case "$status" in
-            session_started|already_running|already_completed|ignored)
+            accepted|session_started|already_running|already_completed|ignored)
               echo "Pin A accepted by Railway: $status"
               ;;
             *)
