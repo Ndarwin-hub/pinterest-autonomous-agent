@@ -53,10 +53,19 @@ async def _fetch_image_bytes(url:str)->Optional[bytes]:
         async with httpx.AsyncClient(timeout=25,follow_redirects=True) as client:
             r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"})
             ct=(r.headers.get("content-type") or "").lower()
-            if r.status_code>=400 or not r.content or len(r.content)>MAX_IMAGE_BYTES_TO_INSPECT:return None
-            if ct and not ct.startswith("image/"):return None
+            if r.status_code>=400 or not r.content:
+                logger.debug("image fetch rejected url=%s status=%s", url, r.status_code)
+                return None
+            if len(r.content)>MAX_IMAGE_BYTES_TO_INSPECT:
+                logger.debug("image fetch rejected url=%s bytes=%s max=%s", url, len(r.content), MAX_IMAGE_BYTES_TO_INSPECT)
+                return None
+            if ct and not ct.startswith("image/"):
+                logger.debug("image fetch rejected url=%s content_type=%s", url, ct)
+                return None
             return r.content
-    except Exception:return None
+    except Exception as exc:
+        logger.debug("image fetch exception url=%s error=%s", url, str(exc)[:180])
+        return None
 
 async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
     if not url or not str(url).startswith(("http://","https://")): return None
@@ -81,7 +90,7 @@ def hard_gate(w:int,h:int)->Tuple[bool,str]:
     return True,"ok"
 async def inspect_image_content(url:str)->Optional[Dict[str,Any]]:
     raw=await _fetch_image_bytes(url)
-    return inspect_image_bytes(raw) if raw else None
+    return inspect_image_bytes(raw, url) if raw else None
 
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     d=await inspect_image_url(c.get("url",""))
@@ -241,6 +250,9 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
                 if "m.media-amazon.com/images/I/" not in u:continue
                 if u not in found:found.append(u)
                 # Upgrade common Amazon derivative filenames to their original asset.
+                for marker in ("._SL1500_.","._SX1500_.","._SY1500_.","._AC_SL1500_.","._AC_UL1500_."):
+                    bounded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)',marker,u)
+                    if bounded not in found: found.append(bounded)
                 upgraded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)','.',u)
                 if upgraded!=u and upgraded not in found:found.append(upgraded)
                 if len(found)>=24:break
@@ -313,8 +325,12 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     for c in valid:
         fp=c.get("_fingerprint")
         if not fp: continue
-        if any(similarity(fp,old_fp)>=0.999 for old_fp in known): continue
-        if any(similarity(fp,other.get("_fingerprint"))>=0.999 for other in filtered if other.get("_fingerprint")): continue
+        if any(similarity(fp,old_fp)>=0.999 for old_fp in known):
+            logger.info("IMAGE_REJECT provider=%s reason=known_fingerprint", c.get("provider"))
+            continue
+        if any(similarity(fp,other.get("_fingerprint"))>=0.999 for other in filtered if other.get("_fingerprint")):
+            logger.info("IMAGE_REJECT provider=%s reason=intra_product_duplicate", c.get("provider"))
+            continue
         filtered.append(c)
     valid=filtered
     for c in valid:
