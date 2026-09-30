@@ -281,7 +281,7 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
         for u in found:
             v=re.sub(r'\._(?:SL|SX|SY|AC_SL|AC_UL)\d+_\.',".",u)
             if v not in upgraded: upgraded.append(v)
-        logger.info("Amazon gallery extraction asin=%s candidates=%s",str(product.get("asin") or _asin(url) or "")[:32],len(upgraded))
+        logger.info("Amazon gallery extraction asin=%s candidates=%s",str(product.get("asin") or (re.search(r"(?:/dp/|/gp/product/)([A-Z0-9]{10})",url,re.I).group(1) if re.search(r"(?:/dp/|/gp/product/)([A-Z0-9]{10})",url,re.I) else "") or "")[:32],len(upgraded))
         return [{"url":u,"provider":"amazon_direct","source":"Amazon product gallery","license":"Amazon product listing","original":True} for u in upgraded[:24]]
     except Exception as exc:
         logger.warning("Amazon gallery extraction failed: %s",str(exc)[:180])
