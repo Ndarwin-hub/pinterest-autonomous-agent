@@ -28,6 +28,9 @@ class AmazonScheduler:
  async def start_daily_session(self,enqueue,list_boards,wait_job=None,trigger_batch=None):
   if SCHEDULER_MODE!="external": return {"status":"ignored","reason":"not_external_mode"}
   day=ledger.today_str()
+  try:
+   ds=ledger.get_day_status(day); logger.info("Pin A ledger diagnostic day=%s status=%s success_count=%s unfinished=%s",day,ds.get("status"),ds.get("success_count"),ledger.next_unfinished_batch(day))
+  except Exception as e: logger.warning("Pin A ledger diagnostic unavailable: %s",e)
   if self._daily_task and not self._daily_task.done():
    if self._daily_day==day:
     return {"status":"already_running","day":day,"next_batch":ledger.next_unfinished_batch(day)}
