@@ -249,6 +249,24 @@ async def search_independent_bing_images(query:str,num:int=12)->List[Dict[str,An
         logger.warning("Independent Bing image search failed query=%s: %s",query,str(exc)[:300])
         return []
 
+async def search_amazon_asin_cdn_images(product:Dict[str,Any])->List[Dict[str,Any]]:
+    """Construct exact Amazon CDN gallery candidates from the verified ASIN."""
+    url=str(product.get("url") or "")
+    asin=str(product.get("asin") or "").upper().strip()
+    if not asin:
+        m=re.search(r"(?:/dp/|/gp/product/)([A-Z0-9]{10})",url,re.I)
+        asin=m.group(1).upper() if m else ""
+    if not asin: return []
+    out=[]
+    for shot in range(1,10):
+        n=f"{shot:02d}"
+        for host in ("https://images-na.ssl-images-amazon.com/images/P","https://m.media-amazon.com/images/P"):
+            u=f"{host}/{asin}.{n}.LZZZZZZZ.jpg"
+            if u not in [x["url"] for x in out]:
+                out.append({"url":u,"provider":"amazon_asin_cdn","source":"Amazon ASIN CDN gallery","license":"Amazon product listing","original":True})
+    logger.info("Amazon ASIN CDN gallery asin=%s candidates=%s",asin,len(out))
+    return out
+
 async def search_amazon_api_images(product:Dict[str,Any])->List[Dict[str,Any]]:
     """Use Amazon Creators API primary + variant large images when credentials are available."""
     try:
@@ -358,8 +376,9 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     """Amazon-first exact-product selector; fall back only when Amazon cannot fill the tier."""
     target=4
     amazon_api=await search_amazon_api_images(product)
+    amazon_cdn=await search_amazon_asin_cdn_images(product)
     amazon_page=await search_amazon_product_images(product)
-    amazon=amazon_api+amazon_page
+    amazon=amazon_api+amazon_cdn+amazon_page
     amazon_valid=await validate_many([c for c in amazon if c.get("url") and c.get("url") not in used_urls])
     amazon_valid=[c for c in amazon_valid if c.get("provider") in {"amazon_creators_api","amazon_direct"}]
     if len(amazon_valid)>=target:
@@ -400,7 +419,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         logger.info("IMAGE_SOURCE_FAIL product=%s reason=no_exact_product_image_survived",str(product.get("asin") or product.get("name",""))[:80])
         return []
     for c in trusted: c["score"]=score(c,product,str(strategy.get("key","")))
-    source_rank={"amazon_creators_api":0,"amazon_direct":1,"product_page":2,"composio_search_image":3,"independent_bing_image":4,"pexels":5}
+    source_rank={"amazon_creators_api":0,"amazon_asin_cdn":1,"amazon_direct":2,"product_page":3,"composio_search_image":4,"independent_bing_image":5,"pexels":6}
     def _resolution_tier(x):
         m=max(int(x.get("width") or 0),int(x.get("height") or 0))
         return 4 if m>=6000 else 3 if m>=3500 else 2 if m>=2000 else 1 if m>=1200 else 0
