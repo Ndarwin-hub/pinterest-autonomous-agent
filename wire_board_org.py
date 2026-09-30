@@ -122,7 +122,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 # Shared image engine is the same for /submit and Amazon jobs; no path may
                 # bypass the content gate or re-enable the old Pillow placeholder fallback.
                 if not candidates:
-                    generated=await generate_image(product,strategy)
+                    generated=None
                     if generated:
                         try:
                             from image_quality import validate_base64_image
@@ -150,7 +150,7 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 review=await review_batch(review_items,composio_run=budgeted_run if (getattr(agent_mod,"COMPOSIO_API_KEY","") and not XAI_API_KEY) else None)
                 failed=failed_indexes(review,len(pins))
                 # Partial approval is sufficient; only valid, individually verified Pins are published.
-                if not failed or review.get("final_reviewer")=="deterministic":
+                if not failed:
                     break
                 if recovery_rounds>=MAX_RECOVERY_ROUNDS:
                     break
@@ -180,8 +180,8 @@ def apply_agent_wiring(agent_mod:Any)->None:
                 if replaced==0:break
                 recovery_rounds+=1
             published=[]; errors=[]
-            # Reviewer output is advisory only. Structural byte validation, duplicate checks, dimensions and aspect ratio remain hard gates; reviewer scores/approvals must not reject otherwise valid Pins.
-            approved_indexes=set(range(1,len(pins)+1))
+            # Product relevance is a hard publication gate. A technically valid image is not publishable unless the deterministic reviewer confirms exact-product evidence.
+            approved_indexes={int(x) for x in (review.get("approved_indexes") or []) if str(x).isdigit()}
             logger.info("Internal review advisory result raw_approved=%s scores=%s final_reviewer=%s; publication set=%s", review.get("approved_indexes"), review.get("scores"), review.get("final_reviewer"), sorted(approved_indexes))
             for p in pins:
                 if p["pin_number"] not in approved_indexes:
