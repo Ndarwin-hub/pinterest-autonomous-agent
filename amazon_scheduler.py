@@ -191,7 +191,10 @@ class AmazonScheduler:
    if not candidate:logger.warning("Amazon slot %s produced no fresh candidate",n);ledger.mark_slot(n,status="exhausted",day=day,error="no_candidates",inc_replacement=True);return False
    exclude.add(candidate.get("asin") or "");url=candidate["affiliate_url"];logger.info("Amazon slot %s selected asin=%s board=%s recovery=%s",n,candidate.get("asin"),target_board_name,recovery)
    if not recovery:ledger.mark_slot(n,status="processing",day=day,selected_asin=candidate.get("asin"),selected_url=url,affiliate_url=url,inc_replacement=True)
-   try: result=await enqueue(url,target_board_id,target_board_name);logger.info("Amazon slot %s enqueue accepted board=%s job_id=%s status=%s",n,target_board_name,result.get("job_id"),result.get("status"))
+   try:
+    force_new_job=recovery or str(slot.get("status") or "") in ("failed_open","partial","deferred","exhausted","processing")
+    result=await enqueue(url,target_board_id,target_board_name,force_new=force_new_job)
+    logger.info("Amazon slot %s enqueue accepted board=%s job_id=%s status=%s force_new=%s",n,target_board_name,result.get("job_id"),result.get("status"),force_new_job)
    except Exception as e:attempts+=1;logger.exception("Amazon slot %s enqueue failed",n);ledger.mark_slot(n,status="failed_open",day=day,error=str(e)[:500]);continue
    job_id=result.get("job_id")
    try:ledger.enqueue_video_job(day,(n-1)//BATCH_SIZE+1,n,candidate.get("asin"),url,affiliate_url=url,title=candidate.get("title"),source="pinterest");logger.info("Video follower queued day=%s batch=%s slot=%s asin=%s",day,(n-1)//BATCH_SIZE+1,n,candidate.get("asin"))
