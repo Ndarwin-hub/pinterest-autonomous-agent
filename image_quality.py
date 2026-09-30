@@ -249,6 +249,43 @@ async def search_independent_bing_images(query:str,num:int=12)->List[Dict[str,An
         logger.warning("Independent Bing image search failed query=%s: %s",query,str(exc)[:300])
         return []
 
+async def search_amazon_api_images(product:Dict[str,Any])->List[Dict[str,Any]]:
+    """Use Amazon Creators API primary + variant large images when credentials are available."""
+    try:
+        from amazon_client import AmazonCreatorsClient, amazon_credentials_present, extract_asin_from_item
+        if not amazon_credentials_present():
+            return []
+        url=str(product.get("url") or "")
+        asin=str(product.get("asin") or "").upper().strip()
+        if not asin:
+            m=re.search(r"(?:/dp/|/gp/product/)([A-Z0-9]{10})",url,re.I)
+            asin=m.group(1).upper() if m else ""
+        if not asin:
+            return []
+        client=AmazonCreatorsClient()
+        items=await client.get_items([asin])
+        out=[]
+        def walk(node):
+            if isinstance(node,dict):
+                for k,v in node.items():
+                    if k.lower()=="url" and isinstance(v,str) and "m.media-amazon.com/images/I/" in v.lower():
+                        low=v.lower()
+                        if not any(x in low for x in ("amazon_logo","amazon-logo","social_share","prime_logo","prime-logo")):
+                            if v not in [x["url"] for x in out]:
+                                out.append({"url":v,"provider":"amazon_creators_api","source":"Amazon Creators API images","license":"Amazon product listing","original":True})
+                    else: walk(v)
+            elif isinstance(node,list):
+                for v in node: walk(v)
+        for item in items:
+            item_asin=extract_asin_from_item(item) if isinstance(item,dict) else None
+            if item_asin and item_asin!=asin: continue
+            walk(item.get("images") if isinstance(item,dict) else {})
+        logger.info("Amazon Creators API gallery asin=%s candidates=%s",asin,len(out))
+        return out[:24]
+    except Exception as exc:
+        logger.info("Amazon Creators API image tier unavailable: %s",str(exc)[:220])
+        return []
+
 async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any]]:
     """Extract Amazon's exact product-gallery assets; no web-search substitution at this tier."""
     url=str(product.get("url") or "").strip()
@@ -320,9 +357,9 @@ async def _alternative_identity_ok(c:Dict[str,Any],product:Dict[str,Any])->bool:
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
     """Amazon-first exact-product selector; fall back only when Amazon cannot fill the tier."""
     target=4
-    amazon=await search_amazon_product_images(product)
+    amazon_api=await search_amazon_api_images(product)\n    amazon_page=await search_amazon_product_images(product)\n    amazon=amazon_api+amazon_page
     amazon_valid=await validate_many([c for c in amazon if c.get("url") and c.get("url") not in used_urls])
-    amazon_valid=[c for c in amazon_valid if c.get("provider")=="amazon_direct"]
+    amazon_valid=[c for c in amazon_valid if c.get("provider") in {"amazon_creators_api","amazon_direct"}]
     if len(amazon_valid)>=target:
         amazon_valid.sort(key=lambda x:(-score(x,product,str(strategy.get("key",""))),not bool(x.get("original",False))))
         chosen=await _remove_visual_duplicates(amazon_valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
@@ -361,7 +398,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         logger.info("IMAGE_SOURCE_FAIL product=%s reason=no_exact_product_image_survived",str(product.get("asin") or product.get("name",""))[:80])
         return []
     for c in trusted: c["score"]=score(c,product,str(strategy.get("key","")))
-    source_rank={"amazon_direct":0,"product_page":1,"composio_search_image":2,"independent_bing_image":3,"pexels":4}
+    source_rank={"amazon_creators_api":0,"amazon_direct":1,"product_page":2,"composio_search_image":3,"independent_bing_image":4,"pexels":5}
     def _resolution_tier(x):
         m=max(int(x.get("width") or 0),int(x.get("height") or 0))
         return 4 if m>=6000 else 3 if m>=3500 else 2 if m>=2000 else 1 if m>=1200 else 0
