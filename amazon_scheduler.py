@@ -66,6 +66,9 @@ class AmazonScheduler:
      result=await self.run_batch(batch,enqueue,list_boards,wait_job)
      status=str(result.get("status") or "")
      if status in ("blocked","failed","partial_failure"): logger.warning("Daily session batch %s returned %s; continuing with today's fresh ledger allocation only.",batch,status)
+     if int(batch) >= (SLOT_COUNT // BATCH_SIZE):
+      recovery_mode=True;logger.info("Normal daily pass reached Batch 10/terminal slots; entering final recovery pass.")
+      continue
     else:
      slot=ledger.next_recovery_slot(day)
      if not slot:
