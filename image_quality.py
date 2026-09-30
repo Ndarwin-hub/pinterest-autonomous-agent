@@ -224,11 +224,14 @@ async def search_independent_bing_images(query:str,num:int=12)->List[Dict[str,An
             r=await client.get(endpoint,params={"q":query[:120],"form":"HDRSC2"})
             r.raise_for_status()
         out=[]
-        for node in re.findall(r'<a[^>]+class=["\']iisc[^>]*>.*?</a>',r.text,re.I|re.S):
-            m=re.search(r'\bm=["\']([^"\']+)["\']',node,re.I)
-            if not m: continue
-            try: meta=json.loads(m.group(1).replace("&quot;","\""))
-            except Exception: continue
+        # Bing has changed its image-result markup over time. Parse the embedded
+        # murl metadata directly instead of relying on the old iisc anchor class.
+        for m in re.finditer(r'\bm=["\']([^"\']+)["\']',r.text,re.I):
+            try:
+                raw=m.group(1).replace("&quot;","\"").replace("&#34;","\"").replace("\\\"","\"")
+                meta=json.loads(raw)
+            except Exception:
+                continue
             u=str(meta.get("murl") or "")
             if not u.startswith(("http://","https://")): continue
             out.append({"url":u,"provider":"independent_bing_image","id":str(meta.get("purl") or ""),"source":str(meta.get("purl") or ""),"license":"web_search_verify_usage"})
