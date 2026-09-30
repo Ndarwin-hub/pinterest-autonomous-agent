@@ -37,7 +37,9 @@ class AmazonScheduler:
    except asyncio.CancelledError: pass
    self._daily_task=None
    logger.info("Closed prior daily session day=%s before starting fresh day=%s",old_day,day)
-  if ledger.is_day_complete(day): return {"status":"already_completed","day":day}
+  force_pin_a=os.getenv("AMAZON_FORCE_PIN_A","false").lower() in ("1","true","yes")
+  if ledger.is_day_complete(day) and not force_pin_a: return {"status":"already_completed","day":day}
+  if force_pin_a: logger.warning("AMAZON_FORCE_PIN_A active: reopening today's scheduler pass without modifying historical days.")
   orphaned=ledger.reclaim_orphaned_batches(day)
   if orphaned: logger.warning("Reclaimed orphaned batch ownership on wake: day=%s batches=%s",day,orphaned)
   ledger.reclaim_stale_processing(day)
