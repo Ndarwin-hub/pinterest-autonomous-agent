@@ -357,7 +357,9 @@ async def _alternative_identity_ok(c:Dict[str,Any],product:Dict[str,Any])->bool:
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
     """Amazon-first exact-product selector; fall back only when Amazon cannot fill the tier."""
     target=4
-    amazon_api=await search_amazon_api_images(product)\n    amazon_page=await search_amazon_product_images(product)\n    amazon=amazon_api+amazon_page
+    amazon_api=await search_amazon_api_images(product)
+    amazon_page=await search_amazon_product_images(product)
+    amazon=amazon_api+amazon_page
     amazon_valid=await validate_many([c for c in amazon if c.get("url") and c.get("url") not in used_urls])
     amazon_valid=[c for c in amazon_valid if c.get("provider") in {"amazon_creators_api","amazon_direct"}]
     if len(amazon_valid)>=target:
