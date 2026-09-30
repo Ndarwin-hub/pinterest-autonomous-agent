@@ -52,7 +52,20 @@ class JobStore:
    for r in rows:
     if normalize_url(r[1])!=key:continue
     st=JobStatus(r[2])
-    if st in (JobStatus.QUEUED,JobStatus.RUNNING):return self.get(r[0])
+    if st in (JobStatus.QUEUED,JobStatus.RUNNING):
+     try:
+      updated=datetime.fromisoformat(r[7])
+      stale_cutoff=datetime.now(timezone.utc)-timedelta(minutes=10)
+      if updated < stale_cutoff:
+       stale=self.get(r[0])
+       stale.status=JobStatus.FAILED
+       stale.error="Recovered stale persisted job after worker/process interruption."
+       stale.progress="Stale job released for durable scheduler recovery."
+       self.update(stale.job_id,status=JobStatus.FAILED,error=stale.error,progress=stale.progress)
+       continue
+     except Exception:
+      pass
+     return self.get(r[0])
     if st in (JobStatus.COMPLETED,JobStatus.COMPLETED_PARTIAL):
      try:
       if datetime.fromisoformat(r[7])>=cutoff:return self.get(r[0])
