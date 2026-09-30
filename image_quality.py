@@ -250,48 +250,38 @@ async def search_independent_bing_images(query:str,num:int=12)->List[Dict[str,An
         return []
 
 async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any]]:
-    """Extract the exact Amazon product gallery (primary + variant/sub-images)."""
+    """Direct Amazon image extraction fallback used only when normal image search is unavailable."""
     url=str(product.get("url") or "").strip()
-    if not url: return []
+    if not url:return []
     try:
         async with httpx.AsyncClient(timeout=25,follow_redirects=True) as client:
-            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/amazon-gallery","Accept-Language":"en-US,en;q=0.9"})
-            if r.status_code>=400: return []
+            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36","Accept-Language":"en-US,en;q=0.9"})
+            if r.status_code>=400:return []
             html=r.text
-        html=(html.replace("\\u002F","/").replace("\\/","/").replace("\\u003A",":")
-              .replace("\\u003D","=").replace("&amp;","&"))
+        html=html.replace("\\u002F","/").replace("\\/","/")
         found=[]
-        def add(u):
-            if not u: return
-            u=str(u).replace("\\u0026","&").replace("\\u003d","=")
-            if u.startswith("//"): u="https:"+u
-            low=u.lower()
-            if not low.startswith(("http://","https://")): return
-            if "m.media-amazon.com/images/I/" not in low: return
-            if any(x in low for x in ("amazon_logo","amazon-logo","social_share","prime_logo","prime-logo")): return
-            if u not in found: found.append(u)
-        # Dynamic gallery payload, when present.
-        for m in re.finditer(r'data-a-dynamic-image\\?["\']\\s*[:=]\\s*["\']([^"\']+)',html,re.I):
-            try:
-                obj=json.loads(m.group(1).replace("\\\"","\""))
-                for u in obj.keys(): add(u)
-            except Exception: pass
-        # Robust fallback: Amazon gallery assets are hosted under this exact path.
-        for u in re.findall(r'https?://m\.media-amazon\.com/images/I/[A-Za-z0-9._%+\-]+(?:\.(?:jpg|jpeg|png|webp))?',html,re.I):
-            add(u)
-        for u in re.findall(r'//m\.media-amazon\.com/images/I/[A-Za-z0-9._%+\-]+(?:\.(?:jpg|jpeg|png|webp))?',html,re.I):
-            add(u)
-        # Also capture escaped JSON URLs.
-        for u in re.findall(r'https?:\\?/\\?/m\.media-amazon\.com/images/I/[A-Za-z0-9._%+\-]+(?:\\?\.(?:jpg|jpeg|png|webp))?',html,re.I):
-            add(u.replace("\\/","/"))
-        upgraded=[]
-        for u in found:
-            v=re.sub(r'\._(?:SL|SX|SY|AC_SL|AC_UL)\d+_\.',".",u)
-            if v not in upgraded: upgraded.append(v)
-        logger.info("Amazon gallery extraction asin=%s candidates=%s",str(product.get("asin") or "")[:32],len(upgraded))
-        return [{"url":u,"provider":"amazon_direct","source":"Amazon product gallery","license":"Amazon product listing","original":True} for u in upgraded[:24]]
-    except Exception as exc:
-        logger.warning("Amazon gallery extraction failed: %s",str(exc)[:180])
+        patterns=[
+            r'"(?:hiRes|large|main)"\s*:\s*"([^"]+)"',
+            r'"(?:large|hiRes)"\s*:\s*"(https?://m\.media-amazon\.com/images/I/[^"]+)"',
+            r'(https?://m\.media-amazon\.com/images/I/[A-Za-z0-9._%+-]+\.(?:jpg|jpeg|png|webp))'
+        ]
+        for pat in patterns:
+            for u in re.findall(pat,html,re.I):
+                u=u.replace("\\u0026","&").replace("\\u003d","=")
+                if u.startswith("//"):u="https:"+u
+                if "m.media-amazon.com/images/I/" not in u:continue
+                if "amazon_logo" not in u.lower() and "amazon-logo" not in u.lower() and "social_share" not in u.lower() and "prime_logo" not in u.lower() and "prime-logo" not in u.lower():
+                    if u not in found:found.append(u)
+                # Upgrade common Amazon derivative filenames to their original asset.
+                for marker in ("._SL1500_.","._SX1500_.","._SY1500_.","._AC_SL1500_.","._AC_UL1500_."):
+                    bounded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)',marker,u)
+                    if bounded not in found: found.append(bounded)
+                upgraded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)','.',u)
+                if upgraded!=u and upgraded not in found:found.append(upgraded)
+                if len(found)>=24:break
+            if len(found)>=24:break
+        return [{"url":u,"provider":"amazon_direct","source":"Amazon product image","license":"Amazon product listing","original":True} for u in found[:24]]
+    except Exception:
         return []
 def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
     name=(product.get("name") or "product").strip()
