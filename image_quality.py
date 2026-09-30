@@ -270,7 +270,8 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
                 u=u.replace("\\u0026","&").replace("\\u003d","=")
                 if u.startswith("//"):u="https:"+u
                 if "m.media-amazon.com/images/I/" not in u:continue
-                if u not in found:found.append(u)
+                if "amazon_logo" not in u.lower() and "amazon-logo" not in u.lower() and "social_share" not in u.lower() and "prime_logo" not in u.lower() and "prime-logo" not in u.lower():
+                    if u not in found:found.append(u)
                 # Upgrade common Amazon derivative filenames to their original asset.
                 for marker in ("._SL1500_.","._SX1500_.","._SY1500_.","._AC_SL1500_.","._AC_UL1500_."):
                     bounded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)',marker,u)
@@ -361,7 +362,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     # Source priority is intentional: genuine external images first, Amazon
     # recovery second-last, native product-page imagery last. Resolution still
     # ranks within each source tier.
-    source_rank={"composio_search_image":0,"independent_bing_image":1,"pexels":2,"amazon_direct":3,"product_page":4}
+    source_rank={"product_page":0,"amazon_direct":1,"composio_search_image":2,"independent_bing_image":3,"pexels":4}
     def _resolution_tier(x):
         m=max(int(x.get("width") or 0),int(x.get("height") or 0))
         if m>=6000:return 4
