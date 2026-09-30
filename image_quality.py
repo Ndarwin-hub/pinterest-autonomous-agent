@@ -250,40 +250,44 @@ async def search_independent_bing_images(query:str,num:int=12)->List[Dict[str,An
         return []
 
 async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any]]:
-    """Direct Amazon image extraction fallback used only when normal image search is unavailable."""
+    """Extract the exact Amazon product gallery (primary + variant/sub-images)."""
     url=str(product.get("url") or "").strip()
-    if not url:return []
+    if not url: return []
     try:
         async with httpx.AsyncClient(timeout=25,follow_redirects=True) as client:
-            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36","Accept-Language":"en-US,en;q=0.9"})
-            if r.status_code>=400:return []
-            html=r.text
-        html=html.replace("\\u002F","/").replace("\\/","/")
+            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/amazon-gallery","Accept-Language":"en-US,en;q=0.9"})
+            if r.status_code>=400: return []
+            html=r.text.replace("\\u002F","/").replace("\\/","/").replace("&amp;","&")
         found=[]
-        patterns=[
-            r'"(?:hiRes|large|main)"\s*:\s*"([^"]+)"',
-            r'"(?:large|hiRes)"\s*:\s*"(https?://m\.media-amazon\.com/images/I/[^"]+)"',
-            r'(https?://m\.media-amazon\.com/images/I/[A-Za-z0-9._%+-]+\.(?:jpg|jpeg|png|webp))'
-        ]
-        for pat in patterns:
-            for u in re.findall(pat,html,re.I):
-                u=u.replace("\\u0026","&").replace("\\u003d","=")
-                if u.startswith("//"):u="https:"+u
-                if "m.media-amazon.com/images/I/" not in u:continue
-                if "amazon_logo" not in u.lower() and "amazon-logo" not in u.lower() and "social_share" not in u.lower() and "prime_logo" not in u.lower() and "prime-logo" not in u.lower():
-                    if u not in found:found.append(u)
-                # Upgrade common Amazon derivative filenames to their original asset.
-                for marker in ("._SL1500_.","._SX1500_.","._SY1500_.","._AC_SL1500_.","._AC_UL1500_."):
-                    bounded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)',marker,u)
-                    if bounded not in found: found.append(bounded)
-                upgraded=re.sub(r'\._[^./]+_\.(?=[A-Za-z0-9]+$)','.',u)
-                if upgraded!=u and upgraded not in found:found.append(upgraded)
-                if len(found)>=24:break
-            if len(found)>=24:break
-        return [{"url":u,"provider":"amazon_direct","source":"Amazon product image","license":"Amazon product listing","original":True} for u in found[:24]]
-    except Exception:
+        def add(u):
+            if not u: return
+            u=str(u).replace("\\u0026","&").replace("\\u003d","=")
+            if u.startswith("//"): u="https:"+u
+            low=u.lower()
+            if not low.startswith(("http://","https://")): return
+            if "m.media-amazon.com/images/I/" not in low: return
+            if any(x in low for x in ("amazon_logo","amazon-logo","social_share","prime_logo","prime-logo")): return
+            if u not in found: found.append(u)
+        # Amazon's dynamic-image payload is the strongest gallery signal.
+        for m in re.finditer(r'data-a-dynamic-image\\?["\']\\s*[:=]\\s*["\']([^"\']+)',html,re.I):
+            try:
+                obj=json.loads(m.group(1).replace("\\\"","\""))
+                for u in obj.keys(): add(u)
+            except Exception: pass
+        # imageGalleryData/hiRes/large/main and remaining media-amazon assets.
+        for pat in (
+            r'(?:hiRes|large|main)\\?["\']\\s*:\\s*\\?["\'](https?:\\?/\\?/m\\.media-amazon\\.com/images/I/[^"\']+)',
+            r'https?:\\?/\\?/m\\.media-amazon\\.com/images/I/[A-Za-z0-9._%+\-]+(?:\\.(?:jpg|jpeg|png|webp))?',
+        ):
+            for m in re.finditer(pat,html,re.I): add(m.group(1) if m.lastindex else m.group(0))
+        upgraded=[]
+        for u in found:
+            v=re.sub(r'\\._[^./]+_\\.',".",u)
+            if v not in upgraded: upgraded.append(v)
+        return [{"url":u,"provider":"amazon_direct","source":"Amazon product gallery","license":"Amazon product listing","original":True} for u in upgraded[:24]]
+    except Exception as exc:
+        logger.debug("Amazon gallery extraction failed: %s",str(exc)[:180])
         return []
-
 def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
     name=(product.get("name") or "product").strip()
     brand=(product.get("brand") or "").strip()
@@ -295,85 +299,77 @@ def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
         f"{base} front product photography",
         f"{base} clean high resolution product photo",
     ]
+async def _alternative_identity_ok(c:Dict[str,Any],product:Dict[str,Any])->bool:
+    """Require source-page evidence before accepting a non-Amazon fallback image."""
+    src=str(c.get("source") or "")
+    if not src.startswith(("http://","https://")): return False
+    try:
+        async with httpx.AsyncClient(timeout=10,follow_redirects=True) as client:
+            r=await client.get(src,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/identity"})
+            if r.status_code>=400 or not r.text: return False
+            evidence=re.sub(r"<[^>]+>"," ",r.text).lower()+" "+src.lower()
+        asin=str(product.get("asin") or "").lower()
+        if asin and asin in evidence: return True
+        name=str(product.get("name") or "").lower()
+        brand=str(product.get("brand") or "").lower().strip()
+        stop={"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}
+        tokens=list(dict.fromkeys(t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}",name) if t not in stop))
+        if brand and brand in evidence and any(t in evidence for t in tokens[:8]): return True
+        return sum(1 for t in tokens[:10] if t in evidence)>=2
+    except Exception:
+        return False
+
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
-    """Canonical five-source selector: Composio -> independent web -> Pexels -> Amazon -> product page.
-    Every candidate is byte-validated, fingerprint-checked, and visually de-duplicated.
-    Provider failure advances to the next source; it never aborts the product by itself.
-    """
+    """Amazon-first exact-product selector; fall back only when Amazon cannot fill the tier."""
+    target=4
+    amazon=await search_amazon_product_images(product)
+    amazon_valid=await validate_many([c for c in amazon if c.get("url") and c.get("url") not in used_urls])
+    amazon_valid=[c for c in amazon_valid if c.get("provider")=="amazon_direct"]
+    if len(amazon_valid)>=target:
+        amazon_valid.sort(key=lambda x:(-score(x,product,str(strategy.get("key",""))),not bool(x.get("original",False))))
+        chosen=await _remove_visual_duplicates(amazon_valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
+        if len(chosen)>=target:
+            logger.info("IMAGE_SOURCE_TIER product=%s tier=amazon_gallery valid=%s selected=%s",str(product.get("asin") or product.get("name",""))[:80],len(amazon_valid),target)
+            return chosen[:target]
     raw=[]
-    product_page=[]
     for u in product.get("images") or []:
         if u and u not in used_urls:
-            product_page.append({"url":u,"provider":"product_page","source":"product page","license":"product_page","original":True})
-    queries=_search_queries(product,strategy)
-
-    # 1) Composio image search (preferred when executable).
-    for query in queries:
-        try:
-            found=await agent_mod.search_composio_images(query,num=10)
-            if found:
-                raw.extend(found)
-                break
-        except Exception as exc:
-            logger.warning("Composio image source unavailable; advancing to next source: %s",str(exc)[:300])
-            break
-
-    # 2) Independent web-image search. This is deliberately outside Composio.
-    if not raw:
+            raw.append({"url":u,"provider":"product_page","source":"exact product page","license":"product_page","original":True})
+    if len(amazon_valid)<target:
+        queries=_search_queries(product,strategy)
         for query in queries[:2]:
-            found=await search_independent_bing_images(query,num=12)
-            if found:
-                raw.extend(found)
-                break
-
-    # 3) Pexels, using direct credentials when present or the existing Composio
-    # route when available. It is a genuine external image source, not a placeholder.
-    if not raw:
-        try:
-            raw.extend(await search_pexels(queries[0],agent_mod))
-        except Exception:
-            pass
-
-    # 4) Verified native Amazon product imagery. It is the recovery source when
-    # external image discovery is unavailable or produces no valid candidate.
-    raw.extend(await search_amazon_product_images(product))
-
-    # 5) Native product-page imagery is the final source, never an invented image.
-    raw.extend(product_page)
-
-    valid=await validate_many(raw)
-    from image_fingerprint import known_fingerprints, similarity
-    known=known_fingerprints()
-    filtered=[]
-    for c in valid:
-        fp=c.get("_fingerprint")
-        if not fp: continue
-        if any(similarity(fp,old_fp)>=0.999 for old_fp in known):
-            logger.info("IMAGE_REJECT provider=%s reason=known_fingerprint", c.get("provider"))
-            continue
-        if any(similarity(fp,other.get("_fingerprint"))>=0.999 for other in filtered if other.get("_fingerprint")):
-            logger.info("IMAGE_REJECT provider=%s reason=intra_product_duplicate", c.get("provider"))
-            continue
-        filtered.append(c)
-    valid=filtered
-    for c in valid:
-        c["score"]=score(c,product,strategy.get("key",""))
-
-    # Source priority is intentional: genuine external images first, Amazon
-    # recovery second-last, native product-page imagery last. Resolution still
-    # ranks within each source tier.
-    source_rank={"product_page":0,"amazon_direct":1,"composio_search_image":2,"independent_bing_image":3,"pexels":4}
+            try:
+                found=await agent_mod.search_composio_images(query,num=10)
+                if found: raw.extend(found); break
+            except Exception as exc:
+                logger.warning("Composio image source unavailable; advancing: %s",str(exc)[:300])
+        if not any(c.get("url") for c in raw if c.get("provider")=="composio_search_image"):
+            for query in queries[:2]:
+                found=await search_independent_bing_images(query,num=12)
+                if found: raw.extend(found); break
+        if not any(c.get("url") for c in raw if c.get("provider")=="independent_bing_image"):
+            try: raw.extend(await search_pexels(queries[0],agent_mod))
+            except Exception: pass
+    validated=await validate_many([c for c in raw if c.get("url") and c.get("url") not in used_urls])
+    trusted=[]
+    for c in validated:
+        if c.get("provider")=="product_page" or await _alternative_identity_ok(c,product):
+            if c.get("provider")!="product_page": c["identity_gate"]="passed"
+            trusted.append(c)
+        else:
+            logger.info("IMAGE_REJECT provider=%s reason=product_identity_unverified url=%s",c.get("provider"),str(c.get("url"))[:220])
+    trusted.extend(amazon_valid)
+    if not trusted:
+        logger.info("IMAGE_SOURCE_FAIL product=%s reason=no_exact_product_image_survived",str(product.get("asin") or product.get("name",""))[:80])
+        return []
+    for c in trusted: c["score"]=score(c,product,str(strategy.get("key","")))
+    source_rank={"amazon_direct":0,"product_page":1,"composio_search_image":2,"independent_bing_image":3,"pexels":4}
     def _resolution_tier(x):
         m=max(int(x.get("width") or 0),int(x.get("height") or 0))
-        if m>=6000:return 4
-        if m>=3500:return 3
-        if m>=2000:return 2
-        if m>=1200:return 1
-        return 0
-    valid=[c for c in valid if c.get("url") and c.get("url") not in used_urls]
-    valid.sort(key=lambda x:(source_rank.get(str(x.get("provider") or ""),9),-_resolution_tier(x),-int(x.get("score",0)),not bool(x.get("original",False))))
-    diverse=await _remove_visual_duplicates(valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
-    return diverse[:MAX_CANDIDATES_PER_PIN] if diverse else []
+        return 4 if m>=6000 else 3 if m>=3500 else 2 if m>=2000 else 1 if m>=1200 else 0
+    trusted.sort(key=lambda x:(source_rank.get(str(x.get("provider") or ""),9),-_resolution_tier(x),-int(x.get("score",0)),not bool(x.get("original",False))))
+    diverse=await _remove_visual_duplicates(trusted[:MAX_CANDIDATES_PER_PIN*3],used_urls)
+    return diverse[:target] if len(diverse)>=target else diverse
 
 async def validate_base64_image(value:str)->Optional[Dict[str,Any]]:
     if not value:return None
