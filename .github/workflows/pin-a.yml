@@ -30,10 +30,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            -H 'Accept: application/json; api-version=2.0' \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
+          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
           token=$(printf '%s' "$response" | jq -r '.value')
           test -n "$token" && test "$token" != "null"
           echo "ID_TOKEN=$token" >> "$GITHUB_ENV"
@@ -47,26 +44,32 @@ jobs:
           request_id=$(jq -r '.inputs.request_id // .client_payload.request_id // empty' "$GITHUB_EVENT_PATH")
           if [[ -z "$request_id" ]]; then request_id="$GITHUB_RUN_ID"; fi
 
-          response=$(curl --fail --silent --show-error --no-buffer \
-            --connect-timeout 20 --max-time 120 \
-            --retry 5 --retry-delay 5 --retry-all-errors \
-            -H "Authorization: Bearer $ID_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -H "X-Pin-A-Source: $source" \
-            -H "X-Pin-A-Request-ID: $request_id" \
-            -H "X-Pin-A-GitHub-Run-ID: $GITHUB_RUN_ID" \
-            -H "X-Pin-A-Event: $GITHUB_EVENT_NAME" \
-            -X POST 'https://web-production-dae68.up.railway.app/pin-a' \
-            --data "{\"batch\":1,\"scheduler_run_id\":\"pin-a:$request_id\",\"scheduled_local_time\":\"pin-a\",\"github_delay_seconds\":0,\"github_queued_runs\":0,\"github_active_runs\":0,\"github_load_class\":\"PIN_A\"}")
+          payload="{\"batch\":1,\"scheduler_run_id\":\"pin-a:$request_id\",\"scheduled_local_time\":\"pin-a\",\"github_delay_seconds\":0,\"github_queued_runs\":0,\"github_active_runs\":0,\"github_load_class\":\"PIN_A\"}"
+          domains=(
+            "https://web-production-dae68.up.railway.app"
+            "https://web-production-24057.up.railway.app"
+          )
 
-          printf '%s\n' "$response"
-          status=$(printf '%s' "$response" | jq -r '.status // empty')
-          case "$status" in
-            accepted|session_started|already_running|already_completed|ignored)
-              echo "Pin A accepted by Railway: $status"
-              ;;
-            *)
-              echo "Pin A returned unexpected status: ${status:-<empty>}" >&2
-              exit 1
-              ;;
-          esac
+          response=""
+          last_status=0
+          for base in "${domains[@]}"; do
+            set +e
+            response=$(curl --silent --show-error --no-buffer               --connect-timeout 20 --max-time 120               --retry 5 --retry-delay 5 --retry-all-errors               -H "Authorization: Bearer $ID_TOKEN"               -H 'Content-Type: application/json'               -H "X-Pin-A-Source: $source"               -H "X-Pin-A-Request-ID: $request_id"               -H "X-Pin-A-GitHub-Run-ID: $GITHUB_RUN_ID"               -H "X-Pin-A-Event: $GITHUB_EVENT_NAME"               -X POST "$base/pin-a"               --data "$payload")
+            last_status=$?
+            set -e
+
+            if [[ $last_status -eq 0 ]]; then
+              printf '%s\n' "$response"
+              status=$(printf '%s' "$response" | jq -r '.status // empty')
+              case "$status" in
+                accepted|session_started|already_running|already_completed|ignored)
+                  echo "Pin A accepted by Railway: $status via $base"
+                  exit 0
+                  ;;
+              esac
+            fi
+            echo "Pin A contract unavailable at $base; trying next Railway service domain." >&2
+          done
+
+          echo "Pin A contract failed on all configured Railway service domains." >&2
+          exit 1
