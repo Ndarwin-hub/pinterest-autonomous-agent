@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from PIL import Image, ImageFile
 logger=logging.getLogger("pinterest-agent.image-quality")
-MIN_DIMENSION=800
+MIN_DIMENSION=500
 PREFERRED_MIN_DIMENSION=1200
 PREFERRED_PORTRAIT_MIN_HEIGHT=1200
 MAX_ASPECT=2.0
