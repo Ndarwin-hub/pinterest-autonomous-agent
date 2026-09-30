@@ -381,7 +381,8 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
     amazon_page=await search_amazon_product_images(product)
     amazon=amazon_api+amazon_cdn+amazon_page
     amazon_valid=await validate_many([c for c in amazon if c.get("url") and c.get("url") not in used_urls])
-    amazon_valid=[c for c in amazon_valid if c.get("provider") in {"amazon_creators_api","amazon_direct"}]
+    amazon_valid=[c for c in amazon_valid if c.get("provider") in {"amazon_creators_api","amazon_asin_cdn","amazon_direct","product_page"}]
+    logger.info("AMAZON_IMAGE_TIER asin=%s candidates=%s providers=%s",str(product.get("asin") or "")[:20],len(amazon_valid),sorted(set(str(c.get("provider") or "") for c in amazon_valid)))
     if len(amazon_valid)>=target:
         amazon_valid.sort(key=lambda x:(-score(x,product,str(strategy.get("key",""))),not bool(x.get("original",False))))
         chosen=await _remove_visual_duplicates(amazon_valid[:MAX_CANDIDATES_PER_PIN*2],used_urls)
