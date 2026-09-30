@@ -42,7 +42,7 @@ class AmazonCreatorsClient:
         if browse_node_id: body["browseNodeId"]=browse_node_id
         data=await self._post("/catalog/v1/searchItems",body); return list(data.get("items") or (data.get("searchResult") or {}).get("items") or data.get("Items") or (data.get("SearchResult") or {}).get("Items") or [])
     async def get_items(self,asins:List[str])->List[Dict[str,Any]]:
-        body={"partnerTag":self.cfg["partner_tag"],"itemIds":asins[:10],"itemIdType":"ASIN","marketplace":self.cfg["marketplace"],"resources":["images.primary.large","itemInfo.title","itemInfo.classifications","offersV2.listings.price","offersV2.listings.availability"]}
+        body={"partnerTag":self.cfg["partner_tag"],"itemIds":asins[:10],"itemIdType":"ASIN","marketplace":self.cfg["marketplace"],"resources":["images.primary.large","images.variants.large","itemInfo.title","itemInfo.classifications","offersV2.listings.price","offersV2.listings.availability"]}
         data=await self._post("/catalog/v1/getItems",body); return list(data.get("items") or (data.get("itemsResult") or {}).get("items") or data.get("Items") or (data.get("ItemsResult") or {}).get("Items") or [])
 def extract_detail_page_url(item:Dict[str,Any])->Optional[str]:
     for k in ("detailPageURL","detailPageUrl","DetailPageURL","url","URL"):
