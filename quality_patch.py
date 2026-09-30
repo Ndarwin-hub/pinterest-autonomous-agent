@@ -118,9 +118,9 @@ def install_identity(agent_mod) -> str:
                     html = page.text
                     candidates = []
                     patterns = [
-                        r'<span[^>]+id=["\\']productTitle["\\'][^>]*>(.*?)</span>',
-                        r'<meta[^>]+property=["\\']og:title["\\'][^>]+content=["\\']([^"\\']+)["\\']',
-                        r'<title[^>]*>(.*?)</title>',
+                        r"<span[^>]+id=['\"]productTitle['\"][^>]*>(.*?)</span>",
+                        r"<meta[^>]+property=['\"]og:title['\"][^>]+content=['\"]([^'\"]+)['\"]",
+                        r"<title[^>]*>(.*?)</title>",
                     ]
                     for pat in patterns:
                         for m in re.findall(pat, html, flags=re.I|re.S):
