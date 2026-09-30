@@ -105,12 +105,19 @@ async def inspect_image_content(url:str)->Optional[Dict[str,Any]]:
     return inspect_image_bytes(raw, url) if raw else None
 
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
-    d=await inspect_image_url(c.get("url",""))
-    if not d:return None
+    url=str(c.get("url") or "")
+    d=await inspect_image_url(url)
+    if not d:
+        logger.info("IMAGE_REJECT provider=%s reason=dimension_probe_failed url=%s",c.get("provider"),url[:220])
+        return None
     w,h=d; ok,reason=hard_gate(w,h)
-    if not ok:return None
-    content=await inspect_image_content(c.get("url",""))
-    if not content:return None
+    if not ok:
+        logger.info("IMAGE_REJECT provider=%s reason=%s url=%s",c.get("provider"),reason,url[:220])
+        return None
+    content=await inspect_image_content(url)
+    if not content:
+        logger.info("IMAGE_REJECT provider=%s reason=content_validation_failed url=%s dims=%sx%s",c.get("provider"),url[:220],w,h)
+        return None
     x=dict(c);x.update(content);x.update(quality_gate=reason,content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"]);return x
 async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
     seen=set();unique=[]
