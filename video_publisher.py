@@ -29,7 +29,7 @@ def publish_video(path,title,text,platforms=None):
     if "instagram" in allowed and by.get("INSTAGRAM"): targets.append({"social_account_id":by["INSTAGRAM"]["id"],"platform":"INSTAGRAM","post_type":"REEL"})
     if "x" in allowed and by.get("X"): targets.append({"social_account_id":by["X"]["id"],"platform":"X"})
     if "youtube" in allowed and by.get("YOUTUBE"): targets.append({"social_account_id":by["YOUTUBE"]["id"],"platform":"YOUTUBE","title":title,"privacy":"public","tags":["amazon","productfinds","shopping","deals"]})
-    if "tiktok" in allowed and by.get("TIKTOK"): targets.append({"social_account_id":by["TIKTOK"]["id"],"platform":"TIKTOK","post_mode":"DIRECT_POST","post_type":"VIDEO","allow_duet":False,"allow_stitch":False,"allow_comment":True,"is_your_brand":False,"is_branded_content":False,"auto_add_music":False,"privacy_level":"PUBLIC_TO_EVERYONE","is_ai_generated_content":False})
+    if "tiktok" in allowed and by.get("TIKTOK"): targets.append({"social_account_id":by["TIKTOK"]["id"],"platform":"TIKTOK","post_mode":"MEDIA_UPLOAD","post_type":"VIDEO","allow_duet":False,"allow_stitch":False,"allow_comment":True,"is_your_brand":False,"is_branded_content":False,"auto_add_music":False,"privacy_level":"PUBLIC_TO_EVERYONE","is_ai_generated_content":False})
     if not targets: raise RuntimeError("No connected WoopSocial target accounts found")
     result=_execute("WOOP_SOCIAL_PUBLISH_POST_NOW",user,api_key,{"content":[{"text":text,"media":[{"type":"MEDIA_LIBRARY","media_id":media_id}]}],"social_accounts":targets,"auto_delete_media_after_publish":False})
     statuses={}
