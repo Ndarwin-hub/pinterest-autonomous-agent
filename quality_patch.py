@@ -45,6 +45,29 @@ def _amazon_slug(url: str) -> str:
     if _is_asin(slug) or _generic(slug): return ""
     return slug[:200]
 
+
+
+def _amazon_page_title(html: str) -> str:
+    """Extract a real Amazon product title despite attribute-order/markup changes."""
+    import html as _html
+    text = str(html or "")
+    patterns = [
+        r"<[^>]*id=[\\\"']productTitle[\\\"'][^>]*>(.*?)</[^>]+>",
+        r"<h1[^>]*>(.*?)</h1>",
+        r"<meta[^>]+(?:property|name)=[\\\"'](?:og:title|title)[\\\"'][^>]+content=[\\\"']([^\\\"']+)",
+        r"<meta[^>]+content=[\\\"']([^\\\"']+)[\\\"'][^>]+(?:property|name)=[\\\"'](?:og:title|title)[\\\"']",
+        r'\\\"productTitle\\\"\\s*:\\s*\\\"([^\\\"]{6,300})',
+        r'\\\"title\\\"\\s*:\\s*\\\"([^\\\"]{6,300})',
+    ]
+    for pat in patterns:
+        for m in re.findall(pat, text, flags=re.I|re.S):
+            value=_html.unescape(re.sub(r"<[^>]+>", " ", str(m)))
+            value=re.sub(r"\\s+", " ", value).strip(" -|:")
+            value=re.sub(r"\\s*[:|]\\s*Amazon(?:\\.com)?\\s*$", "", value, flags=re.I).strip()
+            if len(value)>=6 and not _generic(value) and not _is_asin(value) and "amazon.com" not in value.lower():
+                return value[:300]
+    return ""
+
 def _brand_from_name(name: str) -> str:
     parts = name.split()
     if not parts: return ""
@@ -116,24 +139,10 @@ def install_identity(agent_mod) -> str:
                     )
                 if page.status_code < 400 and page.text:
                     html = page.text
-                    candidates = []
-                    patterns = [
-                        r"<span[^>]+id=['\"]productTitle['\"][^>]*>(.*?)</span>",
-                        r"<meta[^>]+property=['\"]og:title['\"][^>]+content=['\"]([^'\"]+)['\"]",
-                        r"<title[^>]*>(.*?)</title>",
-                    ]
-                    for pat in patterns:
-                        for m in re.findall(pat, html, flags=re.I|re.S):
-                            t = re.sub(r'<[^>]+>', ' ', m)
-                            t = re.sub(r'\\s+', ' ', t).strip()
-                            t = re.sub(r'\\s*[:|]\\s*Amazon\\s*$', '', t, flags=re.I).strip()
-                            if t:
-                                candidates.append(t)
-                    for title in candidates:
-                        if len(title) >= 6 and not _generic(title) and not _is_asin(title) and "amazon.com" not in title.lower():
-                            current = title[:300]
-                            logger.info("QUALITY Amazon page identity recovered asin=%s name=%r", asin, current)
-                            break
+                    recovered_title = _amazon_page_title(html)
+            if recovered_title:
+                current = recovered_title
+                logger.info("QUALITY Amazon page identity recovered asin=%s name=%r", asin, current)
         except Exception as e:
             logger.warning("QUALITY Amazon page identity recovery skipped: %s", e)
 
