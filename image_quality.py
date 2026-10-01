@@ -415,7 +415,7 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
             if r.status_code>=400: return []
             html=r.text
             links=[]
-            for u in re.findall(r'<h2[^>]*>\\s*<a[^>]+href=["\\\']([^"\\\']+)',html,re.I):
+            for u in re.findall(r'<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)',html,re.I):
                 u=unquote(u)
                 if u.startswith("http") and "bing.com" not in u.lower() and u not in links: links.append(u)
             # Bing can return a shell with no parsed result links. Add DuckDuckGo HTML
@@ -424,10 +424,10 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                 try:
                     dr=await client.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"Referer":"https://duckduckgo.com/"})
                     if dr.status_code<400:
-                        for u in re.findall(r'<a[^>]+class=["\\\'][^"\\\']*result__a[^"\\\']*["\\\'][^>]+href=["\\\']([^"\\\']+)',dr.text,re.I):
+                        for u in re.findall(r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)',dr.text,re.I):
                             u=unquote(u)
                             if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
-                        for u in re.findall(r'nuddg=([^&"\\\']+)',dr.text,re.I):
+                        for u in re.findall(r'nuddg=([^&"\']+)',dr.text,re.I):
                             u=unquote(u)
                             if u.startswith("http") and u not in links: links.append(u)
                 except Exception: pass
@@ -440,12 +440,12 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                     page_html=page.text.replace('\\\\/','/').replace('\\\\u002F','/')
                     evidence=re.sub(r'<[^>]+>',' ',page_html).lower()+" "+src.lower()
                     if asin and asin.lower() not in evidence:
-                        tokens=[t for t in re.findall(r'[a-z0-9][a-z0-9\\-]{3,}',name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
+                        tokens=[t for t in re.findall(r'[a-z0-9][a-z0-9\-]{3,}',name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
                         if sum(1 for t in tokens[:10] if t in evidence)<2: continue
                     imgs=[]
                     for u in re.findall(r'<meta[^>]+(?:property|name)=["\\\'](?:og:image|twitter:image)["\\\'][^>]+content=["\\\']([^"\\\']+)',page_html,re.I): imgs.append(u)
                     for u in re.findall(r'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\'](?:og:image|twitter:image)["\\\']',page_html,re.I): imgs.append(u)
-                    for u in re.findall(r'"image"\\s*:\\s*"(https?://[^"\\]+)',page_html,re.I): imgs.append(u)
+                    for u in re.findall(r'"image"\s*:\s*"(https?://[^"\\]+)',page_html,re.I): imgs.append(u)
                     for u in imgs:
                         u=unquote(u).replace('\\\\/','/')
                         if not u.startswith('http') or u in [x["url"] for x in out]: continue
