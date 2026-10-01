@@ -364,24 +364,39 @@ def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
         f"{base} clean high resolution product photo",
     ]
 async def _alternative_identity_ok(c:Dict[str,Any],product:Dict[str,Any])->bool:
-    """Require source-page evidence before accepting a non-Amazon fallback image."""
+    """Require exact-product evidence before accepting a non-Amazon fallback image."""
     src=str(c.get("source") or "")
-    if not src.startswith(("http://","https://")): return False
+    candidate_url=str(c.get("url") or "")
+    supplied=str(c.get("identity_evidence") or "")
+    evidence=(supplied+" "+src+" "+candidate_url).lower()
+    asin=str(product.get("asin") or "").lower()
+    name=str(product.get("name") or "").lower()
+    brand=str(product.get("brand") or "").lower().strip()
+    stop={"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}
+    tokens=list(dict.fromkeys(t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}",name) if t not in stop))
+    if asin and asin in evidence: return True
+    if brand and brand in evidence and any(t in evidence for t in tokens[:8]): return True
+    if sum(1 for t in tokens[:10] if t in evidence)>=2: return True
+    # Official-brand image URLs are strong identity evidence when the URL itself
+    # contains multiple exact product tokens. This does not bypass legacy quality gates.
     try:
-        async with httpx.AsyncClient(timeout=10,follow_redirects=True) as client:
-            r=await client.get(src,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/identity"})
-            if r.status_code>=400 or not r.text: return False
-            evidence=re.sub(r"<[^>]+>"," ",r.text).lower()+" "+src.lower()
-        asin=str(product.get("asin") or "").lower()
-        if asin and asin in evidence: return True
-        name=str(product.get("name") or "").lower()
-        brand=str(product.get("brand") or "").lower().strip()
-        stop={"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}
-        tokens=list(dict.fromkeys(t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}",name) if t not in stop))
-        if brand and brand in evidence and any(t in evidence for t in tokens[:8]): return True
-        return sum(1 for t in tokens[:10] if t in evidence)>=2
-    except Exception:
-        return False
+        host=urlparse(candidate_url).netloc.lower()
+        brand_token=re.sub(r"[^a-z0-9]","",brand)
+        host_token=re.sub(r"[^a-z0-9]","",host)
+        if brand_token and brand_token in host_token and sum(1 for t in tokens[:12] if t in evidence)>=2:
+            return True
+    except Exception: pass
+    if src.startswith(("http://","https://")) and not supplied:
+        try:
+            async with httpx.AsyncClient(timeout=10,follow_redirects=True) as client:
+                rr=await client.get(src,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/identity"})
+                if rr.status_code<400 and rr.text:
+                    page=re.sub(r"<[^>]+>"," ",rr.text).lower()
+                    if asin and asin in page: return True
+                    if brand and brand in page and any(t in page for t in tokens[:8]): return True
+                    if sum(1 for t in tokens[:10] if t in page)>=2: return True
+        except Exception: pass
+    return False
 
 
 async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=12)->List[Dict[str,Any]]:
@@ -434,7 +449,7 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                     for u in imgs:
                         u=unquote(u).replace('\\\\/','/')
                         if not u.startswith('http') or u in [x["url"] for x in out]: continue
-                        out.append({"url":u,"provider":"verified_web_product_page","source":src,"license":"verified product page","original":True})
+                        out.append({"url":u,"provider":"verified_web_product_page","source":src,"identity_evidence":re.sub(r"<[^>]+>"," ",page_html)[:200000],"license":"verified product page","original":True})
                         if len(out)>=num: return out
                 except Exception: continue
             logger.info("Verified web product-page image search asin=%s pages=%s images=%s",asin[:20],len(links[:8]),len(out))
