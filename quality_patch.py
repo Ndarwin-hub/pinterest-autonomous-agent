@@ -140,9 +140,9 @@ def install_identity(agent_mod) -> str:
                 if page.status_code < 400 and page.text:
                     html = page.text
                     recovered_title = _amazon_page_title(html)
-            if recovered_title:
-                current = recovered_title
-                logger.info("QUALITY Amazon page identity recovered asin=%s name=%r", asin, current)
+                    if recovered_title:
+                        current = recovered_title
+                        logger.info("QUALITY Amazon page identity recovered asin=%s name=%r", asin, current)
         except Exception as e:
             logger.warning("QUALITY Amazon page identity recovery skipped: %s", e)
 
