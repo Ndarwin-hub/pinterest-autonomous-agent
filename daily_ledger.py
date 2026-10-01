@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os, sqlite3, threading, time, json
 from datetime import datetime, timezone, date
+from zoneinfo import ZoneInfo
 from pathlib import Path
 DATA=Path(os.getenv("DATA_DIR", "/data" if Path("/data").exists() else "/tmp")); DB_PATH=Path(os.getenv("DAILY_LEDGER_DB_PATH",str(DATA/"amazon_daily_ledger.db"))); _lock=threading.Lock(); SLOT_COUNT=50; BATCH_SIZE=5; BATCH_LEASE_SEC=int(os.getenv("AMAZON_BATCH_LEASE_SEC","2700")); SLOT_PROCESSING_LEASE_SEC=int(os.getenv("AMAZON_SLOT_PROCESSING_LEASE_SEC","2700"))
 class DailyLedger:
@@ -21,7 +22,7 @@ class DailyLedger:
                     pass
             c.commit(); c.close()
     @staticmethod
-    def today_str(): return date.today().isoformat()
+    def today_str(): return datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kathmandu")).date().isoformat()
     def ensure_day(self,day=None,slots_spec=None):
         day=day or self.today_str(); now=datetime.now(timezone.utc).isoformat()
         with _lock:
