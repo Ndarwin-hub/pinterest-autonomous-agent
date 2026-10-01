@@ -163,12 +163,13 @@ def _visual_distance(a,b)->float:
     return 0.75*hamming+0.25*min(1.0,color*4.0)
 
 async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set)->List[Dict[str,Any]]:
+    """Prefer visually distinct images, but never turn duplicate detection into a publication blocker."""
     if not candidates:return []
     used_sigs=[]
     for u in list(used_urls)[:4]:
         sig=await _visual_signature(u)
         if sig:used_sigs.append(sig)
-    selected=[]; selected_sigs=[]
+    selected=[]; selected_sigs=[]; deferred=[]
     for c in candidates:
         u=c.get("url")
         if not u or u in used_urls:continue
@@ -179,10 +180,21 @@ async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set
             if len(selected)>=MAX_CANDIDATES_PER_PIN:break
             continue
         distances=[_visual_distance(sig,s) for s in used_sigs+selected_sigs]
-        if distances and min(distances)<VISUAL_DUPLICATE_THRESHOLD:continue
+        if distances and min(distances)<VISUAL_DUPLICATE_THRESHOLD:
+            deferred.append(c)
+            continue
         c["visual_distance"]=round(min(distances),4) if distances else 1.0
         selected.append(c); selected_sigs.append(sig)
         if len(selected)>=MAX_CANDIDATES_PER_PIN:break
+    # If distinct media are unavailable, use the remaining URL-distinct product
+    # candidates rather than failing the Pin. Duplicate detection is advisory.
+    if len(selected)<MAX_CANDIDATES_PER_PIN:
+        for c in deferred:
+            u=c.get("url")
+            if not u or u in used_urls or any(x.get("url")==u for x in selected):continue
+            c["visual_duplicate_advisory"]=True
+            selected.append(c)
+            if len(selected)>=MAX_CANDIDATES_PER_PIN:break
     return selected
 
 async def search_pexels(query:str,agent_mod:Any)->List[Dict[str,Any]]:

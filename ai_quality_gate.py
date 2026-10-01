@@ -100,7 +100,7 @@ async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
         else:
             fp=checked.get("_fingerprint")
             if fp and any(similarity(fp,old)>=0.93 for old in seen_fps):
-                ok=False; reason.append("visual_duplicate")
+                reason.append("visual_duplicate_advisory")
             if fp: seen_fps.append(fp)
             # Reject only an actually empty/near-uniform image. Low resolution,
             # low entropy, poor composition, and weak metadata confidence remain publishable.
