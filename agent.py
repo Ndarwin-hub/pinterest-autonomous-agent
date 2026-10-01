@@ -278,6 +278,7 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
     job_store.update(job_id, progress="Researching product metadata (no Amazon page request)")
     product: Dict[str, Any] = {
         "source_url": url,
+        "asin": None,
         "name": None,
         "description": None,
         "images": [],
@@ -288,6 +289,9 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
 
     parsed = urlparse(url)
     path = parsed.path.strip("/")
+    asin_match = re.search(r"/(?:dp|gp/product|gp/aw/d)/([A-Z0-9]{10})(?:[/?]|$)", parsed.path, re.I)
+    if asin_match:
+        product["asin"] = asin_match.group(1).upper()
     parts = [
         p for p in path.split("/")
         if p and p.lower() not in ("dp", "gp", "product", "listing", "p")
@@ -417,7 +421,8 @@ async def search_independent_images(query: str, num: int = 10) -> List[Dict[str,
                 continue
             url=meta.get("murl") or ""
             if not str(url).startswith("http"): continue
-            out.append({"url":url,"provider":"independent_bing_image","id":meta.get("purl") or "","width":0,"height":0,"source":meta.get("purl") or "","license":"web_search_verify_usage"})
+            page_url = meta.get("purl") or ""
+            out.append({"url":url,"provider":"independent_bing_image","id":page_url,"width":0,"height":0,"source":page_url,"source_url":page_url,"license":"web_search_verify_usage"})
             if len(out)>=num: break
         logger.info("Independent image search query=%s results=%s",query,len(out))
         return out
@@ -445,6 +450,7 @@ async def search_composio_images(query: str, num: int = 10) -> List[Dict[str, An
                     "width": im.get("original_width") or 0,
                     "height": im.get("original_height") or 0,
                     "source": im.get("source") or "",
+                    "source_url": im.get("link") or "",
                     "license": "web_search_verify_usage",
                 }
             )
@@ -481,30 +487,47 @@ async def search_pexels(query: str) -> List[Dict[str, Any]]:
         return []
 
 
+def _identity_tokens(product: Dict[str, Any]) -> List[str]:
+    name = str(product.get("name") or "").lower()
+    stop = {"the","and","for","with","from","this","that","your","you","are","amazon","product","inch","pack","pcs","piece","black","white","new","sale","official","wireless","portable"}
+    return [t for t in re.findall(r"[a-z0-9]+", name) if len(t) >= 4 and t not in stop]
+
+
+def exact_product_identity_score(c: Dict[str, Any], product: Dict[str, Any]) -> int:
+    asin = str(product.get("asin") or "").lower()
+    tokens = _identity_tokens(product)
+    source = " ".join(str(c.get(k) or "") for k in ("source_url","source","id")).lower()
+    provider = str(c.get("provider") or "").lower()
+    if asin and asin in source:
+        return 100
+    matches = sum(1 for token in tokens if token in source)
+    model_tokens = [t for t in tokens if re.search(r"[a-z]+\d+|\d+[a-z]+", t)]
+    if model_tokens and any(t in source for t in model_tokens) and matches >= 2:
+        return 85
+    if matches >= 3:
+        return 70
+    if matches >= 2 and provider == "product_page":
+        return 65
+    return 0
+
+
 def score_candidate(c: Dict[str, Any], product: Dict[str, Any], strategy_key: str) -> int:
-    score = 40
+    identity = exact_product_identity_score(c, product)
+    if identity < 70:
+        return 0
     provider = c.get("provider") or ""
+    score = identity
     if provider == "product_page":
-        score += 30
-    if provider == "composio_search_image":
-        score += 22
-        src = (c.get("source") or "").lower()
-        name_l = (product.get("name") or "").lower()
-        brand = (product.get("brand") or "").lower()
-        if brand and brand in src:
-            score += 10
-        if any(w in src for w in name_l.split()[:2] if len(w) > 3):
-            score += 5
-    if provider in ("pexels", "pixabay", "unsplash", "independent_bing_image"):
-        score += 12
-    if provider == "openai_dalle":
+        score += 20
+    elif provider == "composio_search_image":
         score += 8
+    elif provider == "independent_bing_image":
+        score += 4
     w, h = int(c.get("width") or 0), int(c.get("height") or 0)
     if w >= 600 and h >= 600:
-        score += 8
-    if h > w:  # portrait
-        score += 6
-    score += hash(strategy_key + provider + (c.get("url") or "")) % 5
+        score += 5
+    if h > w:
+        score += 3
     return min(score, 100)
 
 
@@ -521,67 +544,59 @@ async def get_best_pin_image(
     job_id: str,
     used_urls: set,
 ) -> Dict[str, Any]:
-    job_store.update(job_id, progress=f"Pin {pin_index}/{PINS_PER_PRODUCT}: image search ({strategy['name']})")
+    job_store.update(job_id, progress=f"Pin {pin_index}/{PINS_PER_PRODUCT}: exact-product image selection ({strategy['name']})")
     name = product.get("name") or "product"
-    query = f"{name} {strategy['focus']}"[:100]
+    asin = str(product.get("asin") or "").strip().upper()
     candidates: List[Dict[str, Any]] = []
 
-    # 1) Product page
     for img_url in product.get("images") or []:
-        if img_url in used_urls:
-            continue
-        if await _url_ok(img_url):
-            candidates.append({"url": img_url, "provider": "product_page", "license": "product_page"})
+        if img_url not in used_urls and await _url_ok(img_url):
+            candidates.append({"url":img_url,"provider":"product_page","source_url":product.get("source_url") or "","license":"product_page"})
 
-    # 2) COMPOSIO_SEARCH_IMAGE — real product photos (priority)
-    for q in (name, query, f"{name} product"):
-        found = await search_composio_images(q, num=8)
-        for f in found:
+    exact_queries = []
+    if asin:
+        exact_queries.extend([f'"{asin}" "{name}"', f'"{asin}" product image'])
+    exact_queries.append(f'"{name}" exact product')
+
+    for q in exact_queries:
+        for f in await search_composio_images(q, num=10):
             if f.get("url") and f["url"] not in used_urls:
                 candidates.append(f)
-        if len(candidates) >= 6:
+        if len(candidates) >= 12:
             break
 
-    # 3) Independent web-image fallback when Composio Search is unavailable
-    for q in (name, query):
-        found = await search_independent_images(q, num=8)
-        for f in found:
-            if f.get("url") and f["url"] not in used_urls:
-                candidates.append(f)
-        if len(candidates) >= 6:
-            break
+    if len(candidates) < 8:
+        for q in exact_queries[:2]:
+            for f in await search_independent_images(q, num=10):
+                if f.get("url") and f["url"] not in used_urls:
+                    candidates.append(f)
+            if len(candidates) >= 12:
+                break
 
-    # 4) Pexels if entity connected
-    for f in await search_pexels(query):
-        if f.get("url") and f["url"] not in used_urls:
-            candidates.append(f)
-
-    # Score
     best = None
     best_score = -1
-    for c in candidates:
-        if c.get("url") in used_urls:
+    rejected = 0
+    for candidate in candidates:
+        if candidate.get("url") in used_urls:
             continue
-        s = score_candidate(c, product, strategy["key"])
-        c["score"] = s
-        if s > best_score:
-            best_score = s
-            best = c
+        identity = exact_product_identity_score(candidate, product)
+        if identity < 70:
+            rejected += 1
+            continue
+        score = score_candidate(candidate, product, strategy["key"])
+        candidate["identity_score"] = identity
+        candidate["score"] = score
+        if score > best_score:
+            best_score, best = score, candidate
 
-    if best and best.get("url") and best_score >= 50:
-        if await _url_ok(best["url"]):
-            used_urls.add(best["url"])
-            return {
-                "mode": "url",
-                "value": best["url"],
-                "provider": best.get("provider"),
-                "id": best.get("id"),
-                "score": best_score,
-                "license": best.get("license"),
-            }
+    if best and best.get("url") and best_score >= 70 and await _url_ok(best["url"]):
+        used_urls.add(best["url"])
+        return {"mode":"url","value":best["url"],"provider":best.get("provider"),"id":best.get("id"),"score":best_score,"identity_score":best.get("identity_score"),"license":best.get("license")}
 
-    # Fail closed: a generic Pillow card is not a product image and must never be published.
-    raise RuntimeError(f"No trustworthy image source survived for Pin {pin_index}.")
+    raise RuntimeError(
+        "No trustworthy exact-product image found; generic/brand/stock alternatives were rejected "
+        f"(candidates={len(candidates)}, rejected_identity={rejected}, asin={asin or 'unknown'})."
+    )
 
 
 async def select_or_create_board(product: Dict[str, Any], job_store: JobStore, job_id: str) -> str:
@@ -745,6 +760,7 @@ async def process_pinterest_job(job_id: str, url: str, job_store: JobStore) -> D
 
     return {
         "product_name": product.get("name"),
+        "asin": product.get("asin"),
         "source_url": url,
         "category": product.get("category"),
         "capabilities": capabilities,
