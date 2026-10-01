@@ -47,6 +47,18 @@ def _amazon_slug(url: str) -> str:
 
 
 
+def _pin_n_title_evidence(asin: str) -> str:
+    if not asin: return ""
+    import os, json
+    path=os.path.join(os.getenv("PIN_N_REQUEST_DIR",os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"),"pin_n_requests")),"title_evidence.json")
+    try:
+        with open(path,encoding="utf-8") as f: data=json.load(f)
+        row=data.get(asin.upper()) if isinstance(data,dict) else None
+        title=row.get("title") if isinstance(row,dict) else row
+        return _clean(str(title or ""))
+    except Exception:
+        return ""
+
 def _amazon_page_title(html: str) -> str:
     """Extract a real Amazon product title from common Amazon HTML/JSON encodings."""
     import html as _html
@@ -156,6 +168,17 @@ def install_identity(agent_mod) -> str:
         slug = _amazon_slug(resolved_url)
         if slug and (_generic(current) or _is_asin(current) or len(current) < 6):
             current = slug
+        try:
+            from amazon_url import extract_asin_from_url
+            asin = extract_asin_from_url(resolved_url)
+            if asin and (_generic(current) or _is_asin(current) or len(current) < 6):
+                mapped = _pin_n_title_evidence(asin)
+                if mapped:
+                    current = mapped
+                    logger.info("QUALITY Pin N title evidence recovered asin=%s name=%r", asin, current)
+        except Exception as e:
+            logger.warning("QUALITY Pin N title evidence lookup skipped: %s", e)
+
         # Prefer the exact Amazon product page itself for identity recovery before any
         # external image-search dependency.
         try:

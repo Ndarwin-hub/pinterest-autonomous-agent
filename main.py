@@ -70,6 +70,26 @@ def verify_batch_secret(authorization:Optional[str]=Header(None),x_scheduler_sec
   if claims.get("repository")!=GITHUB_REPO or claims.get("ref")!="refs/heads/main" or claims.get("event_name") not in ("schedule","workflow_dispatch","repository_dispatch"):raise ValueError("OIDC claims not authorized")
   return True
  except Exception as e:logger.warning("GitHub OIDC scheduler authentication failed: %s",type(e).__name__);raise HTTPException(status_code=401,detail="Invalid scheduler identity")
+def _store_pin_n_title_evidence(title_by_asin:Dict[str,Any]):
+ path=os.path.join(PIN_N_REQUEST_DIR,"title_evidence.json")
+ try:
+  os.makedirs(PIN_N_REQUEST_DIR,exist_ok=True)
+  existing={}
+  try:
+   with open(path,encoding="utf-8") as f: existing=json.load(f)
+  except Exception: pass
+  for asin,title in title_by_asin.items():
+   if asin and title and not _is_generic_pin_n_title(title): existing[asin.upper()]={"title":str(title)[:300],"updated_at":datetime.now(timezone.utc).isoformat()}
+  tmp=path+".tmp"
+  with open(tmp,"w",encoding="utf-8") as f: json.dump(existing,f,separators=(",",":"))
+  os.replace(tmp,path)
+ except Exception as e:
+  logger.warning("Pin N title evidence persistence skipped: %s",e)
+
+def _is_generic_pin_n_title(title:Any)->bool:
+ v=str(title or "").strip().lower()
+ return (not v) or bool(re.fullmatch(r"amazon(?:\.com)?\s+product\s+[a-z0-9]{10}",v)) or v in {"amazon","amazon.com","product","unknown","unknown product"}
+
 def extract_url(text:str)->str:
  text=(text or "").strip();m=re.search(r"https?://\S+",text)
  if m:return m.group(0).rstrip(").,]',\"")
@@ -523,6 +543,7 @@ async def amazon_discover_submit(body:DiscoverSubmitRequest,background_tasks:Bac
  urls=[d["affiliate_url"] for d in discovered if d.get("affiliate_url")]
  prepared=await prepare_batch_items(urls,exclude_asins=exclude)
  title_by_asin={ (d.get("asin") or "").upper():d.get("title") for d in discovered }
+ _store_pin_n_title_evidence(title_by_asin)
  target_by_asin={ (d.get("asin") or "").upper():{"board":d.get("target_board_name"),"mode":d.get("balance_mode")} for d in discovered }
  results=[]
  for item in prepared:
