@@ -52,12 +52,12 @@ def _amazon_page_title(html: str) -> str:
     import html as _html
     text = str(html or "")
     patterns = [
-        r'<[^>]*\\bid=["\\\']productTitle["\\\'][^>]*>(.*?)</[^>]+>',
+        r'<[^>]*\bid=["\']productTitle["\'][^>]*>(.*?)</[^>]+>',
         r'<h1[^>]*>(.*?)</h1>',
-        r'<meta[^>]+(?:property|name)=["\\\'](?:og:title|title)["\\\'][^>]+content=["\\\']([^"\\\']+)',
-        r'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\'](?:og:title|title)["\\\']',
-        r'["\\\']productTitle["\\\']\\s*:\\s*["\\\']([^"\\\']{6,300})',
-        r'["\\\']title["\\\']\\s*:\\s*["\\\']([^"\\\']{6,300})',
+        r'<meta[^>]+(?:property|name)=["\'](?:og:title|title)["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:title|title)["\']',
+        r'["\']productTitle["\']\s*:\s*["\']([^"\']{6,300})',
+        r'["\']title["\']\s*:\s*["\']([^"\']{6,300})',
     ]
     for pat in patterns:
         for m in re.findall(pat, text, flags=re.I|re.S):
@@ -86,9 +86,9 @@ async def _recover_amazon_title_from_web(asin: str) -> str:
                         if rr.status_code>=400: continue
                         h=rr.text
                         if engine=="bing":
-                            pairs=re.findall(r'<h2[^>]*>\\s*<a[^>]+href=["\\\']([^"\\\']+)["\\\'][^>]*>(.*?)</a>',h,re.I|re.S)
+                            pairs=re.findall(r'<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',h,re.I|re.S)
                         else:
-                            pairs=re.findall(r'<a[^>]+class=["\\\'][^"\\\']*result__a[^"\\\']*["\\\'][^>]*href=["\\\']([^"\\\']+)["\\\'][^>]*>(.*?)</a>',h,re.I|re.S)
+                            pairs=re.findall(r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]*href=["\']([^"\']+)[^>]*>(.*?)</a>',h,re.I|re.S)
                         for link,title_html in pairs[:12]:
                             link=_html.unescape(unquote(link))
                             title=_clean(re.sub(r"<[^>]+>"," ",_html.unescape(title_html)))
