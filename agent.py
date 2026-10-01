@@ -4,10 +4,10 @@ Autonomous multi-pin Pinterest affiliate agent (v3.1 hardening).
 Preserves working: Composio Pinterest publish/verify, 4 strategies, exact URL, Railway jobs.
 
 Image priority:
-1) Product page images
-2) COMPOSIO_SEARCH_IMAGE (real web product photos — works without per-toolkit entity)
-3) Pexels/Pixabay/Unsplash if credentials/entity allow
-4) OpenAI if key present
+1) Trusted product-page images when available
+2) Exact-ASIN/exact-title image search with source-page identity verification
+3) Independent exact-product image search as a fallback
+4) No brand-only, stock, generic, or description-keyword substitutions
 5) No fake/placeholder fallback; fail closed
 
 AI text tools (DeepSeek/Perplexity/etc.) are probed at runtime; if entity lacks connection,
