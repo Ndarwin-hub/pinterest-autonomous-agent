@@ -53,6 +53,7 @@ def _amazon_page_title(html: str) -> str:
     text = str(html or "")
     patterns = [
         r'<[^>]*\bid=["\']productTitle["\'][^>]*>(.*?)</[^>]+>',
+        r'<title[^>]*>(.*?)</title>',
         r'<h1[^>]*>(.*?)</h1>',
         r'<meta[^>]+(?:property|name)=["\'](?:og:title|title)["\'][^>]+content=["\']([^"\']+)',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:title|title)["\']',
@@ -62,8 +63,8 @@ def _amazon_page_title(html: str) -> str:
     for pat in patterns:
         for m in re.findall(pat, text, flags=re.I|re.S):
             value = _html.unescape(re.sub(r"<[^>]+>", " ", str(m)))
-            value = re.sub(r"\\s+", " ", value).strip(" -|:")
-            value = re.sub(r"\\s*[:|]\\s*Amazon(?:\\.com)?\\s*$", "", value, flags=re.I).strip()
+            value = re.sub(r"\s+", " ", value).strip(" -|:")
+            value = re.sub(r"\s*[:|]\s*Amazon(?:\.com)?\s*$", "", value, flags=re.I).strip()
             if len(value) >= 6 and not _generic(value) and not _is_asin(value) and "amazon.com" not in value.lower():
                 return value[:300]
     return ""
