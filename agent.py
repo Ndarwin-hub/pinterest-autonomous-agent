@@ -690,23 +690,58 @@ async def get_best_pin_image(
             if len(candidates) >= 16:
                 break
 
-    best = None
-    best_score = -1
-    rejected = 0
-    for candidate in candidates:
-        if candidate.get("url") in used_urls:
-            continue
-        identity = exact_product_identity_score(candidate, product)
-        if identity < 70:
-            rejected += 1
-            continue
-        score = score_candidate(candidate, product, strategy["key"])
-        candidate["identity_score"] = identity
-        candidate["score"] = score
-        if score > best_score:
-            best_score, best = score, candidate
+    # Priority tiers are strict: trusted product-page/catalog images are always
+    # exhausted and selected before any search-engine fallback is considered.
+    # A higher-scoring fallback must never displace an available trusted image.
+    primary_urls = {
+        str(x.get("url") or "")
+        for x in (product.get("trusted_images") or [])
+        if x.get("url")
+    }
+    primary_urls.update(
+        str(x)
+        for x in (product.get("images") or [])
+        if x
+    )
+    primary_candidates = [
+        c for c in candidates
+        if str(c.get("url") or "") in primary_urls
+    ]
 
-    if best and best.get("url") and best_score >= 70 and await _url_ok(best["url"]):
+    async def choose_best(items):
+        best = None
+        best_score = -1
+        local_rejected = 0
+        for candidate in items:
+            if candidate.get("url") in used_urls:
+                continue
+            identity = exact_product_identity_score(candidate, product)
+            if identity < 70:
+                local_rejected += 1
+                continue
+            score = score_candidate(candidate, product, strategy["key"])
+            candidate["identity_score"] = identity
+            candidate["score"] = score
+            if score > best_score:
+                best_score, best = score, candidate
+        if best and best.get("url") and best_score >= 70 and await _url_ok(best["url"]):
+            return best, best_score, local_rejected
+        return None, -1, local_rejected
+
+    # Tier 1: product images and the trusted product-image sources added for
+    # exact identity. Nothing below can outrank this tier.
+    best, best_score, rejected = await choose_best(primary_candidates)
+
+    # Tier 2+: only if Tier 1 has no usable exact-product image.
+    if not best:
+        fallback_candidates = [
+            c for c in candidates
+            if str(c.get("url") or "") not in primary_urls
+        ]
+        best, best_score, fallback_rejected = await choose_best(fallback_candidates)
+        rejected += fallback_rejected
+
+    if best:
         used_urls.add(best["url"])
         return {"mode":"url","value":best["url"],"provider":best.get("provider"),"id":best.get("id"),"score":best_score,"identity_score":best.get("identity_score"),"license":best.get("license")}
 
