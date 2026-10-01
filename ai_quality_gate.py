@@ -102,12 +102,9 @@ async def deterministic_review(items:List[Dict[str,Any]])->Dict[str,Any]:
             if fp and any(similarity(fp,old)>=0.93 for old in seen_fps):
                 reason.append("visual_duplicate_advisory")
             if fp: seen_fps.append(fp)
-            # Reject only an actually empty/near-uniform image. Low resolution,
-            # low entropy, poor composition, and weak metadata confidence remain publishable.
-            if float(checked.get("opaque_ratio") or 0) < 0.02:
-                ok=False; reason.append("effectively_transparent")
-            if int(checked.get("unique_colors") or 0) <= 2 and float(checked.get("stddev") or 0) < 1.0:
-                ok=False; reason.append("effectively_blank")
+            # Resolution, entropy, transparency, composition, and identity confidence are
+            # advisory only. A decoded image remains publishable; explicit brand/logo and
+            # non-product exclusions are handled by the image-source selector.
         score=0
         if checked:
             w,h=int(checked.get("width") or 0),int(checked.get("height") or 0)
