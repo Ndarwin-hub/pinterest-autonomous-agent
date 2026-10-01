@@ -601,6 +601,11 @@ def exact_product_identity_score(c: Dict[str, Any], product: Dict[str, Any]) -> 
     provider = str(c.get("provider") or "").lower()
     if asin and asin in source:
         return 100
+    if c.get("provider") == "amazon_creators_api":
+        return 100
+    evidence = str(c.get("evidence") or "").lower()
+    if c.get("provider") in {"schema_product_image","opengraph_product_image","product_page_image"} and "identity" in evidence:
+        return 90
     matches = sum(1 for token in tokens if token in source)
     model_tokens = [t for t in tokens if re.search(r"[a-z]+\d+|\d+[a-z]+", t)]
     if model_tokens and any(t in source for t in model_tokens) and matches >= 2:
