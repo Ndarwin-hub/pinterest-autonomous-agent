@@ -330,6 +330,15 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
             if u and u not in found: found.append(u)
         # Broad exact-host extraction catches data-old-hires, dynamic-image,
         # imageGalleryData and other Amazon carousel encodings.
+        # Amazon frequently embeds the full-resolution gallery in JSON attributes
+        # such as data-a-dynamic-image and fields named large/hiRes/mainUrl. These
+        # are exact product-page assets, so this is an additive trusted-source layer.
+        for u in re.findall(r'["\\\'](?:large|hiRes|mainUrl|data-old-hires|src)["\\\']\\s*:\\s*["\\\']([^"\\\']+)["\\\']', html, re.I):
+            add(u.replace('\\\\/','/').replace('\\\\u002F','/'))
+        for u in re.findall(r'https?:\\?/\\?/[^"\\\'<>\\s]+amazon[^"\\\'<>\\s]+/images/I/[^"\\\'<>\\s]+', html, re.I):
+            add(u.replace('\\\\/','/'))
+        for u in re.findall(r'https?:\\?/\\?/m\\.media-amazon\\.com/images/I/[^"\\\'<>\\s]+', html, re.I):
+            add(u.replace('\\\\/','/'))
         for u in re.findall(r'https?://m\.media-amazon\.com/images/I/[^"\'<>\\s]+',html,re.I): add(u)
         for u in re.findall(r'//m\.media-amazon\.com/images/I/[^"\'<>\\s]+',html,re.I): add(u)
         # JSON-escaped slash form.
