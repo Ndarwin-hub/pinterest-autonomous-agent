@@ -403,6 +403,19 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
             for u in re.findall(r'<h2[^>]*>\\s*<a[^>]+href=["\\\']([^"\\\']+)',html,re.I):
                 u=unquote(u)
                 if u.startswith("http") and "bing.com" not in u.lower() and u not in links: links.append(u)
+            # Bing can return a shell with no parsed result links. Add DuckDuckGo HTML
+            # search as a second web-page discovery path; it remains only a candidate source.
+            if not links:
+                try:
+                    dr=await client.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"Referer":"https://duckduckgo.com/"})
+                    if dr.status_code<400:
+                        for u in re.findall(r'<a[^>]+class=["\\\'][^"\\\']*result__a[^"\\\']*["\\\'][^>]+href=["\\\']([^"\\\']+)',dr.text,re.I):
+                            u=unquote(u)
+                            if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
+                        for u in re.findall(r'nuddg=([^&"\\\']+)',dr.text,re.I):
+                            u=unquote(u)
+                            if u.startswith("http") and u not in links: links.append(u)
+                except Exception: pass
             out=[]
             for src in links[:8]:
                 if any(x in src.lower() for x in ("pinterest.com","shutterstock.com","istockphoto.com","gettyimages.com")): continue
