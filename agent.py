@@ -27,6 +27,7 @@ from datetime import date, datetime, timezone
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunsplit
 
 import httpx
+from bs4 import BeautifulSoup
 
 from models import JobStore
 from pin_config import PINS_PER_PRODUCT
@@ -267,6 +268,98 @@ def _non_affiliate_research_url(url: str) -> str:
         return url
 
 
+async def _extract_trusted_page_images(page_url: str, product: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract product images from identity-bearing product pages."""
+    results: List[Dict[str, Any]] = []
+    seen = set()
+    def add(u: Any, source: str, evidence: str = ""):
+        u = str(u or "").strip()
+        if not u.startswith("http") or u in seen:
+            return
+        seen.add(u)
+        results.append({"url": u, "provider": source, "source_url": page_url, "license": "product_source", "evidence": evidence})
+
+    asin = str(product.get("asin") or "").upper()
+    try:
+        from amazon_client import AmazonCreatorsClient, amazon_credentials_present
+        if asin and amazon_credentials_present():
+            items = await AmazonCreatorsClient().get_items([asin])
+            for item in items:
+                for key in ("images", "Images"):
+                    block = item.get(key)
+                    if isinstance(block, dict):
+                        for group in block.values():
+                            if isinstance(group, list):
+                                for im in group:
+                                    if isinstance(im, dict):
+                                        add(im.get("link") or im.get("url") or im.get("Link"), "amazon_creators_api", "ASIN catalog image")
+            if results:
+                return results
+    except Exception as exc:
+        logger.info("Amazon Creators API image path unavailable: %s", str(exc)[:200])
+
+    try:
+        headers={"User-Agent":os.getenv("PIN_N_AMAZON_USER_AGENT","Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"),"Accept-Language":"en-US,en;q=0.9"}
+        async with httpx.AsyncClient(timeout=30,follow_redirects=True,headers=headers) as client:
+            r=await client.get(page_url)
+            if r.status_code < 400:
+                html_body=r.text
+                soup=BeautifulSoup(html_body,"lxml")
+                for script in soup.select('script[type="application/ld+json"]'):
+                    try:
+                        data=json.loads(script.string or script.get_text() or "")
+                    except Exception:
+                        continue
+                    stack=[data] if not isinstance(data,list) else list(data)
+                    while stack:
+                        obj=stack.pop()
+                        if isinstance(obj,dict):
+                            if str(obj.get("@type") or "").lower() == "product":
+                                imgs=obj.get("image") or obj.get("images")
+                                if isinstance(imgs,str): imgs=[imgs]
+                                if isinstance(imgs,list):
+                                    for im in imgs:
+                                        if isinstance(im,str): add(im,"schema_product_image","Schema.org Product.image")
+                                        elif isinstance(im,dict): add(im.get("url") or im.get("contentUrl"),"schema_product_image","Schema.org ImageObject")
+                            for v in obj.values():
+                                if isinstance(v,(dict,list)): stack.append(v)
+                        elif isinstance(obj,list):
+                            stack.extend(obj)
+                for meta in soup.select('meta[property="og:image"],meta[property="og:image:url"],meta[property="og:image:secure_url"]'):
+                    add(meta.get("content"),"opengraph_product_image","OpenGraph og:image")
+                tokens=_identity_tokens(product)
+                for img in soup.select("img[src],img[data-src],img[data-old-hires]"):
+                    hay=" ".join(str(img.get(k) or "") for k in ("alt","title","aria-label","id","class")).lower()
+                    if sum(1 for t in tokens if t in hay) >= 1:
+                        add(img.get("data-old-hires") or img.get("data-src") or img.get("src"),"product_page_image","Product identity in image metadata")
+                if asin:
+                    for u in re.findall(r'https?://[^\s"<>]+',html_body):
+                        if "m.media-amazon.com" in u or "images-na.ssl-images-amazon.com" in u:
+                            if asin.lower() in u.lower() or "images" in u.lower():
+                                add(u,"amazon_cdn_page_source","Amazon page image URL")
+    except Exception as exc:
+        logger.info("Product-page image extraction failed: %s", str(exc)[:250])
+    return results
+
+async def _trusted_source_page_images(query: str, product: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out=[]; seen=set()
+    try:
+        pages=await search_independent_images(query, num=12)
+    except Exception:
+        pages=[]
+    for hit in pages:
+        source_url=str(hit.get("source_url") or hit.get("id") or "")
+        if not source_url or source_url in seen:
+            continue
+        seen.add(source_url)
+        try:
+            out.extend(await _extract_trusted_page_images(source_url,product))
+        except Exception:
+            continue
+        if len(out)>=12:
+            break
+    return out
+
 async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[str, Any]:
     """Build product metadata without requesting Amazon pages.
 
@@ -332,6 +425,14 @@ async def research_product(url: str, job_store: JobStore, job_id: str) -> Dict[s
             product["name"] = f"Amazon product {asin_match.group(1).upper()}" if asin_match else "Product"
 
     product["description"] = f"Discover {product['name']}."
+
+    try:
+        trusted = await _extract_trusted_page_images(_non_affiliate_research_url(url), product)
+        if trusted:
+            product["trusted_images"] = trusted
+            product["images"] = [x["url"] for x in trusted]
+    except Exception as exc:
+        logger.info("Trusted image prefetch unavailable: %s", str(exc)[:250])
 
     name_l = product["name"].lower()
     for key, cat in [
@@ -549,6 +650,9 @@ async def get_best_pin_image(
     asin = str(product.get("asin") or "").strip().upper()
     candidates: List[Dict[str, Any]] = []
 
+    for trusted in product.get("trusted_images") or []:
+        if trusted.get("url") not in used_urls and await _url_ok(trusted.get("url")):
+            candidates.append(dict(trusted))
     for img_url in product.get("images") or []:
         if img_url not in used_urls and await _url_ok(img_url):
             candidates.append({"url":img_url,"provider":"product_page","source_url":product.get("source_url") or "","license":"product_page"})
@@ -558,19 +662,27 @@ async def get_best_pin_image(
         exact_queries.extend([f'"{asin}" "{name}"', f'"{asin}" product image'])
     exact_queries.append(f'"{name}" exact product')
 
-    for q in exact_queries:
-        for f in await search_composio_images(q, num=10):
+    for q in exact_queries[:2]:
+        for f in await _trusted_source_page_images(q, product):
             if f.get("url") and f["url"] not in used_urls:
                 candidates.append(f)
-        if len(candidates) >= 12:
+        if len(candidates) >= 16:
             break
+
+    if len(candidates) < 8:
+        for q in exact_queries:
+            for f in await search_composio_images(q, num=10):
+                if f.get("url") and f["url"] not in used_urls:
+                    candidates.append(f)
+            if len(candidates) >= 16:
+                break
 
     if len(candidates) < 8:
         for q in exact_queries[:2]:
             for f in await search_independent_images(q, num=10):
                 if f.get("url") and f["url"] not in used_urls:
                     candidates.append(f)
-            if len(candidates) >= 12:
+            if len(candidates) >= 16:
                 break
 
     best = None
