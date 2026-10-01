@@ -324,8 +324,9 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
             if not u.startswith(("http://","https://")): return
             low=u.lower()
             if "m.media-amazon.com/images/i/" not in low: return
-            if any(x in low for x in ("amazon_logo","amazon-logo","social_share","prime_logo","prime-logo")): return
-            # Drop trailing JSON/HTML delimiters while retaining Amazon's image modifiers.
+            if any(x in low for x in ("amazon_logo","amazon-logo","social_share","prime_logo","prime-logo","auiclients")): return
+            if re.search(r"\.(?:js|css)(?:[?&]|$)", low): return
+            if not re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:[?&._-]|$)", low) and "images/i/" in low: return
             u=re.split(r'["\'<>\\s]',u,1)[0]
             if u and u not in found: found.append(u)
         # Broad exact-host extraction catches data-old-hires, dynamic-image,
