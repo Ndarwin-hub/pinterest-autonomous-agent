@@ -68,6 +68,36 @@ def _amazon_page_title(html: str) -> str:
                 return value[:300]
     return ""
 
+async def _recover_amazon_title_from_web(asin: str) -> str:
+    """Recover an exact ASIN title without relying on the disabled Composio image search."""
+    if not asin: return ""
+    import html as _html
+    try:
+        async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/140 Safari/537.36"}) as client:
+            queries=[f'"{asin}" product', f'"{asin}" Amazon']
+            for q in queries:
+                links=[]
+                for engine,url,params in [
+                    ("bing","https://www.bing.com/search",{"q":q,"form":"QBLH"}),
+                    ("ddg","https://html.duckduckgo.com/html/",{"q":q}),
+                ]:
+                    try:
+                        rr=await client.get(url,params=params,headers={"Referer":"https://duckduckgo.com/" if engine=="ddg" else "https://www.bing.com/"})
+                        if rr.status_code>=400: continue
+                        h=rr.text
+                        if engine=="bing":
+                            pairs=re.findall(r'<h2[^>]*>\\s*<a[^>]+href=["\\\']([^"\\\']+)["\\\'][^>]*>(.*?)</a>',h,re.I|re.S)
+                        else:
+                            pairs=re.findall(r'<a[^>]+class=["\\\'][^"\\\']*result__a[^"\\\']*["\\\'][^>]*href=["\\\']([^"\\\']+)["\\\'][^>]*>(.*?)</a>',h,re.I|re.S)
+                        for link,title_html in pairs[:12]:
+                            link=_html.unescape(unquote(link))
+                            title=_clean(re.sub(r"<[^>]+>"," ",_html.unescape(title_html)))
+                            if asin.lower() in link.lower() and len(title)>=6 and not _generic(title) and not _is_asin(title):
+                                return title[:300]
+                    except Exception: continue
+    except Exception: pass
+    return ""
+
 def _brand_from_name(name: str) -> str:
     parts = name.split()
     if not parts: return ""
@@ -145,6 +175,19 @@ def install_identity(agent_mod) -> str:
                         logger.info("QUALITY Amazon page identity recovered asin=%s name=%r", asin, current)
         except Exception as e:
             logger.warning("QUALITY Amazon page identity recovery skipped: %s", e)
+
+        # If Amazon HTML is an interstitial, recover the exact ASIN title from
+        # ordinary web search before using the optional Composio image-search recovery.
+        try:
+            from amazon_url import extract_asin_from_url
+            asin = extract_asin_from_url(resolved_url)
+            if asin and (_generic(current) or _is_asin(current) or len(current) < 6):
+                recovered = await _recover_amazon_title_from_web(asin)
+                if recovered:
+                    current = recovered
+                    logger.info("QUALITY ASIN web title recovered asin=%s name=%r", asin, current)
+        except Exception as e:
+            logger.warning("QUALITY ASIN web title recovery skipped: %s", e)
 
         # Amazon anti-bot/interstitial pages can expose only "Amazon.com" as the
         # scraped title. Recover identity from Composio image-search metadata using
