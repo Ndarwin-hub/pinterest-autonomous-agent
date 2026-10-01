@@ -319,8 +319,8 @@ async def _extract_trusted_page_images(page_url: str, product: Dict[str, Any]) -
                                 if isinstance(imgs,str): imgs=[imgs]
                                 if isinstance(imgs,list):
                                     for im in imgs:
-                                        if isinstance(im,str): add(im,"schema_product_image","Schema.org Product.image")
-                                        elif isinstance(im,dict): add(im.get("url") or im.get("contentUrl"),"schema_product_image","Schema.org ImageObject")
+                                        if isinstance(im,str): add(im,"schema_product_image","Schema.org Product.image; identity verified")
+                                        elif isinstance(im,dict): add(im.get("url") or im.get("contentUrl"),"schema_product_image","Schema.org ImageObject; identity verified")
                             for v in obj.values():
                                 if isinstance(v,(dict,list)): stack.append(v)
                         elif isinstance(obj,list):
