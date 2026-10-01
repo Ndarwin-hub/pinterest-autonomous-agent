@@ -383,6 +383,53 @@ async def _alternative_identity_ok(c:Dict[str,Any],product:Dict[str,Any])->bool:
     except Exception:
         return False
 
+
+async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=12)->List[Dict[str,Any]]:
+    """Find exact-product retailer/manufacturer pages and extract their product images.
+
+    This is additive fallback evidence; legacy identity/quality gates still decide acceptance.
+    """
+    name=str(product.get("name") or "").strip()
+    asin=str(product.get("asin") or "").strip()
+    brand=str(product.get("brand") or "").strip()
+    if not name and not asin: return []
+    q=' '.join(x for x in [f'"{asin}"' if asin else "", f'"{name}"', brand] if x)
+    try:
+        async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"}) as client:
+            r=await client.get("https://www.bing.com/search",params={"q":q,"form":"QBLH"})
+            if r.status_code>=400: return []
+            html=r.text
+            links=[]
+            for u in re.findall(r'<h2[^>]*>\\s*<a[^>]+href=["\\\']([^"\\\']+)',html,re.I):
+                u=unquote(u)
+                if u.startswith("http") and "bing.com" not in u.lower() and u not in links: links.append(u)
+            out=[]
+            for src in links[:8]:
+                if any(x in src.lower() for x in ("pinterest.com","shutterstock.com","istockphoto.com","gettyimages.com")): continue
+                try:
+                    page=await client.get(src)
+                    if page.status_code>=400 or not page.text: continue
+                    page_html=page.text.replace('\\\\/','/').replace('\\\\u002F','/')
+                    evidence=re.sub(r'<[^>]+>',' ',page_html).lower()+" "+src.lower()
+                    if asin and asin.lower() not in evidence:
+                        tokens=[t for t in re.findall(r'[a-z0-9][a-z0-9\\-]{3,}',name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
+                        if sum(1 for t in tokens[:10] if t in evidence)<2: continue
+                    imgs=[]
+                    for u in re.findall(r'<meta[^>]+(?:property|name)=["\\\'](?:og:image|twitter:image)["\\\'][^>]+content=["\\\']([^"\\\']+)',page_html,re.I): imgs.append(u)
+                    for u in re.findall(r'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\'](?:og:image|twitter:image)["\\\']',page_html,re.I): imgs.append(u)
+                    for u in re.findall(r'"image"\\s*:\\s*"(https?://[^"\\]+)',page_html,re.I): imgs.append(u)
+                    for u in imgs:
+                        u=unquote(u).replace('\\\\/','/')
+                        if not u.startswith('http') or u in [x["url"] for x in out]: continue
+                        out.append({"url":u,"provider":"verified_web_product_page","source":src,"license":"verified product page","original":True})
+                        if len(out)>=num: return out
+                except Exception: continue
+            logger.info("Verified web product-page image search asin=%s pages=%s images=%s",asin[:20],len(links[:8]),len(out))
+            return out
+    except Exception as exc:
+        logger.warning("Verified web product-page image search unavailable: %s",str(exc)[:220])
+        return []
+
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
     """Amazon-first exact-product selector; fall back only when Amazon cannot fill the tier."""
     target=4
@@ -419,6 +466,9 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         if not any(c.get("url") for c in raw if c.get("provider")=="independent_bing_image"):
             try: raw.extend(await search_pexels(queries[0],agent_mod))
             except Exception: pass
+        # Add exact-product web-page evidence as the final trusted fallback.
+        try: raw.extend(await search_verified_web_product_page_images(product,num=12))
+        except Exception as exc: logger.warning("Verified web product-page fallback unavailable: %s",str(exc)[:220])
     validated=await validate_many([c for c in raw if c.get("url") and c.get("url") not in used_urls])
     validated=filter_obvious_non_product(validated,product)
     trusted=[]
@@ -433,7 +483,7 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
         logger.info("IMAGE_SOURCE_FAIL product=%s reason=no_exact_product_image_survived",str(product.get("asin") or product.get("name",""))[:80])
         return []
     for c in trusted: c["score"]=score(c,product,str(strategy.get("key","")))
-    source_rank={"amazon_creators_api":0,"amazon_asin_cdn":1,"amazon_direct":2,"product_page":3,"composio_search_image":4,"independent_bing_image":5,"pexels":6}
+    source_rank={"amazon_creators_api":0,"amazon_asin_cdn":1,"amazon_direct":2,"product_page":3,"composio_search_image":4,"verified_web_product_page":5,"independent_bing_image":6,"pexels":7}
     def _resolution_tier(x):
         m=max(int(x.get("width") or 0),int(x.get("height") or 0))
         return 4 if m>=6000 else 3 if m>=3500 else 2 if m>=2000 else 1 if m>=1200 else 0
