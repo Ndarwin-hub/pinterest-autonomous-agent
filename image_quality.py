@@ -4,6 +4,7 @@ import asyncio, io, logging, os, re, math, hashlib, json
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from PIL import Image, ImageFile
+from advanced_image_intelligence import filter_obvious_non_product, advanced_tiebreak_key
 logger=logging.getLogger("pinterest-agent.image-quality")
 MIN_DIMENSION=500
 PREFERRED_MIN_DIMENSION=1200
@@ -19,29 +20,37 @@ PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
 
 def inspect_image_bytes(raw: bytes, debug_url: str = "") -> Optional[Dict[str,Any]]:
-    """Validate that bytes are a real readable image; quality is advisory, not a publication gate."""
+    """Validate the actual image bytes; provider metadata is never trusted."""
     if not raw or len(raw) > MAX_IMAGE_BYTES_TO_INSPECT:
         if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=empty_or_too_large bytes=%s", debug_url, len(raw or b""))
         return None
     try:
         im=Image.open(io.BytesIO(raw)); im.verify()
         im=Image.open(io.BytesIO(raw)); im.load()
-        rgba=im.convert("RGBA")
-        alpha=list(rgba.getchannel("A").resize((64,64)).getdata())
+        if im.width < MIN_DIMENSION or im.height < MIN_DIMENSION:
+            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=too_small:%sx%s", debug_url, im.width, im.height)
+            return None
+        rgba=im.convert("RGBA"); alpha=list(rgba.getchannel("A").resize((64,64)).getdata())
         opaque_ratio=sum(1 for a in alpha if a>=250)/len(alpha)
-        rgb=rgba.convert("RGB").resize((64,64),Image.Resampling.LANCZOS)
-        px=list(rgb.getdata())
-        gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]
-        mean=sum(gray)/len(gray)
-        std=math.sqrt(sum((v-mean)**2 for v in gray)/len(gray))
-        unique=len(set(px))
+        if opaque_ratio < 0.20:
+            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=transparent:%.3f", debug_url, opaque_ratio)
+            return None
+        rgb=rgba.convert("RGB").resize((64,64),Image.Resampling.LANCZOS); px=list(rgb.getdata())
+        gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]; mean=sum(gray)/len(gray)
+        std=math.sqrt(sum((v-mean)**2 for v in gray)/len(gray)); unique=len(set(px))
         hist=[0]*32
         for v in gray: hist[min(31,int(v//8))]+=1
         entropy=-sum((n/len(gray))*math.log2(n/len(gray)) for n in hist if n)
+        if std < BLANK_STDDEV_THRESHOLD or unique < BLANK_UNIQUE_COLOR_THRESHOLD or entropy < 1.8:
+            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=blank_like std=%.3f unique=%s entropy=%.3f", debug_url, std, unique, entropy)
+            return None
         from PIL import ImageFilter
         edge_px=list(rgb.convert("L").filter(ImageFilter.FIND_EDGES).getdata())
         edge_ratio=sum(1 for v in edge_px if v>=180)/len(edge_px)
         sat=sum(max(p)-min(p) for p in px)/len(px)
+        if edge_ratio > 0.34 and sat < 18 and entropy < 5.0:
+            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=edge_heavy edge=%.3f sat=%.2f entropy=%.3f", debug_url, edge_ratio, sat, entropy)
+            return None
         from image_fingerprint import fingerprint
         return {"width":int(im.width),"height":int(im.height),"sha256":hashlib.sha256(raw).hexdigest(),
                 "stddev":round(std,3),"unique_colors":unique,"entropy":round(entropy,3),
@@ -88,21 +97,29 @@ async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
     except Exception:pass
     return None
 def hard_gate(w:int,h:int)->Tuple[bool,str]:
-    # Compatibility helper only. Resolution and aspect ratio are advisory.
-    return True,"advisory"
+    if min(w,h)<MIN_DIMENSION:return False,f"too_small:{w}x{h}"
+    ratio=max(w,h)/max(1,min(w,h))
+    if ratio>MAX_ASPECT:return False,f"bad_aspect:{w}x{h}"
+    return True,"ok"
 async def inspect_image_content(url:str)->Optional[Dict[str,Any]]:
     raw=await _fetch_image_bytes(url)
     return inspect_image_bytes(raw, url) if raw else None
 
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     url=str(c.get("url") or "")
-    if not url: return None
+    d=await inspect_image_url(url)
+    if not d:
+        logger.info("IMAGE_REJECT provider=%s reason=dimension_probe_failed url=%s",c.get("provider"),url[:220])
+        return None
+    w,h=d; ok,reason=hard_gate(w,h)
+    if not ok:
+        logger.info("IMAGE_REJECT provider=%s reason=%s url=%s",c.get("provider"),reason,url[:220])
+        return None
     content=await inspect_image_content(url)
     if not content:
-        logger.info("IMAGE_REJECT provider=%s reason=invalid_or_unreadable_image url=%s",c.get("provider"),url[:220])
+        logger.info("IMAGE_REJECT provider=%s reason=content_validation_failed url=%s dims=%sx%s",c.get("provider"),url[:220],w,h)
         return None
-    x=dict(c); x.update(content); x.update(quality_gate="advisory",content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"])
-    return x
+    x=dict(c);x.update(content);x.update(quality_gate=reason,content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"]);return x
 async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
     seen=set();unique=[]
     for c in raw:
@@ -120,6 +137,7 @@ def score(c:Dict[str,Any],product:Dict[str,Any],strategy:str)->int:
     elif w>=1200 or h>=1200:s+=6
     elif p=="composio_search_image":
         s+=20
+        if brand and brand in src:s+=12
         toks=[x for x in re.findall(r"[a-z0-9]+",name) if len(x)>3];s+=min(10,sum(1 for x in toks[:5] if x in src))
     elif p=="pexels":s+=8
     if min(w,h)>=PREFERRED_MIN_DIMENSION:s+=12
@@ -163,13 +181,12 @@ def _visual_distance(a,b)->float:
     return 0.75*hamming+0.25*min(1.0,color*4.0)
 
 async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set)->List[Dict[str,Any]]:
-    """Prefer visually distinct images, but never turn duplicate detection into a publication blocker."""
     if not candidates:return []
     used_sigs=[]
     for u in list(used_urls)[:4]:
         sig=await _visual_signature(u)
         if sig:used_sigs.append(sig)
-    selected=[]; selected_sigs=[]; deferred=[]
+    selected=[]; selected_sigs=[]
     for c in candidates:
         u=c.get("url")
         if not u or u in used_urls:continue
@@ -180,21 +197,10 @@ async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set
             if len(selected)>=MAX_CANDIDATES_PER_PIN:break
             continue
         distances=[_visual_distance(sig,s) for s in used_sigs+selected_sigs]
-        if distances and min(distances)<VISUAL_DUPLICATE_THRESHOLD:
-            deferred.append(c)
-            continue
+        if distances and min(distances)<VISUAL_DUPLICATE_THRESHOLD:continue
         c["visual_distance"]=round(min(distances),4) if distances else 1.0
         selected.append(c); selected_sigs.append(sig)
         if len(selected)>=MAX_CANDIDATES_PER_PIN:break
-    # If distinct media are unavailable, use the remaining URL-distinct product
-    # candidates rather than failing the Pin. Duplicate detection is advisory.
-    if len(selected)<MAX_CANDIDATES_PER_PIN:
-        for c in deferred:
-            u=c.get("url")
-            if not u or u in used_urls or any(x.get("url")==u for x in selected):continue
-            c["visual_duplicate_advisory"]=True
-            selected.append(c)
-            if len(selected)>=MAX_CANDIDATES_PER_PIN:break
     return selected
 
 async def search_pexels(query:str,agent_mod:Any)->List[Dict[str,Any]]:
@@ -348,25 +354,36 @@ def _search_queries(product:Dict[str,Any],strategy:Dict[str,Any])->List[str]:
         f"{base} front product photography",
         f"{base} clean high resolution product photo",
     ]
-def _obvious_non_product_image(c:Dict[str,Any],product:Dict[str,Any])->bool:
-    """Exclude obvious logos/brand graphics/stock substitutions, but never require exact metadata proof."""
-    text=" ".join(str(c.get(k) or "") for k in ("url","source","id","evidence","alt","title","name")).lower()
-    blocked=("brand logo","brand-logo","brand_logo","logo image","logo","wordmark","favicon","icon","banner","advertisement","advertising","wallpaper","vector","stock photo","stock-photo","shutterstock","istockphoto","gettyimages","pexels.com","unsplash.com","pixabay.com","placeholder")
-    if any(x in text for x in blocked): return True
-    brand=str(product.get("brand") or "").strip().lower()
-    tokens=[t for t in re.findall(r"[a-z0-9]+",str(product.get("name") or "").lower()) if len(t)>=4 and t!=brand]
-    if brand and brand in text and tokens and not any(t in text for t in tokens): return True
-    return False
+async def _alternative_identity_ok(c:Dict[str,Any],product:Dict[str,Any])->bool:
+    """Require source-page evidence before accepting a non-Amazon fallback image."""
+    src=str(c.get("source") or "")
+    if not src.startswith(("http://","https://")): return False
+    try:
+        async with httpx.AsyncClient(timeout=10,follow_redirects=True) as client:
+            r=await client.get(src,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/identity"})
+            if r.status_code>=400 or not r.text: return False
+            evidence=re.sub(r"<[^>]+>"," ",r.text).lower()+" "+src.lower()
+        asin=str(product.get("asin") or "").lower()
+        if asin and asin in evidence: return True
+        name=str(product.get("name") or "").lower()
+        brand=str(product.get("brand") or "").lower().strip()
+        stop={"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}
+        tokens=list(dict.fromkeys(t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}",name) if t not in stop))
+        if brand and brand in evidence and any(t in evidence for t in tokens[:8]): return True
+        return sum(1 for t in tokens[:10] if t in evidence)>=2
+    except Exception:
+        return False
 
 async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_index:int,used_urls:set,agent_mod:Any)->List[Dict[str,Any]]:
-    """Amazon-first selector; quality and identity are advisory, with explicit brand/logo exclusions."""
+    """Amazon-first exact-product selector; fall back only when Amazon cannot fill the tier."""
     target=4
     amazon_api=await search_amazon_api_images(product)
     amazon_cdn=await search_amazon_asin_cdn_images(product)
     amazon_page=await search_amazon_product_images(product)
     amazon=amazon_api+amazon_cdn+amazon_page
     amazon_valid=await validate_many([c for c in amazon if c.get("url") and c.get("url") not in used_urls])
-    amazon_valid=[c for c in amazon_valid if c.get("provider") in {"amazon_creators_api","amazon_asin_cdn","amazon_direct","product_page"} and not _obvious_non_product_image(c,product)]
+    amazon_valid=[c for c in amazon_valid if c.get("provider") in {"amazon_creators_api","amazon_asin_cdn","amazon_direct","product_page"}]
+    amazon_valid=filter_obvious_non_product(amazon_valid,product)
     logger.info("AMAZON_IMAGE_TIER asin=%s candidates=%s providers=%s",str(product.get("asin") or "")[:20],len(amazon_valid),sorted(set(str(c.get("provider") or "") for c in amazon_valid)))
     if len(amazon_valid)>=target:
         amazon_valid.sort(key=lambda x:(-score(x,product,str(strategy.get("key",""))),not bool(x.get("original",False))))
@@ -394,23 +411,24 @@ async def choose_candidates(product:Dict[str,Any],strategy:Dict[str,Any],pin_ind
             try: raw.extend(await search_pexels(queries[0],agent_mod))
             except Exception: pass
     validated=await validate_many([c for c in raw if c.get("url") and c.get("url") not in used_urls])
+    validated=filter_obvious_non_product(validated,product)
     trusted=[]
     for c in validated:
-        if _obvious_non_product_image(c,product):
-            logger.info("IMAGE_REJECT provider=%s reason=obvious_brand_or_non_product url=%s",c.get("provider"),str(c.get("url"))[:220])
-            continue
-        c["identity_gate"]="advisory"
-        trusted.append(c)
+        if c.get("provider")=="product_page" or await _alternative_identity_ok(c,product):
+            if c.get("provider")!="product_page": c["identity_gate"]="passed"
+            trusted.append(c)
+        else:
+            logger.info("IMAGE_REJECT provider=%s reason=product_identity_unverified url=%s",c.get("provider"),str(c.get("url"))[:220])
     trusted.extend(amazon_valid)
     if not trusted:
-        logger.info("IMAGE_SOURCE_FAIL product=%s reason=no_usable_image_survived",str(product.get("asin") or product.get("name",""))[:80])
+        logger.info("IMAGE_SOURCE_FAIL product=%s reason=no_exact_product_image_survived",str(product.get("asin") or product.get("name",""))[:80])
         return []
     for c in trusted: c["score"]=score(c,product,str(strategy.get("key","")))
     source_rank={"amazon_creators_api":0,"amazon_asin_cdn":1,"amazon_direct":2,"product_page":3,"composio_search_image":4,"independent_bing_image":5,"pexels":6}
     def _resolution_tier(x):
         m=max(int(x.get("width") or 0),int(x.get("height") or 0))
         return 4 if m>=6000 else 3 if m>=3500 else 2 if m>=2000 else 1 if m>=1200 else 0
-    trusted.sort(key=lambda x:(source_rank.get(str(x.get("provider") or ""),9),-_resolution_tier(x),-int(x.get("score",0)),not bool(x.get("original",False))))
+    trusted.sort(key=lambda x:(source_rank.get(str(x.get("provider") or ""),9),-_resolution_tier(x),-int(x.get("score",0)),not bool(x.get("original",False)),-advanced_tiebreak_key(x)[0],-advanced_tiebreak_key(x)[1],-advanced_tiebreak_key(x)[2]))
     diverse=await _remove_visual_duplicates(trusted[:MAX_CANDIDATES_PER_PIN*3],used_urls)
     return diverse[:target] if len(diverse)>=target else diverse
 
