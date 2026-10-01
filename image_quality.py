@@ -329,21 +329,15 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
             if not re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:[?&._-]|$)", low) and "images/i/" in low: return
             u=re.split(r'["\'<>\\s]',u,1)[0]
             if u and u not in found: found.append(u)
-        # Broad exact-host extraction catches data-old-hires, dynamic-image,
-        # imageGalleryData and other Amazon carousel encodings.
-        # Amazon frequently embeds the full-resolution gallery in JSON attributes
-        # such as data-a-dynamic-image and fields named large/hiRes/mainUrl. These
-        # are exact product-page assets, so this is an additive trusted-source layer.
-        for u in re.findall(r'["\\\'](?:large|hiRes|mainUrl|data-old-hires|src)["\\\']\\s*:\\s*["\\\']([^"\\\']+)["\\\']', html, re.I):
-            add(u.replace('\\\\/','/').replace('\\\\u002F','/'))
-        for u in re.findall(r'https?:\\?/\\?/[^"\\\'<>\\s]+amazon[^"\\\'<>\\s]+/images/I/[^"\\\'<>\\s]+', html, re.I):
-            add(u.replace('\\\\/','/'))
-        for u in re.findall(r'https?:\\?/\\?/m\\.media-amazon\\.com/images/I/[^"\\\'<>\\s]+', html, re.I):
-            add(u.replace('\\\\/','/'))
-        for u in re.findall(r'https?://m\.media-amazon\.com/images/I/[^"\'<>\\s]+',html,re.I): add(u)
-        for u in re.findall(r'//m\.media-amazon\.com/images/I/[^"\'<>\\s]+',html,re.I): add(u)
-        # JSON-escaped slash form.
-        for u in re.findall(r'https?:\\?/\\?/m\.media-amazon\.com/images/I/[^"\'<>\\s]+',html,re.I): add(u.replace("\\/","/"))
+        # Exact Amazon gallery JSON/HTML patterns. Keep this layer narrow so CSS/JS assets cannot enter.
+        for u in re.findall(r'["\'](?:large|hiRes|mainUrl|data-old-hires)["\']\s*:\s*["\']([^"\']+)', html, re.I):
+            add(u)
+        for u in re.findall(r'"(https://m\.media-amazon\.com/images/I/[^"<>\\s]+?\.(?:jpg|jpeg|png|webp|gif))"', html, re.I):
+            add(u)
+        for u in re.findall(r'https://m\.media-amazon\.com/images/I/[^"<>\\s]+?\.(?:jpg|jpeg|png|webp|gif)', html, re.I):
+            add(u)
+        for u in re.findall(r'//m\.media-amazon\.com/images/I/[^"<>\\s]+?\.(?:jpg|jpeg|png|webp|gif)', html, re.I):
+            add(u)
         upgraded=[]
         for u in found:
             v=re.sub(r'\._(?:SL|SX|SY|AC_SL|AC_UL)\d+_\.',".",u)
