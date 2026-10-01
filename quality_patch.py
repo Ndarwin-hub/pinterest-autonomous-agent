@@ -48,23 +48,23 @@ def _amazon_slug(url: str) -> str:
 
 
 def _amazon_page_title(html: str) -> str:
-    """Extract a real Amazon product title despite attribute-order/markup changes."""
+    """Extract a real Amazon product title from common Amazon HTML/JSON encodings."""
     import html as _html
     text = str(html or "")
     patterns = [
-        r"<[^>]*id=[\\\"']productTitle[\\\"'][^>]*>(.*?)</[^>]+>",
-        r"<h1[^>]*>(.*?)</h1>",
-        r"<meta[^>]+(?:property|name)=[\\\"'](?:og:title|title)[\\\"'][^>]+content=[\\\"']([^\\\"']+)",
-        r"<meta[^>]+content=[\\\"']([^\\\"']+)[\\\"'][^>]+(?:property|name)=[\\\"'](?:og:title|title)[\\\"']",
-        r'\\\"productTitle\\\"\\s*:\\s*\\\"([^\\\"]{6,300})',
-        r'\\\"title\\\"\\s*:\\s*\\\"([^\\\"]{6,300})',
+        r'<[^>]*\\bid=["\\\']productTitle["\\\'][^>]*>(.*?)</[^>]+>',
+        r'<h1[^>]*>(.*?)</h1>',
+        r'<meta[^>]+(?:property|name)=["\\\'](?:og:title|title)["\\\'][^>]+content=["\\\']([^"\\\']+)',
+        r'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\'](?:og:title|title)["\\\']',
+        r'["\\\']productTitle["\\\']\\s*:\\s*["\\\']([^"\\\']{6,300})',
+        r'["\\\']title["\\\']\\s*:\\s*["\\\']([^"\\\']{6,300})',
     ]
     for pat in patterns:
         for m in re.findall(pat, text, flags=re.I|re.S):
-            value=_html.unescape(re.sub(r"<[^>]+>", " ", str(m)))
-            value=re.sub(r"\\s+", " ", value).strip(" -|:")
-            value=re.sub(r"\\s*[:|]\\s*Amazon(?:\\.com)?\\s*$", "", value, flags=re.I).strip()
-            if len(value)>=6 and not _generic(value) and not _is_asin(value) and "amazon.com" not in value.lower():
+            value = _html.unescape(re.sub(r"<[^>]+>", " ", str(m)))
+            value = re.sub(r"\\s+", " ", value).strip(" -|:")
+            value = re.sub(r"\\s*[:|]\\s*Amazon(?:\\.com)?\\s*$", "", value, flags=re.I).strip()
+            if len(value) >= 6 and not _generic(value) and not _is_asin(value) and "amazon.com" not in value.lower():
                 return value[:300]
     return ""
 
