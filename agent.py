@@ -8,7 +8,7 @@ Image priority:
 2) Exact-ASIN/exact-title image search with source-page identity verification
 3) Independent exact-product image search as a fallback
 4) No brand-only, stock, generic, or description-keyword substitutions
-5) No fake/placeholder fallback; fail closed
+5) No fake/placeholder fallback; use the best available real product image
 
 AI text tools (DeepSeek/Perplexity/etc.) are probed at runtime; if entity lacks connection,
 local SEO remains active (honest capability report in job result).
@@ -617,14 +617,28 @@ def exact_product_identity_score(c: Dict[str, Any], product: Dict[str, Any]) -> 
     return 0
 
 
+def _obvious_non_product_image(c: Dict[str, Any], product: Dict[str, Any]) -> bool:
+    """Reject only obvious brand/stock/graphic substitutions; never enforce a hard identity score."""
+    text = " ".join(str(c.get(k) or "") for k in ("source_url", "source", "id", "evidence", "alt", "title", "name")).lower()
+    blocked = ("brand logo","brand-logo","brand_logo","logo image","logo","wordmark","favicon","icon","banner","advertisement","advertising","wallpaper","vector","stock photo","stock-photo","shutterstock","istockphoto","gettyimages","pexels.com","unsplash.com","pixabay.com","placeholder")
+    if any(x in text for x in blocked):
+        return True
+    name_tokens = _identity_tokens(product)
+    brand = str(product.get("brand") or "").strip().lower()
+    if brand and brand in text:
+        meaningful = [t for t in name_tokens if t != brand]
+        if meaningful and not any(t in text for t in meaningful):
+            return True
+    return False
+
+
 def score_candidate(c: Dict[str, Any], product: Dict[str, Any], strategy_key: str) -> int:
+    """Rank images; identity/quality are preferences, not publication gates."""
     identity = exact_product_identity_score(c, product)
-    if identity < 70:
-        return 0
     provider = c.get("provider") or ""
     score = identity
-    if provider == "product_page":
-        score += 20
+    if provider in {"amazon_creators_api","schema_product_image","opengraph_product_image","product_page_image","product_page"}:
+        score += 40
     elif provider == "composio_search_image":
         score += 8
     elif provider == "independent_bing_image":
@@ -634,7 +648,7 @@ def score_candidate(c: Dict[str, Any], product: Dict[str, Any], strategy_key: st
         score += 5
     if h > w:
         score += 3
-    return min(score, 100)
+    return min(score, 140)
 
 
 def pillow_card(product: Dict[str, Any], strategy_key: str) -> Dict[str, Any]:
@@ -715,16 +729,16 @@ async def get_best_pin_image(
         for candidate in items:
             if candidate.get("url") in used_urls:
                 continue
-            identity = exact_product_identity_score(candidate, product)
-            if identity < 70:
+            if _obvious_non_product_image(candidate, product):
                 local_rejected += 1
                 continue
+            identity = exact_product_identity_score(candidate, product)
             score = score_candidate(candidate, product, strategy["key"])
             candidate["identity_score"] = identity
             candidate["score"] = score
             if score > best_score:
                 best_score, best = score, candidate
-        if best and best.get("url") and best_score >= 70 and await _url_ok(best["url"]):
+        if best and best.get("url") and await _url_ok(best["url"]):
             return best, best_score, local_rejected
         return None, -1, local_rejected
 
@@ -746,8 +760,8 @@ async def get_best_pin_image(
         return {"mode":"url","value":best["url"],"provider":best.get("provider"),"id":best.get("id"),"score":best_score,"identity_score":best.get("identity_score"),"license":best.get("license")}
 
     raise RuntimeError(
-        "No trustworthy exact-product image found; generic/brand/stock alternatives were rejected "
-        f"(candidates={len(candidates)}, rejected_identity={rejected}, asin={asin or 'unknown'})."
+        "No usable product image was available after obvious brand/logo/stock exclusions "
+        f"(candidates={len(candidates)}, rejected_obvious={rejected}, asin={asin or 'unknown'})."
     )
 
 
