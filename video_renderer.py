@@ -67,6 +67,20 @@ def download_and_validate(urls, workdir):
             ok,reason=validate_image(p)
             if not ok:
                 p.unlink(missing_ok=True); continue
+            # Normalize downloaded JPEG/WEBP bytes through Pillow. Some Amazon
+            # CDN responses are PIL-readable but truncated for ffmpeg; re-encoding
+            # produces a clean deterministic image asset. Upscale only as a final
+            # product-image fallback, never as a source substitution.
+            try:
+                im=Image.open(p).convert("RGB")
+                if min(im.size)<1000:
+                    scale=1000/max(1,min(im.size))
+                    im=im.resize((max(1000,int(im.width*scale)),max(1000,int(im.height*scale))),Image.Resampling.LANCZOS)
+                clean=Path(workdir)/f"image_{len(selected)+1}.jpg"
+                im.save(clean,format="JPEG",quality=95,optimize=True)
+                p.unlink(missing_ok=True); p=clean
+            except Exception:
+                p.unlink(missing_ok=True); continue
             fp=_sha(p)
             if fp in seen:
                 p.unlink(missing_ok=True); continue
