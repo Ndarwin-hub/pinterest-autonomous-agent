@@ -50,25 +50,35 @@ def download_and_validate(urls, workdir):
     from PIL import Image, ImageEnhance
     selected=[]; seen=set()
     for url in urls:
-        if not url or not str(url).startswith(("http://","https://")):
+        if not url:
             continue
         try:
-            # Use the same HTTP client family/headers as the image-quality gate.
-            # Amazon CDN can return a 160px placeholder to some clients while
-            # returning the verified full asset to httpx.
-            try:
-                with httpx.Client(timeout=30,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality","Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}) as client:
-                    rr=client.get(url)
+            local_source=Path(str(url))
+            if local_source.exists() and local_source.is_file():
+                raw=local_source.read_bytes()
+                ctype="image/local"
+            else:
+                if not str(url).startswith(("http://","https://")):
+                    continue
+                # Use the same HTTP client family/headers as the image-quality gate.
+                raw=None;ctype=""
+                try:
+                    with httpx.Client(timeout=30,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality","Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}) as client:
+                        rr=client.get(str(url))
+                        rr.raise_for_status()
+                        raw=rr.content
+                        ctype=(rr.headers.get("content-type") or "").lower()
+                except Exception:
+                    rr=requests.get(str(url),timeout=30,stream=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"})
                     rr.raise_for_status()
                     raw=rr.content
                     ctype=(rr.headers.get("content-type") or "").lower()
-            except Exception:
-                rr=requests.get(url,timeout=30,stream=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"})
-                rr.raise_for_status()
-                raw=rr.content
-                ctype=(rr.headers.get("content-type") or "").lower()
-            if "image" not in ctype:
+            if not raw:
                 continue
+            if "image" not in ctype and ctype!="image/local":
+                continue
+            # Amazon CDN can return a 160px placeholder to some clients while
+            # returning the verified full asset to httpx.
             ext=".jpg"
             if "png" in ctype: ext=".png"
             elif "webp" in ctype: ext=".webp"
