@@ -1,6 +1,6 @@
 """Fail-closed visual image validation and selection shared by every publication path."""
 from __future__ import annotations
-import asyncio, io, logging, os, re, math, hashlib, json
+import asyncio, io, logging, os, re, math, hashlib, json, base64
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from PIL import Image, ImageFile
@@ -425,6 +425,15 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
             links=[]
             for u in re.findall(r'<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)',html,re.I):
                 u=unquote(u)
+                # Bing now commonly wraps organic links in /ck/a redirect URLs.
+                # Decode the embedded a1<base64url> target before identity checks.
+                if "bing.com/ck/a" in u.lower():
+                    mm=re.search(r'[?&]u=a1([^&]+)',u,re.I)
+                    if mm:
+                        try:
+                            decoded=base64.urlsafe_b64decode(mm.group(1)+"===" ).decode("utf-8","ignore")
+                            if decoded.startswith("http"): u=decoded
+                        except Exception: pass
                 if u.startswith("http") and "bing.com" not in u.lower() and u not in links: links.append(u)
             # Bing can return a shell with no parsed result links. Add DuckDuckGo HTML
             # search as a second web-page discovery path; it remains only a candidate source.
