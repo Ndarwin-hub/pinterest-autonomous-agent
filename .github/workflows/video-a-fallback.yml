@@ -36,6 +36,22 @@ jobs:
           test -n "$token" && test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
+      - name: Reset the requested pair for a clean recovery attempt
+        env:
+          ID_TOKEN: ${{ steps.oidc.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body=$(python3 - <<'PY'
+          import json, os
+          print(json.dumps({"pair_start": int(os.environ["PAIR_START"])}))
+          PY
+          )
+          response=$(curl --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors             -w '\nHTTP_STATUS:%{http_code}\n'             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/video/pair-recovery'             -d "$body")
+          echo "$response"
+          status=$(printf '%s' "$response" | sed -n 's/^HTTP_STATUS://p' | tail -1)
+          [[ "$status" == "200" ]]
+
       - name: Request Railway to take ownership of the failed Kaggle pair
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
