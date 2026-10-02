@@ -115,7 +115,8 @@ async def inspect_image_content(url:str)->Optional[Dict[str,Any]]:
 
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     url=str(c.get("url") or "")
-    content=await inspect_image_content(url)
+    raw=await _fetch_image_bytes(url)
+    content=inspect_image_bytes(raw,url) if raw else None
     if not content:
         logger.info("IMAGE_REJECT provider=%s reason=content_validation_failed url=%s",c.get("provider"),url[:220])
         return None
