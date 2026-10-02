@@ -352,13 +352,20 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
             if u.startswith("//"): u="https:"+u
             if not u.startswith(("http://","https://")): return
             low=u.lower()
-            if "m.media-amazon.com/images/i/" not in low: return
+            if not re.search(r"(?:m\\.media-amazon\\.com|images-na\\.ssl-images-amazon\\.com)/images/i/", low, re.I): return
             if any(x in low for x in ("amazon_logo","amazon-logo","social_share","prime_logo","prime-logo","auiclients")): return
             if re.search(r"\.(?:js|css)(?:[?&]|$)", low): return
             if not re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:[?&._-]|$)", low) and "images/i/" in low: return
             u=re.split(r'["\'<>\\s]',u,1)[0]
             if u and u not in found: found.append(u)
         # Exact Amazon gallery JSON/HTML patterns. Keep this layer narrow so CSS/JS assets cannot enter.
+        # Amazon also embeds the gallery in data-a-dynamic-image/srcset JSON and
+        # sometimes uses the legacy images-na host. Extract every exact /images/I/
+        # asset before falling back to ASIN thumbnail endpoints.
+        for u in re.findall(r'(?:https?:)?//(?:m\\.media-amazon\\.com|images-na\\.ssl-images-amazon\\.com)/images/I/[A-Za-z0-9._%+\\-]+', html, re.I):
+            add(u)
+        for u in re.findall(r'https?:\\\\?/\\\\?/(?:m\\.media-amazon\\.com|images-na\\.ssl-images-amazon\\.com)\\\\?/images\\\\?/I\\\\?/[A-Za-z0-9._%+\\-]+', html, re.I):
+            add(u.replace('\\\\/','/'))
         for u in re.findall(r'["\'](?:large|hiRes|mainUrl|data-old-hires)["\']\s*:\s*["\']([^"\']+)', html, re.I):
             add(u)
         for u in re.findall(r'"(https://m\.media-amazon\.com/images/I/[^"<>\\s]+?\.(?:jpg|jpeg|png|webp|gif))"', html, re.I):
