@@ -194,24 +194,26 @@ def download_and_validate(urls, workdir):
     return selected[:5]
 
 def _scene(image, out, mode):
-    # zoompan is the same FFmpeg motion family used by the recovered Kaggle renderer.
+    # Stable per-frame zoompan path. The input is first fitted to a modest 1200x2133
+    # canvas, then zoompan emits an explicit 150 frames at 1080x1920.
+    render_w,render_h=1200,2133
     if mode=="static":
         vf=f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},setsar=1"
+        frames=SCENE_SECONDS*FPS
     else:
-        x="(iw-iw/zoom)/2"
-        if mode=="right": x="(iw-iw/zoom)*0.70"
-        elif mode=="left": x="(iw-iw/zoom)*0.30"
-        # Keep the intermediate frame modest. Expanding a 500px source to 2160x3840
-        # before zoompan can exhaust the Railway worker and produce zero-frame ffmpeg exits.
-        render_w,render_h=1200,2133
+        if mode=="right":
+            x="(iw-iw/zoom)*0.70"
+        elif mode=="left":
+            x="(iw-iw/zoom)*0.30"
+        else:
+            x="(iw-iw/zoom)/2"
         vf=(f"scale={render_w}:{render_h}:force_original_aspect_ratio=increase,"
-            f"crop={render_w}:{render_h},zoompan=z='min(zoom+0.0015,1.12)':"
-            f"x='{x}':y='(ih-ih/zoom)/2':d={SCENE_SECONDS*FPS}:"
-            f"s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1")
-    # Explicit frame count is more reliable than wall-clock duration with zoompan.
+            f"crop={render_w}:{render_h},"
+            f"zoompan=z='min(zoom+0.0008,1.12)':x='{x}':y='(ih-ih/zoom)/2':"
+            f"d={SCENE_SECONDS*FPS}:s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1")
+        frames=SCENE_SECONDS*FPS
     _run(["ffmpeg","-y","-threads","2","-loop","1","-i",str(image),
-          "-vf",vf,"-frames:v",str(SCENE_SECONDS*FPS),"-r",str(FPS),
-          "-pix_fmt","yuv420p","-an",str(out)])
+          "-vf",vf,"-frames:v",str(frames),"-pix_fmt","yuv420p","-an",str(out)])
 
 def render_video(image_urls, output_path, title="", music_path=None):
     output=Path(output_path); output.parent.mkdir(parents=True,exist_ok=True)
