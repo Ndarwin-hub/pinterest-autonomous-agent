@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ids=(b514580d-2802-4b36-8e00-4f0695ce31b4 37593cae-9577-4329-b614-85e5ddedfbd6 5ae2befc-f41e-4a8f-95e4-317ad9477205 0db6253b-32fb-4577-acb6-5741f2d04a3d 446abc31-3d68-434c-ac7a-3acccbbbe4d1)
+          ids=(7984bc74-0a05-4061-860a-adf7968cea4d 965dce89-3880-4088-a8b1-f700aaa7ddbe 112279a7-b5f7-4cdc-87a6-863195bf5e0d 6b46a554-76ea-4c96-bbe5-91487a7a4870 a0301f13-0a36-4ecc-9f85-24d2ee0d1f3b)
           for attempt in $(seq 1 180); do
             terminal=1
             echo "=== poll $attempt ==="
