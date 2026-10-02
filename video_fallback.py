@@ -416,7 +416,7 @@ def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=
         result=publish_video(str(output),row.get("title") or row["asin"],caption,targets)
         merged=dict(combined_statuses)
         merged.update(result.get("platforms") or {})
-        ok=bool(merged) and all(str(v.get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for v in merged.values())
+        ok=any(str(v.get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for v in merged.values())
         combined=dict(result)
         combined["platforms"]=merged
         combined["run_id"]=kaggle_run_id or "railway"
