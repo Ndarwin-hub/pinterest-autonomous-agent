@@ -679,7 +679,7 @@ def pillow_card(product: Dict[str, Any], strategy_key: str) -> Dict[str, Any]:
     raise RuntimeError("Pillow placeholder fallback is disabled; no trustworthy image is available.")
 
 
-async def _select_valid_image_candidates(candidates: List[Dict[str, Any]], product: Dict[str, Any], used_urls: set) -> Optional[Dict[str, Any]]:
+async def _select_valid_image_candidates(candidates: List[Dict[str, Any]], product: Dict[str, Any], used_urls: set, min_identity_score: int = 0) -> Optional[Dict[str, Any]]:
     """Select one hard-validated candidate without changing the publisher."""
     best = None
     best_score = -1
@@ -695,6 +695,8 @@ async def _select_valid_image_candidates(candidates: List[Dict[str, Any]], produ
         candidate = dict(candidate)
         candidate.update(checked)
         candidate["identity_score"] = exact_product_identity_score(candidate, product)
+        if candidate["identity_score"] < min_identity_score:
+            continue
         candidate["score"] = score_candidate(candidate, product, "")
         if candidate["score"] > best_score:
             best_score, best = candidate["score"], candidate
@@ -745,7 +747,7 @@ async def get_best_pin_image(
                 runner=run_composio_tool,
                 page_image_extractor=_extract_trusted_page_images,
             )
-        priority2_best = await _select_valid_image_candidates(cache.get(cache_key, []), product, used_urls)
+        priority2_best = await _select_valid_image_candidates(cache.get(cache_key, []), product, used_urls, min_identity_score=2)
         if priority2_best:
             used_urls.add(priority2_best["url"])
             return {"mode":"url","value":priority2_best["url"],"provider":priority2_best.get("provider"),"id":priority2_best.get("id"),"score":priority2_best.get("score"),"identity_score":priority2_best.get("identity_score"),"license":priority2_best.get("license") or "verify_before_commercial_use"}
