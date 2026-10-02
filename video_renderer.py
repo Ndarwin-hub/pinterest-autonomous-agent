@@ -3,6 +3,7 @@ import hashlib, json, os, shutil, subprocess, tempfile
 from pathlib import Path
 from urllib.parse import quote
 import requests
+import httpx
 
 WIDTH, HEIGHT, FPS = 1080, 1920, 30
 SCENE_SECONDS = 5
@@ -52,9 +53,20 @@ def download_and_validate(urls, workdir):
         if not url or not str(url).startswith(("http://","https://")):
             continue
         try:
-            r=requests.get(url,timeout=30,stream=True,headers={"User-Agent":"Mozilla/5.0"})
-            r.raise_for_status()
-            ctype=(r.headers.get("content-type") or "").lower()
+            # Use the same HTTP client family/headers as the image-quality gate.
+            # Amazon CDN can return a 160px placeholder to some clients while
+            # returning the verified full asset to httpx.
+            try:
+                with httpx.Client(timeout=30,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality","Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}) as client:
+                    rr=client.get(url)
+                    rr.raise_for_status()
+                    raw=rr.content
+                    ctype=(rr.headers.get("content-type") or "").lower()
+            except Exception:
+                rr=requests.get(url,timeout=30,stream=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"})
+                rr.raise_for_status()
+                raw=rr.content
+                ctype=(rr.headers.get("content-type") or "").lower()
             if "image" not in ctype:
                 continue
             ext=".jpg"
@@ -62,8 +74,7 @@ def download_and_validate(urls, workdir):
             elif "webp" in ctype: ext=".webp"
             p=Path(workdir)/f"image_{len(selected)+1}{ext}"
             with open(p,"wb") as f:
-                for chunk in r.iter_content(1024*1024):
-                    if chunk: f.write(chunk)
+                f.write(raw)
             ok,reason=validate_image(p)
             if not ok:
                 p.unlink(missing_ok=True); continue
