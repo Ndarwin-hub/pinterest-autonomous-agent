@@ -228,7 +228,7 @@ def _resolve_product_images(row, materialize_dir=None):
           "verified_web_product_page":4,"independent_bing_image":5}
     trusted.sort(key=lambda x:(rank.get(str(x.get("provider") or ""),9),
                                -max(int(x.get("width") or 0),int(x.get("height") or 0))))
-    selected=trusted[:5]
+    selected=trusted[:20]
     if not selected:
         raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: no verified exact-product image survived validation for {product['asin']}")
     output_urls=[x["url"] for x in selected]
@@ -238,16 +238,13 @@ def _resolve_product_images(row, materialize_dir=None):
         from image_quality import materialize_validated_url
         md=Path(materialize_dir);md.mkdir(parents=True,exist_ok=True)
         local=[]
+        materialized_items=[]
         from PIL import Image
         for idx,item in enumerate(selected,1):
             p=md/f"verified_{idx}.img"
             try:
                 ok_materialized=asyncio.run(materialize_validated_url(item["url"],str(p)))
-                if not ok_materialized and str(item.get("provider") or "")=="amazon_asin_cdn":
-                    # Exact-ASIN thumbnails may be below the general quality gate
-                    # (160px), but they are still safe identity sources. Fetch the
-                    # bytes once more and require only that PIL can decode them;
-                    # 43-byte/error placeholders remain rejected.
+                if not ok_materialized:
                     import httpx
                     rr=httpx.get(item["url"],timeout=20,follow_redirects=True,
                                  headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality","Accept":"image/*"})
@@ -255,14 +252,21 @@ def _resolve_product_images(row, materialize_dir=None):
                         p.write_bytes(rr.content); ok_materialized=True
                 if ok_materialized:
                     im=Image.open(p).convert("RGB")
-                    jpg=md/f"verified_{idx}.jpg"
+                    if im.width < 160 or im.height < 160:
+                        raise ValueError(f"decoded image too small: {im.width}x{im.height}")
+                    jpg=md/f"verified_{len(local)+1}.jpg"
                     im.save(jpg,format="JPEG",quality=95,optimize=True)
                     p.unlink(missing_ok=True)
-                    local.append(str(jpg))
+                    local.append(str(jpg)); materialized_items.append(item)
+                    if len(local)>=5: break
             except Exception as exc:
+                p.unlink(missing_ok=True)
                 log.warning("Video verified image normalization failed asin=%s idx=%s: %s",product["asin"],idx,str(exc)[:180])
         if local:
             output_urls=local
+            selected=materialized_items
+        if len(local)<1:
+            raise RuntimeError(f"VIDEO_IMAGE_MATERIALIZATION_FAILED: {len(local)} verified product images materialized from {len(trusted)} identity-gated candidates")
     try:
         daily_ledger.attach_video_images(day=row.get("day"),asin=row["asin"],
             images=[{"url":x["url"],"provider":"video_verified_exact_product"} for x in selected])
