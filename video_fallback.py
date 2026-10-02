@@ -229,13 +229,21 @@ def _resolve_product_images(row, materialize_dir=None):
         from image_quality import materialize_validated_url
         md=Path(materialize_dir);md.mkdir(parents=True,exist_ok=True)
         local=[]
+        from PIL import Image
         for idx,item in enumerate(selected,1):
             p=md/f"verified_{idx}.img"
             try:
                 if asyncio.run(materialize_validated_url(item["url"],str(p))):
-                    local.append(str(p))
-            except Exception:
-                pass
+                    # Convert the already byte-validated exact-product bytes to a
+                    # deterministic JPEG here. The renderer then receives a normal
+                    # image file and never needs to re-fetch an Amazon CDN URL.
+                    im=Image.open(p).convert("RGB")
+                    jpg=md/f"verified_{idx}.jpg"
+                    im.save(jpg,format="JPEG",quality=95,optimize=True)
+                    p.unlink(missing_ok=True)
+                    local.append(str(jpg))
+            except Exception as exc:
+                log.warning("Video verified image normalization failed asin=%s idx=%s: %s",product["asin"],idx,str(exc)[:180])
         if local:
             output_urls=local
     try:
