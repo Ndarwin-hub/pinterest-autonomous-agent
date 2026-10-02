@@ -16,6 +16,7 @@ local SEO remains active (honest capability report in job result).
 from __future__ import annotations
 
 import base64
+import time
 import io
 import json
 import sqlite3
@@ -531,7 +532,15 @@ async def search_independent_images(query: str, num: int = 10) -> List[Dict[str,
         logger.warning("Independent image search failed: %s",str(exc)[:300])
         return []
 
+_COMPOSIO_IMAGE_COOLDOWN_UNTIL = 0.0
+_COMPOSIO_IMAGE_FAILURES = 0
+
 async def search_composio_images(query: str, num: int = 10) -> List[Dict[str, Any]]:
+    global _COMPOSIO_IMAGE_COOLDOWN_UNTIL, _COMPOSIO_IMAGE_FAILURES
+    now = time.monotonic()
+    if now < _COMPOSIO_IMAGE_COOLDOWN_UNTIL:
+        logger.info("COMPOSIO_SEARCH_IMAGE circuit-open remaining=%.1fs", _COMPOSIO_IMAGE_COOLDOWN_UNTIL - now)
+        return []
     try:
         data = await run_composio_tool(
             "COMPOSIO_SEARCH_IMAGE", {"query": query[:120], "num": num}, retries=1
@@ -555,9 +564,13 @@ async def search_composio_images(query: str, num: int = 10) -> List[Dict[str, An
                     "license": "web_search_verify_usage",
                 }
             )
+        _COMPOSIO_IMAGE_FAILURES = 0
+        _COMPOSIO_IMAGE_COOLDOWN_UNTIL = 0.0
         return out
     except Exception as e:
-        logger.warning(f"COMPOSIO_SEARCH_IMAGE failed: {e}")
+        _COMPOSIO_IMAGE_FAILURES = min(_COMPOSIO_IMAGE_FAILURES + 1, 8)
+        _COMPOSIO_IMAGE_COOLDOWN_UNTIL = time.monotonic() + min(300.0, 5.0 * (2 ** (_COMPOSIO_IMAGE_FAILURES - 1)))
+        logger.warning("COMPOSIO_SEARCH_IMAGE failed; circuit-open for %.1fs: %s", _COMPOSIO_IMAGE_COOLDOWN_UNTIL - time.monotonic(), e)
         return []
 
 
@@ -666,6 +679,30 @@ def pillow_card(product: Dict[str, Any], strategy_key: str) -> Dict[str, Any]:
     raise RuntimeError("Pillow placeholder fallback is disabled; no trustworthy image is available.")
 
 
+async def _select_valid_image_candidates(candidates: List[Dict[str, Any]], product: Dict[str, Any], used_urls: set) -> Optional[Dict[str, Any]]:
+    """Select one hard-validated candidate without changing the publisher."""
+    best = None
+    best_score = -1
+    for candidate in candidates:
+        url = str(candidate.get("url") or "")
+        if not url or url in used_urls:
+            continue
+        if _obvious_non_product_image(candidate, product):
+            continue
+        checked = await validate_image_candidate(candidate)
+        if not checked:
+            continue
+        candidate = dict(candidate)
+        candidate.update(checked)
+        candidate["identity_score"] = exact_product_identity_score(candidate, product)
+        candidate["score"] = score_candidate(candidate, product, "")
+        if candidate["score"] > best_score:
+            best_score, best = candidate["score"], candidate
+    if best and await _url_ok(str(best.get("url") or "")):
+        return best
+    return None
+
+
 async def get_best_pin_image(
     product: Dict[str, Any],
     strategy: Dict[str, Any],
@@ -685,6 +722,35 @@ async def get_best_pin_image(
     for img_url in product.get("images") or []:
         if img_url not in used_urls and await _url_ok(img_url):
             candidates.append({"url":img_url,"provider":"product_page","source_url":product.get("source_url") or "","license":"product_page"})
+
+    # Preserve the existing successful path. If a trusted product image already
+    # passes the hard integrity gate, return it immediately and query no fallback.
+    primary = await _select_valid_image_candidates(candidates, product, used_urls)
+    if primary:
+        used_urls.add(primary["url"])
+        return {"mode":"url","value":primary["url"],"provider":primary.get("provider"),"id":primary.get("id"),"score":primary.get("score"),"identity_score":primary.get("identity_score"),"license":primary.get("license")}
+
+    # Priority 2: independent Composio Search sources. This layer runs only
+    # after the trusted product-image path has failed and is cached per job/product.
+    try:
+        cache = getattr(get_best_pin_image, "_priority2_cache", None)
+        if cache is None:
+            cache = {}
+            setattr(get_best_pin_image, "_priority2_cache", cache)
+        cache_key = f"{job_id}:{asin or name.lower()}"
+        if cache_key not in cache:
+            from priority2_composio_sources import search_priority2_sources
+            cache[cache_key] = await search_priority2_sources(
+                product=product,
+                runner=run_composio_tool,
+                page_image_extractor=_extract_trusted_page_images,
+            )
+        priority2_best = await _select_valid_image_candidates(cache.get(cache_key, []), product, used_urls)
+        if priority2_best:
+            used_urls.add(priority2_best["url"])
+            return {"mode":"url","value":priority2_best["url"],"provider":priority2_best.get("provider"),"id":priority2_best.get("id"),"score":priority2_best.get("score"),"identity_score":priority2_best.get("identity_score"),"license":priority2_best.get("license") or "verify_before_commercial_use"}
+    except Exception as exc:
+        logger.warning("Priority-2 Composio image fallback unavailable: %s", exc)
 
     exact_queries = []
     if asin:
