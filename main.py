@@ -37,8 +37,11 @@ from amazon_boards import REQUIRED_PRIMARY_SLOTS,BOARD_SCOPES
 from daily_ledger import ledger as daily_ledger,BATCH_SIZE
 from video_fallback import pair_status,on_pinterest_batch_start
 import publication_guard
+import image_priority
 import image_diversity_guard
 publication_guard.install(agent_module)
+# Railway canonical image selector: hard integrity/diversity gate wraps it below.
+image_priority.install(agent_module)
 image_diversity_guard.install(agent_module)
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO"),format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 VIDEO_BRIDGE_SECRET=os.getenv("VIDEO_BRIDGE_SECRET","").strip();PIN_N_REQUEST_DIR=os.getenv("PIN_N_REQUEST_DIR",os.path.join(os.getenv("DATA_DIR","/data" if os.path.exists("/data") else "/tmp"),"pin_n_requests"))
