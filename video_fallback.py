@@ -236,6 +236,48 @@ def _resolve_product_images(row, materialize_dir=None):
         if item not in selected: selected.append(item)
         if len(selected)>=20: break
     if not selected:
+        # Last exact-product fallback: use Bing's own thumbnail only when the
+        # search result metadata passes the same ASIN/title identity gate.
+        # This is intentionally lower-resolution and is normalized locally; it
+        # is never a generic image substitution.
+        try:
+            from urllib.request import Request, urlopen
+            from io import BytesIO
+            from PIL import Image, ImageStat
+            for item in candidates:
+                if str(item.get("provider") or "") != "independent_bing_image":
+                    continue
+                if not str(item.get("thumbnail_url") or "").startswith(("http://","https://")):
+                    continue
+                try:
+                    if not asyncio.run(_alternative_identity_ok(item,product)):
+                        continue
+                    req=Request(str(item["thumbnail_url"]),headers={"User-Agent":"Mozilla/5.0 PinterestAgent/video"})
+                    raw_thumb=urlopen(req,timeout=15).read()
+                    if len(raw_thumb)<10000 or len(raw_thumb)>8*1024*1024:
+                        continue
+                    im=Image.open(BytesIO(raw_thumb)).convert("RGB")
+                    if min(im.size)<160:
+                        continue
+                    stat=ImageStat.Stat(im.resize((64,64)))
+                    if min(stat.stddev)<7:
+                        continue
+                    target=1000/max(1,min(im.size))
+                    if target>1:
+                        im=im.resize((max(1000,int(im.width*target)),max(1000,int(im.height*target))),Image.Resampling.LANCZOS)
+                    if materialize_dir:
+                        md=Path(materialize_dir);md.mkdir(parents=True,exist_ok=True)
+                        p=md/f"bing_thumb_{len(selected)+1}.jpg"
+                        im.save(p,format="JPEG",quality=95,optimize=True)
+                        selected.append({"url":str(p),"provider":"independent_bing_thumbnail","source":str(item.get("source") or "Bing exact-product result"),"identity_gate":"passed_thumbnail_fallback","width":im.width,"height":im.height})
+                        output_urls.append(str(p))
+                        if len(selected)>=5:
+                            break
+                except Exception:
+                    continue
+        except Exception as exc:
+            log.warning("Video Bing thumbnail fallback failed asin=%s: %s",product["asin"],str(exc)[:180])
+    if not selected:
         raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: no verified exact-product image survived validation for {product['asin']}")
     output_urls=[x["url"] for x in selected]
     # Materialize the exact bytes that passed validation. This prevents a second

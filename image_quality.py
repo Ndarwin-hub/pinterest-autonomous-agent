@@ -272,7 +272,7 @@ async def search_independent_bing_images(query:str,num:int=12)->List[Dict[str,An
             u=str(meta.get("murl") or "")
             if not u.startswith(("http://","https://")): continue
             evidence=" ".join(str(meta.get(k) or "") for k in ("purl","title","desc","turl","source"))
-            out.append({"url":u,"provider":"independent_bing_image","id":str(meta.get("purl") or ""),"source":str(meta.get("purl") or ""),"identity_evidence":evidence,"license":"web_search_verify_usage"})
+            out.append({"url":u,"provider":"independent_bing_image","id":str(meta.get("purl") or ""),"source":str(meta.get("purl") or ""),"identity_evidence":evidence,"thumbnail_url":str(meta.get("turl") or ""),"license":"web_search_verify_usage"})
             if len(out)>=num: break
         logger.info("Independent Bing image search query=%s results=%s",query,len(out))
         return out
