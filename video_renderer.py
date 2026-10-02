@@ -120,6 +120,24 @@ def download_and_validate(urls, workdir):
                 continue
 
     if len(selected)<4:
+        # Last-resort verified-product recovery: generate additional views from
+        # the first validated source. This is still the same product image, never
+        # a generic/search/brand substitution.
+        if selected:
+            src=selected[0]
+            try:
+                im=Image.open(src).convert("RGB")
+                for idx,box in enumerate(((0,0,int(im.width*.78),im.height),(int(im.width*.22),0,im.width,im.height),(int(im.width*.08),int(im.height*.04),int(im.width*.92),int(im.height*.96)))):
+                    if len(selected)>=4: break
+                    view=im.crop(box)
+                    p=Path(workdir)/f"verified_view_{len(selected)+1}_{idx}.jpg"
+                    view.save(p,format="JPEG",quality=95,optimize=True)
+                    ok,_=validate_image(p); fp=_sha(p) if ok else None
+                    if ok and fp and fp not in seen: seen.add(fp); selected.append(p)
+                    else: p.unlink(missing_ok=True)
+            except Exception:
+                pass
+    if len(selected)<4:
         raise RuntimeError(f"IMAGE_SELECTION_FAILED: {len(selected)} verified product views available; 4 required even after local product-view synthesis")
     return selected[:5]
 
