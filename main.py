@@ -323,6 +323,9 @@ class KaggleVideoCheckpointRequest(BaseModel):
  status:str=Field(...,min_length=2,max_length=32)
  error:Optional[str]=None
 
+class VideoPairRecoveryRequest(BaseModel):
+ pair_start:int=Field(...,description="One of 1,3,5,7,9")
+
 def _video_auth(secret):
  if VIDEO_BRIDGE_SECRET and secret and hmac.compare_digest(secret,VIDEO_BRIDGE_SECRET): return True
  raise HTTPException(status_code=401,detail="Invalid or missing video bridge authentication")
@@ -345,6 +348,13 @@ async def video_batch(body:VideoBatchRequest,x_video_secret:Optional[str]=Header
 @app.get("/video/fallback/status")
 async def video_fallback_status():
  return pair_status()
+
+@app.post("/video/pair-recovery")
+async def video_pair_recovery(body:VideoPairRecoveryRequest,_:bool=Depends(verify_manual_oidc)):
+ if int(body.pair_start) not in (1,3,5,7,9):
+  raise HTTPException(status_code=400,detail="pair_start must be 1,3,5,7,9")
+ result=daily_ledger.reset_video_pair_for_recovery(daily_ledger.today_str(),int(body.pair_start))
+ return {"status":"video_pair_reset","recovery":result,"pair_status":pair_status()}
 
 @app.post("/video/github-checkpoint")
 async def video_github_checkpoint(body:KaggleVideoCheckpointRequest,_:bool=Depends(verify_manual_oidc)):
