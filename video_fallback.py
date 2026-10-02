@@ -326,4 +326,20 @@ def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=
         shutil.rmtree(root,ignore_errors=True)
 
 def pair_status(day=None):
-    day=day or daily_ledger.today_str();state=daily_ledger.get_video_pair_state();start=int(state.get("next_pair_start") or 1);return {"day":day,"next_pair_start":start,"pair":_pair_for(start),"status":state.get("status")}
+    # The pair state is durable, but ACTIVE is intentionally in-memory. Railway
+    # restarts therefore used to leave GitHub monitoring a pair whose asyncio task
+    # had vanished. Re-arm a persisted running/incomplete pair from the status
+    # endpoint itself; the monitor polls this endpoint, so recovery survives restarts.
+    day=day or daily_ledger.today_str()
+    state=daily_ledger.get_video_pair_state()
+    start=int(state.get("next_pair_start") or 1)
+    key=f"{day}:{start}"
+    status=str(state.get("status") or "").lower()
+    if start in PAIR_STARTS and status in {"running","incomplete"} and not ACTIVE.get(key):
+        try:
+            task=asyncio.create_task(_run_pair(day,start,None),name=f"video-auto-resume-{start}")
+            ACTIVE[key]=task
+            log.warning("Video pair auto-resumed from durable state day=%s pair=%s status=%s",day,start,status)
+        except RuntimeError:
+            pass
+    return {"day":day,"next_pair_start":start,"pair":_pair_for(start),"status":state.get("status")}
