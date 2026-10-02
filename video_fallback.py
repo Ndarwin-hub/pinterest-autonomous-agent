@@ -233,10 +233,18 @@ def _resolve_product_images(row, materialize_dir=None):
         for idx,item in enumerate(selected,1):
             p=md/f"verified_{idx}.img"
             try:
-                if asyncio.run(materialize_validated_url(item["url"],str(p))):
-                    # Convert the already byte-validated exact-product bytes to a
-                    # deterministic JPEG here. The renderer then receives a normal
-                    # image file and never needs to re-fetch an Amazon CDN URL.
+                ok_materialized=asyncio.run(materialize_validated_url(item["url"],str(p)))
+                if not ok_materialized and str(item.get("provider") or "")=="amazon_asin_cdn":
+                    # Exact-ASIN thumbnails may be below the general quality gate
+                    # (160px), but they are still safe identity sources. Fetch the
+                    # bytes once more and require only that PIL can decode them;
+                    # 43-byte/error placeholders remain rejected.
+                    import httpx
+                    rr=httpx.get(item["url"],timeout=20,follow_redirects=True,
+                                 headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality","Accept":"image/*"})
+                    if rr.status_code<400 and len(rr.content)>100:
+                        p.write_bytes(rr.content); ok_materialized=True
+                if ok_materialized:
                     im=Image.open(p).convert("RGB")
                     jpg=md/f"verified_{idx}.jpg"
                     im.save(jpg,format="JPEG",quality=95,optimize=True)
