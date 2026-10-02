@@ -138,6 +138,16 @@ def _resolve_product_images(row, materialize_dir=None):
 
     async def recover():
         out=[]
+        # Use the same canonical Composio image-search source as Pinterest,
+        # but accept a result only after the exact-product identity gate below.
+        try:
+            from image_priority import _composio_image_search
+            q=f'"{product["name"]}" product photo'
+            if product["asin"]:
+                q+=f' "{product["asin"]}" Amazon'
+            out.extend(await _composio_image_search(q,num=30))
+        except Exception as exc:
+            log.warning("Video image recovery canonical Composio image search failed asin=%s: %s",product["asin"],str(exc)[:240])
         try:
             from image_quality import search_amazon_product_images
             out.extend(await search_amazon_product_images(product))
