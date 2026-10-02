@@ -6,7 +6,7 @@ import requests
 
 WIDTH, HEIGHT, FPS = 1080, 1920, 30
 SCENE_SECONDS = 5
-MIN_IMAGE_SIDE = 600
+MIN_IMAGE_SIDE = 500
 AMAZON_TAG = os.getenv("AMAZON_ASSOCIATE_TAG", "desiredplus-20")
 
 def _run(cmd):
