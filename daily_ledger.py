@@ -331,6 +331,25 @@ class DailyLedger:
             c.commit(); c.close()
         return int(cur.rowcount)
 
+    def reset_video_pair_for_recovery(self,day,pair_start):
+        """Reset one video pair for an explicit recovery attempt.
+        Completed jobs remain completed; failed/processing/queued jobs become retryable.
+        """
+        day=day or self.today_str(); start=int(pair_start)
+        if start not in (1,3,5,7,9): raise ValueError("pair_start must be 1,3,5,7,9")
+        first=(start-1)*5+1; last=first+9; now=datetime.now(timezone.utc).isoformat()
+        with _lock:
+            c=self._conn(); self._ensure_video_schema(c)
+            c.execute("""CREATE TABLE IF NOT EXISTS video_pair_state(id INTEGER PRIMARY KEY CHECK(id=1),next_pair_start INTEGER NOT NULL DEFAULT 1,active_pair_start INTEGER,status TEXT,last_day TEXT,last_trigger_batch INTEGER,updated_at TEXT NOT NULL)""")
+            c.execute("INSERT OR IGNORE INTO video_pair_state(id,next_pair_start,status,updated_at) VALUES(1,?,?,?)",(start,"idle",now))
+            c.execute("UPDATE video_pair_state SET next_pair_start=?,active_pair_start=NULL,status='idle',last_day=?,updated_at=? WHERE id=1",(start,day,now))
+            c.execute("""UPDATE video_jobs SET status='queued',claim_owner=NULL,claimed_at=NULL,last_error=NULL,completed_at=NULL,publication_json=NULL,updated_at=?
+                         WHERE day=? AND slot BETWEEN ? AND ? AND status IN ('failed','processing','queued')""",(now,day,first,last))
+            c.commit()
+            rows=c.execute("SELECT batch_index,slot,asin,status FROM video_jobs WHERE day=? AND slot BETWEEN ? AND ? ORDER BY batch_index,slot",(day,first,last)).fetchall()
+            c.close()
+        return {"day":day,"pair_start":start,"reset_slots":len(rows),"jobs":[dict(zip(["batch","slot","asin","status"],r)) for r in rows]}
+
     def get_video_pair_state(self):
         with _lock:
             c=self._conn()
