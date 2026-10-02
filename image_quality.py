@@ -167,27 +167,37 @@ def _visual_distance(a,b)->float:
     return 0.75*hamming+0.25*min(1.0,color*4.0)
 
 async def _remove_visual_duplicates(candidates:List[Dict[str,Any]],used_urls:set)->List[Dict[str,Any]]:
-    if not candidates:return []
+    """Prefer visually distinct images, but never block a product when only URL-distinct usable images remain."""
+    if not candidates: return []
     used_sigs=[]
     for u in list(used_urls)[:4]:
         sig=await _visual_signature(u)
-        if sig:used_sigs.append(sig)
-    selected=[]; selected_sigs=[]
+        if sig: used_sigs.append(sig)
+    selected=[]; selected_sigs=[]; deferred=[]
     for c in candidates:
         u=c.get("url")
-        if not u or u in used_urls:continue
-        if c.get("provider") == "pillow_card":continue
+        if not u or u in used_urls: continue
+        if c.get("provider")=="pillow_card": continue
         sig=await _visual_signature(u)
         if sig is None:
             selected.append(c)
-            if len(selected)>=MAX_CANDIDATES_PER_PIN:break
+            if len(selected)>=MAX_CANDIDATES_PER_PIN: break
             continue
-        distances=[_visual_distance(sig,s) for s in used_sigs+selected_sigs]
-        if distances and min(distances)<VISUAL_DUPLICATE_THRESHOLD:continue
+        distances=[_visual_distance(sig,x) for x in used_sigs+selected_sigs]
         c["visual_distance"]=round(min(distances),4) if distances else 1.0
+        if distances and min(distances)<VISUAL_DUPLICATE_THRESHOLD:
+            deferred.append(c)
+            continue
         selected.append(c); selected_sigs.append(sig)
-        if len(selected)>=MAX_CANDIDATES_PER_PIN:break
+        if len(selected)>=MAX_CANDIDATES_PER_PIN: break
+    if len(selected)<MAX_CANDIDATES_PER_PIN:
+        for c in deferred:
+            if c not in selected:
+                c["duplicate_advisory"]=True
+                selected.append(c)
+                if len(selected)>=MAX_CANDIDATES_PER_PIN: break
     return selected
+
 
 async def search_pexels(query:str,agent_mod:Any)->List[Dict[str,Any]]:
     if PEXELS_API_KEY:
