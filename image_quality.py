@@ -423,10 +423,10 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                 r=await client.get("https://www.bing.com/search",params={"q":q,"form":"QBLH"})
                 if r.status_code>=400: continue
                 html=r.text
-                for u in re.findall(r'<h2[^>]*>\\s*<a[^>]+href=["\\']([^"\\']+)',html,re.I):
+                for u in re.findall(r"<h2[^>]*>\\s*<a[^>]+href=[\"']([^\"']+)",html,re.I):
                     u=unquote(u)
                     if "bing.com/ck/a" in u.lower():
-                        mm=re.search(r'[?&]u=a1([^&]+)',u,re.I)
+                        mm=re.search(r"[?&]u=a1([^&]+)",u,re.I)
                         if mm:
                             try:
                                 decoded=base64.urlsafe_b64decode(mm.group(1)+"===" ).decode("utf-8","ignore")
@@ -439,16 +439,16 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                     try:
                         dr=await client.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"Referer":"https://duckduckgo.com/"})
                         if dr.status_code>=400: continue
-                        for u in re.findall(r'<a[^>]+class=["\\'][^"\\']*result__a[^"\\']*["\\'][^>]+href=["\\']([^"\\']+)',dr.text,re.I):
+                        for u in re.findall(r"<a[^>]+class=[\"'][^\"']*result__a[^\"']*[\"'][^>]+href=[\"']([^\"']+)",dr.text,re.I):
                             u=unquote(u)
                             if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
-                        for u in re.findall(r'nuddg=([^&"\\']+)',dr.text,re.I):
+                        for u in re.findall(r"nuddg=([^&\"']+)",dr.text,re.I):
                             u=unquote(u)
                             if u.startswith("http") and u not in links: links.append(u)
                     except Exception: pass
                     if links: break
             out=[]
-            tokens=[t for t in re.findall(r'[a-z0-9][a-z0-9\\-]{3,}',name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
+            tokens=[t for t in re.findall(r"[a-z0-9][a-z0-9\\-]{3,}",name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
             for src in links[:12]:
                 if any(x in src.lower() for x in ("pinterest.com","shutterstock.com","istockphoto.com","gettyimages.com")): continue
                 try:
@@ -456,12 +456,12 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                     if page.status_code>=400 or not page.text: continue
                     page_html=page.text.replace("\\\\/","/").replace("\\\\u002F","/")
                     evidence=re.sub(r"<[^>]+>"," ",page_html).lower()+" "+src.lower()
-                    identity=(asin and asin.lower() in evidence) or (brand and brand.lower() in evidence and sum(1 for t in tokens[:10] if t in evidence)>=1) or sum(1 for t in tokens[:10] if t in evidence)>=2
+                    identity=(bool(asin) and asin.lower() in evidence) or (bool(brand) and brand.lower() in evidence and sum(1 for t in tokens[:10] if t in evidence)>=1) or sum(1 for t in tokens[:10] if t in evidence)>=2
                     if not identity: continue
                     imgs=[]
-                    imgs += re.findall(r'<meta[^>]+(?:property|name)=["\\'](?:og:image|twitter:image)["\\'][^>]+content=["\\']([^"\\']+)',page_html,re.I)
-                    imgs += re.findall(r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+(?:property|name)=["\\'](?:og:image|twitter:image)["\\']',page_html,re.I)
-                    imgs += re.findall(r'"image"\\s*:\\s*"(https?://[^"\\]+)',page_html,re.I)
+                    imgs += re.findall(r"<meta[^>]+(?:property|name)=[\"'](?:og:image|twitter:image)[\"'][^>]+content=[\"']([^\"']+)",page_html,re.I)
+                    imgs += re.findall(r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+(?:property|name)=[\"'](?:og:image|twitter:image)[\"']",page_html,re.I)
+                    imgs += re.findall(r"\"image\"\\s*:\\s*\"(https?://[^\"\\]+)",page_html,re.I)
                     for u in imgs:
                         u=unquote(u).replace("\\\\/","/")
                         if not u.startswith("http") or any(x.get("url")==u for x in out): continue
