@@ -32,7 +32,19 @@ jobs:
       KAGGLE_VIDEO_KERNEL_ID: ndarwin1414/amazon-productvideo-renderer-test
       KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
     steps:
+      - name: Check Kaggle credential availability
+        id: credential
+        shell: bash
+        run: |
+          if [[ -n "${KAGGLE_API_TOKEN:-}" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "KAGGLE_API_TOKEN unavailable; Railway fallback will own this pair."
+          fi
+
       - name: Validate Kaggle credential
+        if: steps.credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -42,6 +54,7 @@ jobs:
           fi
 
       - name: Install Kaggle CLI and notebook tooling
+        if: steps.credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -73,6 +86,7 @@ jobs:
           echo "pair=${start}+$((start+1))" >> "$GITHUB_OUTPUT"
 
       - name: Request GitHub OIDC token for the Railway video bridge
+        if: steps.credential.outputs.available == 'true'
         id: oidc
         shell: bash
         run: |
@@ -86,6 +100,7 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
       - name: Register Kaggle run with the durable Railway handshake
+        if: steps.credential.outputs.available == 'true'
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
           RUN_ID: ${{ steps.pair.outputs.run_id }}
@@ -100,6 +115,7 @@ jobs:
             -d "{\"pair_start\":$PAIR_START,\"run_id\":\"$RUN_ID\",\"status\":\"RUNNING\"}"
 
       - name: Pull the exact production Kaggle kernel
+        if: steps.credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -109,6 +125,7 @@ jobs:
           test -f /tmp/kaggle-video/kernel-metadata.json
 
       - name: Inject durable run context without changing the notebook logic
+        if: steps.credential.outputs.available == 'true'
         shell: bash
         env:
           RUN_ID: ${{ steps.pair.outputs.run_id }}
@@ -142,12 +159,14 @@ jobs:
           PY
 
       - name: Push the exact kernel as a new executable Kaggle version
+        if: steps.credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
           kaggle kernels push -p /tmp/kaggle-video
 
       - name: Wait for the Kaggle execution result
+        if: steps.credential.outputs.available == 'true'
         id: wait
         shell: bash
         run: |
@@ -171,6 +190,7 @@ jobs:
           exit 1
 
       - name: Mark Kaggle completion and independently verify publication
+        if: steps.credential.outputs.available == 'true'
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
           RUN_ID: ${{ steps.pair.outputs.run_id }}
@@ -186,7 +206,7 @@ jobs:
           cat /tmp/video-checkpoint.json
 
       - name: Request Railway fallback after Kaggle failure
-        if: failure()
+        if: failure() || steps.credential.outputs.available == 'false'
         env:
           ID_TOKEN: ${{ steps.oidc.outputs.token }}
           RUN_ID: ${{ steps.pair.outputs.run_id }}

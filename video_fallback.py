@@ -205,10 +205,8 @@ def _resolve_product_images(row, materialize_dir=None):
 
     validated=filter_obvious_non_product(validated,product)
     trusted=[]
-    exact_raw=[x for x in candidates if str(x.get("provider") or "") in {"amazon_direct","amazon_creators_api","amazon_asin_cdn","product_page"}]
-    for item in exact_raw:
-        if item.get("url") and item not in trusted:
-            trusted.append(item)
+    # Exact provenance does not bypass byte validation: CDN error/placeholder bytes
+    # must never become trusted video inputs.
     for item in validated:
         provider=str(item.get("provider") or "")
         if provider in {"product_page","amazon_direct","amazon_asin_cdn","amazon_creators_api"}:
@@ -228,7 +226,15 @@ def _resolve_product_images(row, materialize_dir=None):
           "verified_web_product_page":4,"independent_bing_image":5}
     trusted.sort(key=lambda x:(rank.get(str(x.get("provider") or ""),9),
                                -max(int(x.get("width") or 0),int(x.get("height") or 0))))
-    selected=trusted[:20]
+    # Try at least one candidate from every surviving provider before filling the remainder.
+    selected=[]; seen_providers=set()
+    for item in trusted:
+        provider=str(item.get("provider") or "")
+        if provider not in seen_providers:
+            selected.append(item); seen_providers.add(provider)
+    for item in trusted:
+        if item not in selected: selected.append(item)
+        if len(selected)>=20: break
     if not selected:
         raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: no verified exact-product image survived validation for {product['asin']}")
     output_urls=[x["url"] for x in selected]
