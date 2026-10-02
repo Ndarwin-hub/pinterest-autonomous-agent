@@ -351,6 +351,15 @@ async def search_amazon_product_images(product:Dict[str,Any])->List[Dict[str,Any
             add(u)
         for u in re.findall(r'//m\.media-amazon\.com/images/I/[^"<>\\s]+?\.(?:jpg|jpeg|png|webp|gif)', html, re.I):
             add(u)
+        # Amazon frequently serves gallery URLs with transform/query suffixes that
+        # do not end in a conventional image extension. Recover those exact I/ assets
+        # as well; identity is still tied to the verified Amazon product page.
+        for u in re.findall(r'https://m\.media-amazon\.com/images/I/[A-Za-z0-9._%+\-]+', html, re.I):
+            add(u)
+        for u in re.findall(r'//m\.media-amazon\.com/images/I/[A-Za-z0-9._%+\-]+', html, re.I):
+            add(u)
+        for u in re.findall(r'https?:\\?/\\?/m\.media-amazon\.com\\?/images\\?/I\\?/[A-Za-z0-9._%+\-]+', html, re.I):
+            add(u.replace('\\\\/','/'))
         upgraded=[]
         for u in found:
             v=re.sub(r'\._(?:SL|SX|SY|AC_SL|AC_UL)\d+_\.',".",u)
