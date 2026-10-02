@@ -132,6 +132,11 @@ def _resolve_product_images(row, materialize_dir=None):
         except Exception as exc:
             log.warning("Video image recovery Amazon gallery failed asin=%s: %s",product["asin"],str(exc)[:240])
         try:
+            from image_quality import search_amazon_api_images
+            out.extend(await search_amazon_api_images(product))
+        except Exception as exc:
+            log.warning("Video image recovery Amazon Creators API failed asin=%s: %s",product["asin"],str(exc)[:240])
+        try:
             from image_quality import search_verified_web_product_page_images
             out.extend(await search_verified_web_product_page_images(product,num=20))
         except Exception as exc:
@@ -169,6 +174,10 @@ def _resolve_product_images(row, materialize_dir=None):
 
     validated=filter_obvious_non_product(validated,product)
     trusted=[]
+    exact_raw=[x for x in candidates if str(x.get("provider") or "") in {"amazon_direct","amazon_creators_api","amazon_asin_cdn","product_page"}]
+    for item in exact_raw:
+        if item.get("url") and item not in trusted:
+            trusted.append(item)
     for item in validated:
         provider=str(item.get("provider") or "")
         if provider in {"product_page","amazon_direct","amazon_asin_cdn","amazon_creators_api"}:
