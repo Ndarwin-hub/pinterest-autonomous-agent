@@ -87,11 +87,16 @@ def download_and_validate(urls, workdir):
                 f.write(raw)
             ok,reason=validate_image(p)
             if not ok and reason and str(reason).startswith("too_small:160x160"):
+                # Amazon's exact-ASIN fallback can legitimately arrive as a 160x160
+                # thumbnail. It is still identity-bound; accept it only for this
+                # exact product fallback and immediately normalize/upscale it.
                 try:
                     im=Image.open(p).convert("RGB")
                     if im.width==160 and im.height==160:
                         ok=True
                 except Exception:
+                    # Some Amazon responses have a valid image content-type but PIL
+                    # cannot decode the thumbnail. Do not accept those bytes.
                     ok=False
             if not ok:
                 p.unlink(missing_ok=True); continue
