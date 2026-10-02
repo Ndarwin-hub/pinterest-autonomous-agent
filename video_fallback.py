@@ -285,6 +285,49 @@ def _resolve_product_images(row, materialize_dir=None):
         except Exception as exc:
             log.warning("Video Bing thumbnail fallback failed asin=%s: %s",product["asin"],str(exc)[:180])
     if not selected:
+        # Last-resort exact-ASIN recovery: fetch only URLs that were constructed
+        # from this exact ASIN (or came from the verified product-page handoff).
+        # We still require a real decodable image with usable dimensions/entropy;
+        # this bypasses only the search-result identity gate, never byte integrity.
+        try:
+            import httpx, io
+            from PIL import Image, ImageStat
+            exact=[]
+            for item in candidates:
+                provider=str(item.get("provider") or "")
+                u=str(item.get("url") or "")
+                if provider not in {"amazon_asin_cdn","product_page","amazon_direct","amazon_creators_api"}:
+                    continue
+                if product["asin"] and provider.startswith("amazon") and product["asin"] not in u.upper():
+                    continue
+                try:
+                    rr=httpx.get(u,timeout=20,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/video","Accept":"image/*"})
+                    if rr.status_code>=400 or len(rr.content)<1000:
+                        continue
+                    im=Image.open(io.BytesIO(rr.content)).convert("RGB")
+                    if min(im.size)<160:
+                        continue
+                    stat=ImageStat.Stat(im.resize((64,64)))
+                    if min(stat.stddev)<5:
+                        continue
+                    if materialize_dir:
+                        md=Path(materialize_dir);md.mkdir(parents=True,exist_ok=True)
+                        p=md/f"exact_asin_{len(exact)+1}.jpg"
+                        im.save(p,format="JPEG",quality=95,optimize=True)
+                        exact.append({"url":str(p),"provider":provider,"source":item.get("source") or "Exact ASIN source","identity_gate":"exact_asin_bytes_passed","width":im.width,"height":im.height})
+                    else:
+                        exact.append(dict(item,width=im.width,height=im.height,identity_gate="exact_asin_bytes_passed"))
+                    if len(exact)>=5:
+                        break
+                except Exception:
+                    continue
+            if exact:
+                selected=exact
+                output_urls=[x["url"] for x in exact]
+                log.warning("Video exact-ASIN byte fallback accepted asin=%s images=%s",product["asin"],len(exact))
+        except Exception as exc:
+            log.warning("Video exact-ASIN byte fallback failed asin=%s: %s",product["asin"],str(exc)[:240])
+    if not selected:
         raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: no verified exact-product image survived validation for {product['asin']}")
     output_urls=[x["url"] for x in selected]
     # Materialize the exact bytes that passed validation. This prevents a second
