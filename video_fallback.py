@@ -83,7 +83,7 @@ async def _run_pair(day,start,kaggle_run_id=None):
     except Exception as exc:log.exception("Railway video pair %s failed: %s",start,exc);daily_ledger.finish_video_pair(day,start,owner,"failed",str(exc)[:1000])
     finally:ACTIVE.pop(key,None)
 
-def _terminal(row):return str(row.get("status") or "").lower() in {"completed","failed"}
+def _terminal(row):return str(row.get("status") or "").lower() == "completed"
 async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None):
     rows=daily_ledger.video_batch(day,batch)
     if not rows:log.warning("Video pair %s: batch %s has no durable Pinterest video handoff; pair will not advance",pair_start,batch);return False
@@ -98,9 +98,16 @@ async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None
                 row["status"]="queued"
             except Exception:
                 pass
+        if str(row.get("status") or "").lower()=="failed":
+            # Failed is a retryable product outcome, not a terminal state.
+            # Requeue it so the next durable recovery pass can try the next image/render/publish tier.
+            try:
+                daily_ledger.mark_video_job(day,batch,row["slot"],"queued",owner=owner,error="video_retryable_failure")
+                row["status"]="queued"
+            except Exception:
+                pass
         if _terminal(row):
-            if str(row.get("status") or "").lower()=="completed": processed+=1
-            else: failures+=1
+            processed+=1
             continue
         claim=daily_ledger.claim_video_job(day,batch,row["slot"],owner)
         if not claim or not claim.get("claimed"):
