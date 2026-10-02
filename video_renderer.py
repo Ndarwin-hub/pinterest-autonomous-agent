@@ -49,6 +49,27 @@ def download_and_validate(urls, workdir):
     """
     from PIL import Image, ImageEnhance
     selected=[]; seen=set()
+    # Fast-path files already normalized and identity-gated by video_fallback.
+    # Do not re-fetch or re-score these local assets; only decode, normalize,
+    # and de-duplicate them before rendering.
+    for url in urls:
+        try:
+            lp=Path(str(url))
+            if lp.exists() and lp.is_file():
+                im=Image.open(lp).convert("RGB")
+                if im.width <= 0 or im.height <= 0:
+                    continue
+                clean=Path(workdir)/f"image_{len(selected)+1}.jpg"
+                im.save(clean,format="JPEG",quality=95,optimize=True)
+                fp=_sha(clean)
+                if fp in seen:
+                    clean.unlink(missing_ok=True); continue
+                seen.add(fp); selected.append(clean)
+                if len(selected)>=5: break
+        except Exception as exc:
+            log.warning("Video local image fast-path failed path=%s: %s",str(url),str(exc)[:240])
+    if len(selected)>=4:
+        return selected[:5]
     for url in urls:
         if not url:
             continue
