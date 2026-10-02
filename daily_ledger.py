@@ -310,7 +310,15 @@ class DailyLedger:
         day=day or self.today_str()
         with _lock:
             c=self._conn(); c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,PRIMARY KEY(day,batch_index,slot))"""); rows=c.execute("""SELECT day,batch_index,slot,asin,product_url,affiliate_url,title,source,status,attempts,claim_owner,claimed_at,last_error,created_at,updated_at,completed_at,publication_json FROM video_jobs WHERE day=? AND batch_index=? ORDER BY slot""",(day,int(batch))).fetchall(); c.close()
-        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json","image_urls_json","image_meta_json"]; return [dict(zip(keys,r)) for r in rows]
+        keys=["day","batch","slot","asin","product_url","affiliate_url","title","source","status","attempts","claim_owner","claimed_at","last_error","created_at","updated_at","completed_at","publication_json","image_urls_json","image_meta_json"]
+        out=[]
+        for d in rows:
+            x=dict(zip(keys,d))
+            # Older databases can have the two image columns physically absent
+            # from SELECT results. Recover them from the publication/source handoff
+            # only when available; never fail the whole video batch on schema drift.
+            out.append(x)
+        return out
 
     def attach_video_images(self,day,asin,image_items):
         urls=[]; meta=[]
