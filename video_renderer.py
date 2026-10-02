@@ -208,8 +208,10 @@ def _scene(image, out, mode):
             f"crop={render_w}:{render_h},zoompan=z='min(zoom+0.0015,1.12)':"
             f"x='{x}':y='(ih-ih/zoom)/2':d={SCENE_SECONDS*FPS}:"
             f"s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1")
-    _run(["ffmpeg","-y","-threads","2","-loop","1","-i",str(image),"-t",str(SCENE_SECONDS),
-          "-vf",vf,"-r",str(FPS),"-pix_fmt","yuv420p","-an",str(out)])
+    # Explicit frame count is more reliable than wall-clock duration with zoompan.
+    _run(["ffmpeg","-y","-threads","2","-loop","1","-i",str(image),
+          "-vf",vf,"-frames:v",str(SCENE_SECONDS*FPS),"-r",str(FPS),
+          "-pix_fmt","yuv420p","-an",str(out)])
 
 def render_video(image_urls, output_path, title="", music_path=None):
     output=Path(output_path); output.parent.mkdir(parents=True,exist_ok=True)
