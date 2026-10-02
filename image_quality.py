@@ -416,14 +416,17 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
     asin=str(product.get("asin") or "").strip()
     brand=str(product.get("brand") or "").strip()
     if not name and not asin: return []
-    q=' '.join(x for x in [f'"{asin}"' if asin else "", f'"{name}"', brand] if x)
+    queries=[]
+    if name: queries.append(' '.join(x for x in [f'"{name}"',brand,"official product"] if x))
+    if asin: queries.append(' '.join(x for x in [f'"{asin}"',f'"{name}"'] if x))
     try:
         async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"}) as client:
-            r=await client.get("https://www.bing.com/search",params={"q":q,"form":"QBLH"})
-            if r.status_code>=400: return []
-            html=r.text
             links=[]
-            for u in re.findall(r'<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)',html,re.I):
+            for q in queries:
+                r=await client.get("https://www.bing.com/search",params={"q":q,"form":"QBLH"})
+                if r.status_code>=400: continue
+                html=r.text
+                for u in re.findall(r'<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)',html,re.I):
                 u=unquote(u)
                 # Bing now commonly wraps organic links in /ck/a redirect URLs.
                 # Decode the embedded a1<base64url> target before identity checks.
