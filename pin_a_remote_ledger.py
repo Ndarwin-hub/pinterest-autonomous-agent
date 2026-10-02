@@ -58,3 +58,6 @@ class RemotePinALedger:
     def recover_pin_a_requests(self): return self._call("recover_pin_a_requests")
     def claim_next_pin_a_request(self): return self._call("claim_next_pin_a_request")
     def finish_pin_a_request(self, request_id, status="completed", error=None): return self._call("finish_pin_a_request", request_id=request_id, status=status, error=error)
+    def quota_reserve_job(self): return bool(self._call("quota_reserve_job"))
+    def quota_record_job(self, success): return self._call("quota_record_job", success=bool(success))
+    def quota_snapshot(self): return self._call("quota_snapshot")
