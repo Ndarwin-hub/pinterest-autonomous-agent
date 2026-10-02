@@ -132,8 +132,20 @@ async def request_loop():
                 ledger.finish_pin_a_request(req["request_id"],"pending",str(exc)[:1000])
             await asyncio.sleep(5)
 
+async def _health_handler(reader,writer):
+    try:
+        await reader.read(2048)
+        body=b'{"status":"ok","service":"pin-a-worker"}'
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+str(len(body)).encode()+b"\r\nConnection: close\r\n\r\n"+body)
+        await writer.drain()
+    finally:
+        writer.close()
+        try: await writer.wait_closed()
+        except Exception: pass
+
 async def main():
     logger.info("Dedicated Pin A worker ONLINE executor=%s quality_patch=%s",os.getenv("RAILWAY_SERVICE_NAME"),QUALITY_PATCH_VERSION)
+    health_server=await asyncio.start_server(_health_handler,"0.0.0.0",int(os.getenv("PORT","8080")))
     task=asyncio.create_task(request_loop(),name="pin-a-request-loop")
     try:
         await task
@@ -141,6 +153,8 @@ async def main():
         task.cancel()
         try: await task
         except asyncio.CancelledError: pass
+        health_server.close()
+        await health_server.wait_closed()
         for t in list(_tasks.values()):
             t.cancel()
         await _http.aclose()
