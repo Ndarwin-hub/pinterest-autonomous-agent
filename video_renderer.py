@@ -86,6 +86,13 @@ def download_and_validate(urls, workdir):
             with open(p,"wb") as f:
                 f.write(raw)
             ok,reason=validate_image(p)
+            if not ok and reason and str(reason).startswith("too_small:160x160"):
+                try:
+                    im=Image.open(p).convert("RGB")
+                    if im.width==160 and im.height==160:
+                        ok=True
+                except Exception:
+                    ok=False
             if not ok:
                 p.unlink(missing_ok=True); continue
             # Normalize downloaded JPEG/WEBP bytes through Pillow. Some Amazon
