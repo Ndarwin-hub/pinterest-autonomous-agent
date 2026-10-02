@@ -106,7 +106,7 @@ async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None
             daily_ledger.mark_video_job(day,batch,row["slot"],"failed",owner=owner,error=str(exc)[:1000])
     return failures==0 and processed==len(rows[:BATCH_SIZE])
 
-def _resolve_product_images(row):
+def _resolve_product_images(row, materialize_dir=None):
     """Recover and validate exact-product images; never pass unverified candidates to the renderer."""
     from image_quality import validate_many, filter_obvious_non_product, _alternative_identity_ok
 
@@ -191,19 +191,38 @@ def _resolve_product_images(row):
     selected=trusted[:5]
     if not selected:
         raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: no verified exact-product image survived validation for {product['asin']}")
+    output_urls=[x["url"] for x in selected]
+    # Materialize the exact bytes that passed validation. This prevents a second
+    # Amazon/CDN request from returning a different 160px placeholder to ffmpeg.
+    if materialize_dir:
+        from image_quality import materialize_validated_url
+        md=Path(materialize_dir);md.mkdir(parents=True,exist_ok=True)
+        local=[]
+        for idx,item in enumerate(selected,1):
+            p=md/f"verified_{idx}.img"
+            try:
+                if asyncio.run(materialize_validated_url(item["url"],str(p))):
+                    local.append(str(p))
+            except Exception:
+                pass
+        if local:
+            output_urls=local
     try:
         daily_ledger.attach_video_images(day=row.get("day"),asin=row["asin"],
             images=[{"url":x["url"],"provider":"video_verified_exact_product"} for x in selected])
     except Exception:
         pass
-    log.info("Video verified image recovery asin=%s candidates=%s selected=%s providers=%s",
-             product["asin"],len(trusted),len(selected),sorted(set(str(x.get("provider") or "") for x in selected)))
-    return [x["url"] for x in selected], "verified_exact_product_recovery"
+    log.info("Video verified image recovery asin=%s candidates=%s selected=%s providers=%s materialized=%s",
+             product["asin"],len(trusted),len(selected),sorted(set(str(x.get("provider") or "") for x in selected)),
+             len([x for x in output_urls if not x.startswith(("http://","https://"))]))
+    return output_urls, "verified_exact_product_recovery"
 
 def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=None):
-    urls,image_source=_resolve_product_images(row)
-    if len(urls)<4:raise RuntimeError("VIDEO_IMAGE_HANDOFF_MISSING: fewer than 4 verified product images")
-    root=Path(os.getenv("VIDEO_WORK_DIR","/data/video-runs"))/day/f"batch_{batch}"/f"slot_{row['slot']}";root.mkdir(parents=True,exist_ok=True);output=root/f"{row['asin']}.mp4"
+    root=Path(os.getenv("VIDEO_WORK_DIR","/data/video-runs"))/day/f"batch_{batch}"/f"slot_{row['slot']}"
+    root.mkdir(parents=True,exist_ok=True);output=root/f"{row['asin']}.mp4"
+    try:
+        urls,image_source=_resolve_product_images(row,materialize_dir=root/"verified_inputs")
+        if len(urls)<1:raise RuntimeError("VIDEO_IMAGE_HANDOFF_MISSING: no verified product images")
     try:
         prior=json.loads(row.get("publication_json") or "{}") if row.get("publication_json") else {};prior_statuses=prior.get("platforms") or {};kaggle_status=(pair_product_statuses(day,pair_start,kaggle_run_id).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {};composio_status=((external or {}).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {}
         combined_statuses=dict(kaggle_status.get("platforms") or {});combined_statuses.update(composio_status.get("platforms") or {});combined_statuses.update(prior_statuses);failed=[p for p in PLATFORMS if p in combined_statuses and str(combined_statuses[p].get("status","")).upper() not in ("PUBLISHED","SUCCESS","SUBMITTED")];targets=failed or [p for p in PLATFORMS if p not in combined_statuses]
