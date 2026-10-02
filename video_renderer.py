@@ -201,11 +201,14 @@ def _scene(image, out, mode):
         x="(iw-iw/zoom)/2"
         if mode=="right": x="(iw-iw/zoom)*0.70"
         elif mode=="left": x="(iw-iw/zoom)*0.30"
-        vf=(f"scale={WIDTH*2}:{HEIGHT*2}:force_original_aspect_ratio=increase,"
-            f"crop={WIDTH*2}:{HEIGHT*2},zoompan=z='min(zoom+0.0015,1.12)':"
+        # Keep the intermediate frame modest. Expanding a 500px source to 2160x3840
+        # before zoompan can exhaust the Railway worker and produce zero-frame ffmpeg exits.
+        render_w,render_h=1200,2133
+        vf=(f"scale={render_w}:{render_h}:force_original_aspect_ratio=increase,"
+            f"crop={render_w}:{render_h},zoompan=z='min(zoom+0.0015,1.12)':"
             f"x='{x}':y='(ih-ih/zoom)/2':d={SCENE_SECONDS*FPS}:"
             f"s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1")
-    _run(["ffmpeg","-y","-loop","1","-i",str(image),"-t",str(SCENE_SECONDS),
+    _run(["ffmpeg","-y","-threads","2","-loop","1","-i",str(image),"-t",str(SCENE_SECONDS),
           "-vf",vf,"-r",str(FPS),"-pix_fmt","yuv420p","-an",str(out)])
 
 def render_video(image_urls, output_path, title="", music_path=None):
