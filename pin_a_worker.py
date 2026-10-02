@@ -103,12 +103,14 @@ async def list_boards():
     return data.get("items") or data.get("boards") or []
 
 async def request_loop():
-    recovered=ledger.recover_pin_a_requests()
-    if recovered:
-        logger.warning("Recovered %s interrupted Pin A request(s)",recovered)
     while True:
         req=None
         try:
+            if not getattr(request_loop,"_recovered",False):
+                recovered=ledger.recover_pin_a_requests()
+                request_loop._recovered=True
+                if recovered:
+                    logger.warning("Recovered %s interrupted Pin A request(s)",recovered)
             req=ledger.claim_next_pin_a_request()
             if not req:
                 await asyncio.sleep(5)
