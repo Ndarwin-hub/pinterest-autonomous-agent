@@ -212,8 +212,9 @@ def _scene(image, out, mode):
             f"zoompan=z='min(zoom+0.0008,1.12)':x='{x}':y='(ih-ih/zoom)/2':"
             f"d={SCENE_SECONDS*FPS}:s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1")
         frames=SCENE_SECONDS*FPS
-    _run(["ffmpeg","-y","-threads","2","-loop","1","-i",str(image),
-          "-vf",vf,"-frames:v",str(frames),"-pix_fmt","yuv420p","-an",str(out)])
+    _run(["ffmpeg","-y","-threads","1","-loop","1","-i",str(image),
+          "-vf",vf,"-frames:v",str(frames),"-c:v","libx264","-preset","ultrafast","-crf","28","-threads","1",
+          "-pix_fmt","yuv420p","-an",str(out)])
 
 def render_video(image_urls, output_path, title="", music_path=None):
     output=Path(output_path); output.parent.mkdir(parents=True,exist_ok=True)
@@ -228,8 +229,8 @@ def render_video(image_urls, output_path, title="", music_path=None):
         concat=Path(td)/"concat.txt"
         concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in scenes))
         silent=Path(td)/"silent.mp4"
-        _run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat),
-              "-c:v","libx264","-preset","veryfast","-crf","20","-pix_fmt","yuv420p",
+        _run(["ffmpeg","-y","-threads","1","-f","concat","-safe","0","-i",str(concat),
+              "-c:v","libx264","-preset","ultrafast","-crf","28","-threads","1","-pix_fmt","yuv420p",
               "-movflags","+faststart",str(silent)])
         if music_path and Path(music_path).exists():
             _run(["ffmpeg","-y","-i",str(silent),"-stream_loop","-1","-i",str(music_path),
