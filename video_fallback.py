@@ -66,8 +66,11 @@ async def on_kaggle_job_failure(day,batch,slot,error=None):
         await asyncio.to_thread(_process_product,day,((int(batch)-1)//2)*2+1,int(batch),row,owner,None,None)
         return {"status":"railway_fallback_completed","batch":int(batch),"slot":int(slot)}
     except Exception as exc:
-        daily_ledger.mark_video_job(day,int(batch),int(slot),"failed",owner=owner,error=str(exc)[:1000])
-        return {"status":"railway_fallback_failed","batch":int(batch),"slot":int(slot),"error":str(exc)[:1000]}
+        err=str(exc)[:1000]
+        # A product-level failure must remain recoverable. Do not leave a
+        # permanently failed terminal state after a transient renderer/CDN error.
+        daily_ledger.mark_video_job(day,int(batch),int(slot),"queued",owner=None,error=err)
+        return {"status":"railway_fallback_retryable","batch":int(batch),"slot":int(slot),"error":err}
     finally:
         SINGLE_ACTIVE.discard(key)
 
