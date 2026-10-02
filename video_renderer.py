@@ -86,7 +86,7 @@ def download_and_validate(urls, workdir):
             with open(p,"wb") as f:
                 f.write(raw)
             ok,reason=validate_image(p)
-            if not ok and reason and str(reason).startswith("too_small:160x160"):
+            if not ok and reason and "160x160" in str(reason):
                 # Amazon's exact-ASIN fallback can legitimately arrive as a 160x160
                 # thumbnail. It is still identity-bound; accept it only for this
                 # exact product fallback and immediately normalize/upscale it.
