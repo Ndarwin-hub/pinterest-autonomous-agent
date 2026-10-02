@@ -22,8 +22,11 @@ import provider_failover
 provider_failover.install(__import__("wire_board_org"), __import__("ai_quality_gate"))
 quality_patch.install_process_gate(agent_module)
 import publication_guard
+import image_priority
 import image_diversity_guard
 publication_guard.install(agent_module)
+# Railway canonical image selector: hard integrity/diversity gate wraps it below.
+image_priority.install(agent_module)
 image_diversity_guard.install(agent_module)
 
 from agent import process_pinterest_job
