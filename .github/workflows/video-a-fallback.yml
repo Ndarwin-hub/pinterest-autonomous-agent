@@ -14,7 +14,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: video-a-fallback
+  group: video-a-fallback-v2
   cancel-in-progress: false
 
 jobs:
