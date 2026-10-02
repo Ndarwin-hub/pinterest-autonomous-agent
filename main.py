@@ -357,7 +357,13 @@ async def video_pair_recovery(body:VideoPairRecoveryRequest,_:bool=Depends(verif
  if int(body.pair_start) not in (1,3,5,7,9):
   raise HTTPException(status_code=400,detail="pair_start must be 1,3,5,7,9")
  result=daily_ledger.reset_video_pair_for_recovery(daily_ledger.today_str(),int(body.pair_start))
- return {"status":"video_pair_reset","recovery":result,"pair_status":pair_status()}
+ # Explicit recovery must take ownership immediately; do not wait on a stale
+ # Kaggle RUNNING/UNKNOWN state after the operator requested a clean Video A run.
+ from video_fallback import _run_pair, ACTIVE
+ day=daily_ledger.today_str(); start=int(body.pair_start); key=f"{day}:{start}"
+ if not ACTIVE.get(key):
+  task=asyncio.create_task(_run_pair(day,start,None)); ACTIVE[key]=task
+ return {"status":"video_pair_recovery_started","recovery":result,"pair_status":pair_status()}
 
 @app.post("/video/github-checkpoint")
 async def video_github_checkpoint(body:KaggleVideoCheckpointRequest,_:bool=Depends(verify_manual_oidc)):
