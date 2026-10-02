@@ -632,6 +632,16 @@ def _obvious_non_product_image(c: Dict[str, Any], product: Dict[str, Any]) -> bo
     return False
 
 
+async def validate_image_candidate(c: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Final byte-level gate immediately before an image can be published."""
+    try:
+        from image_quality import validate
+        return await validate(c)
+    except Exception as exc:
+        logger.info("IMAGE_REJECT provider=%s reason=hard_integrity_exception:%s", c.get("provider"), type(exc).__name__)
+        return None
+
+
 def score_candidate(c: Dict[str, Any], product: Dict[str, Any], strategy_key: str) -> int:
     """Rank images; identity/quality are preferences, not publication gates."""
     identity = exact_product_identity_score(c, product)
@@ -732,6 +742,11 @@ async def get_best_pin_image(
             if _obvious_non_product_image(candidate, product):
                 local_rejected += 1
                 continue
+            checked = await validate_image_candidate(candidate)
+            if not checked:
+                local_rejected += 1
+                continue
+            candidate.update(checked)
             identity = exact_product_identity_score(candidate, product)
             score = score_candidate(candidate, product, strategy["key"])
             candidate["identity_score"] = identity
@@ -822,10 +837,35 @@ async def publish_and_verify(
     verified = False
     try:
         verified_data = await run_composio_tool("PINTEREST_GET_PIN", {"pin_id": pin_id}, retries=1)
-        if verified_data and verified_data.get("id"):
-            verified = True
+        if not verified_data or not verified_data.get("id"):
+            raise RuntimeError("Pinterest returned no readable Pin after creation")
+        media = verified_data.get("media") or {}
+        images = media.get("images") or {}
+        dims = []
+        if isinstance(images, dict):
+            for variant, value in images.items():
+                if not isinstance(value, dict):
+                    continue
+                try:
+                    w, h = int(value.get("width") or 0), int(value.get("height") or 0)
+                except Exception:
+                    continue
+                if w > 0 and h > 0:
+                    dims.append((w, h, str(variant)))
+        if not dims:
+            raise RuntimeError("Pinterest image verification returned no dimensions")
+        max_w, max_h, max_variant = max(dims, key=lambda x: x[0] * x[1])
+        if min(max_w, max_h) < 500:
+            raise RuntimeError(f"Pinterest image verification failed: rendered media is {max_w}x{max_h} ({max_variant})")
+        verified = True
     except Exception as e:
-        logger.warning(f"Verify failed for {pin_id}: {e}")
+        logger.warning(f"Post-publication image verification failed for {pin_id}: {e}")
+        try:
+            await run_composio_tool("PINTEREST_DELETE_PIN", {"pin_id": pin_id}, retries=1)
+            logger.warning(f"Deleted invalid Pin {pin_id} after failed image verification")
+        except Exception as delete_error:
+            logger.error(f"Could not delete invalid Pin {pin_id}: {delete_error}")
+        raise RuntimeError(f"Pinterest image verification failed for Pin {pin_id}: {e}")
     return {
         "pin_id": pin_id,
         "pin_url": pin_url,
