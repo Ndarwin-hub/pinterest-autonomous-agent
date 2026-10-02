@@ -384,11 +384,16 @@ def pair_status(day=None):
     start=int(state.get("next_pair_start") or 1)
     key=f"{day}:{start}"
     status=str(state.get("status") or "").lower()
-    if start in PAIR_STARTS and status in {"running","incomplete"} and not ACTIVE.get(key):
-        try:
-            task=asyncio.create_task(_run_pair(day,start,None),name=f"video-auto-resume-{start}")
-            ACTIVE[key]=task
-            log.warning("Video pair auto-resumed from durable state day=%s pair=%s status=%s",day,start,status)
-        except RuntimeError:
-            pass
+    if start in PAIR_STARTS and status in {"running","incomplete"}:
+        task=ACTIVE.get(key)
+        if task is not None and task.done():
+            ACTIVE.pop(key,None)
+            task=None
+        if task is None:
+            try:
+                task=asyncio.create_task(_run_pair(day,start,None),name=f"video-auto-resume-{start}")
+                ACTIVE[key]=task
+                log.warning("Video pair auto-resumed/restarted from durable state day=%s pair=%s status=%s",day,start,status)
+            except RuntimeError:
+                pass
     return {"day":day,"next_pair_start":start,"pair":_pair_for(start),"status":state.get("status")}
