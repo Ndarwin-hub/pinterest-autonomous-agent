@@ -12,7 +12,7 @@ PREFERRED_PORTRAIT_MIN_HEIGHT=1200
 MAX_ASPECT=2.0
 MIN_SCORE=85
 MAX_CANDIDATES_PER_PIN=12
-MAX_IMAGE_BYTES_TO_INSPECT=5*1024*1024
+MAX_IMAGE_BYTES_TO_INSPECT=12*1024*1024
 BLANK_STDDEV_THRESHOLD=4.0
 BLANK_UNIQUE_COLOR_THRESHOLD=24
 VISUAL_DUPLICATE_THRESHOLD=0.01
@@ -20,45 +20,35 @@ PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
 
 def inspect_image_bytes(raw: bytes, debug_url: str = "") -> Optional[Dict[str,Any]]:
-    """Validate the actual image bytes; provider metadata is never trusted."""
+    """Decode image bytes; quality metrics are advisory, not publication blockers."""
     if not raw or len(raw) > MAX_IMAGE_BYTES_TO_INSPECT:
         if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=empty_or_too_large bytes=%s", debug_url, len(raw or b""))
         return None
     try:
         im=Image.open(io.BytesIO(raw)); im.verify()
         im=Image.open(io.BytesIO(raw)); im.load()
-        if im.width < MIN_DIMENSION or im.height < MIN_DIMENSION:
-            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=too_small:%sx%s", debug_url, im.width, im.height)
-            return None
         rgba=im.convert("RGBA"); alpha=list(rgba.getchannel("A").resize((64,64)).getdata())
         opaque_ratio=sum(1 for a in alpha if a>=250)/len(alpha)
-        if opaque_ratio < 0.20:
-            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=transparent:%.3f", debug_url, opaque_ratio)
-            return None
         rgb=rgba.convert("RGB").resize((64,64),Image.Resampling.LANCZOS); px=list(rgb.getdata())
         gray=[0.299*r+0.587*g+0.114*b for r,g,b in px]; mean=sum(gray)/len(gray)
         std=math.sqrt(sum((v-mean)**2 for v in gray)/len(gray)); unique=len(set(px))
         hist=[0]*32
         for v in gray: hist[min(31,int(v//8))]+=1
         entropy=-sum((n/len(gray))*math.log2(n/len(gray)) for n in hist if n)
-        if std < BLANK_STDDEV_THRESHOLD or unique < BLANK_UNIQUE_COLOR_THRESHOLD or entropy < 1.8:
-            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=blank_like std=%.3f unique=%s entropy=%.3f", debug_url, std, unique, entropy)
-            return None
         from PIL import ImageFilter
         edge_px=list(rgb.convert("L").filter(ImageFilter.FIND_EDGES).getdata())
         edge_ratio=sum(1 for v in edge_px if v>=180)/len(edge_px)
         sat=sum(max(p)-min(p) for p in px)/len(px)
-        if edge_ratio > 0.34 and sat < 18 and entropy < 5.0:
-            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=edge_heavy edge=%.3f sat=%.2f entropy=%.3f", debug_url, edge_ratio, sat, entropy)
-            return None
         from image_fingerprint import fingerprint
         return {"width":int(im.width),"height":int(im.height),"sha256":hashlib.sha256(raw).hexdigest(),
                 "stddev":round(std,3),"unique_colors":unique,"entropy":round(entropy,3),
                 "opaque_ratio":round(opaque_ratio,4),"edge_ratio":round(edge_ratio,4),
+                "quality_advisory":{"too_small":min(im.width,im.height)<MIN_DIMENSION,"bad_aspect":max(im.width,im.height)/max(1,min(im.width,im.height))>MAX_ASPECT,"blank_like":std<BLANK_STDDEV_THRESHOLD or unique<BLANK_UNIQUE_COLOR_THRESHOLD or entropy<1.8,"transparent":opaque_ratio<0.20,"edge_heavy":edge_ratio>0.34 and sat<18 and entropy<5.0},
                 "_fingerprint":fingerprint(raw)}
     except Exception as exc:
         if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=decode:%s", debug_url, type(exc).__name__)
         return None
+
 
 async def _fetch_image_bytes(url:str)->Optional[bytes]:
     if not url or not str(url).startswith(("http://","https://")): return None
@@ -107,19 +97,15 @@ async def inspect_image_content(url:str)->Optional[Dict[str,Any]]:
 
 async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     url=str(c.get("url") or "")
-    d=await inspect_image_url(url)
-    if not d:
-        logger.info("IMAGE_REJECT provider=%s reason=dimension_probe_failed url=%s",c.get("provider"),url[:220])
-        return None
-    w,h=d; ok,reason=hard_gate(w,h)
-    if not ok:
-        logger.info("IMAGE_REJECT provider=%s reason=%s url=%s",c.get("provider"),reason,url[:220])
-        return None
     content=await inspect_image_content(url)
     if not content:
-        logger.info("IMAGE_REJECT provider=%s reason=content_validation_failed url=%s dims=%sx%s",c.get("provider"),url[:220],w,h)
+        logger.info("IMAGE_REJECT provider=%s reason=content_validation_failed url=%s",c.get("provider"),url[:220])
         return None
-    x=dict(c);x.update(content);x.update(quality_gate=reason,content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"]);return x
+    x=dict(c); x.update(content)
+    x.update(quality_gate="advisory",content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"])
+    return x
+
+
 async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
     seen=set();unique=[]
     for c in raw:
