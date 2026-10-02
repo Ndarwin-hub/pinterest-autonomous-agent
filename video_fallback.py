@@ -105,8 +105,9 @@ async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None
 
 def _resolve_product_images(row):
     """Recover exact-product images when the Pinterest->video handoff is absent.
-    Never fall back to generic brand/web images: every recovery source is tied to
-    the exact Amazon product URL/ASIN.
+    Recovery is identity-first: Amazon gallery/API, verified retailer/manufacturer
+    pages, then tightly-scoped ASIN CDN candidates. Generic image search is never
+    accepted as a product-video source.
     """
     urls=[]
     try:
@@ -114,37 +115,47 @@ def _resolve_product_images(row):
         urls=[str(u) for u in raw if isinstance(u,str) and u.startswith(("http://","https://"))]
     except Exception:
         urls=[]
+    urls=list(dict.fromkeys(urls))
     if len(urls)>=4:
-        return list(dict.fromkeys(urls))[:5], "pinterest_handoff"
+        return urls[:5], "pinterest_handoff"
     product={"asin":str(row.get("asin") or "").upper(),"name":str(row.get("title") or ""), "url":str(row.get("product_url") or "")}
     recovered=[]
+
     # Recovery 1: exact Amazon product-gallery extraction.
     try:
         from image_quality import search_amazon_product_images
         recovered.extend([x.get("url") for x in asyncio.run(search_amazon_product_images(product)) if x.get("url")])
     except Exception as exc:
         log.warning("Video image recovery Amazon gallery failed asin=%s: %s",product["asin"],str(exc)[:300])
-    # Recovery 2: exact ASIN CDN gallery.
-    if len(dict.fromkeys(urls+recovered))<4:
+
+    # Recovery 2: verified retailer/manufacturer product pages with exact identity evidence.
+    merged=list(dict.fromkeys(urls+recovered))
+    if len(merged)<4:
+        try:
+            from image_quality import search_verified_web_product_page_images
+            recovered.extend([x.get("url") for x in asyncio.run(search_verified_web_product_page_images(product, num=20)) if x.get("url")])
+        except Exception as exc:
+            log.warning("Video image recovery verified product pages failed asin=%s: %s",product["asin"],str(exc)[:300])
+
+    # Recovery 3: Amazon ASIN CDN only after the identity-safe sources above.
+    # These URLs are candidates, not evidence of distinct gallery views; the
+    # renderer's byte-level duplicate gate remains authoritative.
+    merged=list(dict.fromkeys(urls+recovered))
+    if len(merged)<4:
         try:
             from image_quality import search_amazon_asin_cdn_images
             recovered.extend([x.get("url") for x in asyncio.run(search_amazon_asin_cdn_images(product)) if x.get("url")])
         except Exception as exc:
             log.warning("Video image recovery ASIN CDN failed asin=%s: %s",product["asin"],str(exc)[:300])
-    # Recovery 3: verified retailer/manufacturer product pages with exact identity evidence.
-    if len(dict.fromkeys(urls+recovered))<4:
-        try:
-            from image_quality import search_verified_web_product_page_images
-            recovered.extend([x.get("url") for x in asyncio.run(search_verified_web_product_page_images(product, num=16)) if x.get("url")])
-        except Exception as exc:
-            log.warning("Video image recovery verified product pages failed asin=%s: %s",product["asin"],str(exc)[:300])
+
     merged=list(dict.fromkeys(urls+recovered))
     if len(merged)<4:
         raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: only {len(merged)} exact-product candidates available for {product['asin']}")
-    # Persist the recovered handoff so a retry uses the verified set instead of
-    # repeating discovery.
+
+    # Persist the recovered handoff so retries reuse discovery rather than
+    # repeatedly scraping external pages.
     try:
-        daily_ledger.attach_video_images(day if False else row.get("day"), row["asin"], [{"url":u,"provider":"video_exact_product_recovery"} for u in merged[:5]])
+        daily_ledger.attach_video_images(day=row.get("day"), asin=row["asin"], images=[{"url":u,"provider":"video_exact_product_recovery"} for u in merged[:5]])
     except Exception:
         pass
     return merged[:5], "exact_product_recovery"
