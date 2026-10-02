@@ -264,7 +264,7 @@ def _resolve_product_images(row, materialize_dir=None):
                     if len(raw_thumb)<10000 or len(raw_thumb)>8*1024*1024:
                         continue
                     im=Image.open(BytesIO(raw_thumb)).convert("RGB")
-                    if min(im.size)<120:
+                    if min(im.size)<160:
                         continue
                     stat=ImageStat.Stat(im.resize((64,64)))
                     if min(stat.stddev)<7:
@@ -302,13 +302,13 @@ def _resolve_product_images(row, materialize_dir=None):
                     continue
                 try:
                     rr=httpx.get(u,timeout=20,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/video","Accept":"image/*"})
-                    if rr.status_code>=400 or len(rr.content)<500:
+                    if rr.status_code>=400 or len(rr.content)<1000:
                         continue
                     im=Image.open(io.BytesIO(rr.content)).convert("RGB")
                     if min(im.size)<160:
                         continue
                     stat=ImageStat.Stat(im.resize((64,64)))
-                    if min(stat.stddev)<1.5:
+                    if min(stat.stddev)<5:
                         continue
                     if materialize_dir:
                         md=Path(materialize_dir);md.mkdir(parents=True,exist_ok=True)
@@ -341,6 +341,16 @@ def _resolve_product_images(row, materialize_dir=None):
         for idx,item in enumerate(selected,1):
             p=md/f"verified_{idx}.img"
             try:
+                # Exact-ASIN fallback may already have produced a normalized local file.
+                # Preserve it instead of trying to fetch the local path as a URL.
+                if str(item.get("url") or "").startswith("/") and Path(str(item["url"])).exists():
+                    src=Path(str(item["url"]))
+                    im=Image.open(src).convert("RGB")
+                    jpg=md/f"verified_{len(local)+1}.jpg"
+                    im.save(jpg,format="JPEG",quality=95,optimize=True)
+                    local.append(str(jpg)); materialized_items.append(item)
+                    if len(local)>=5: break
+                    continue
                 ok_materialized=asyncio.run(materialize_validated_url(item["url"],str(p)))
                 if not ok_materialized:
                     import httpx
