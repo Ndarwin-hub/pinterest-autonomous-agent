@@ -219,16 +219,45 @@ def _resolve_product_images(row, materialize_dir=None):
 
 def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=None):
     root=Path(os.getenv("VIDEO_WORK_DIR","/data/video-runs"))/day/f"batch_{batch}"/f"slot_{row['slot']}"
-    root.mkdir(parents=True,exist_ok=True);output=root/f"{row['asin']}.mp4"
+    root.mkdir(parents=True,exist_ok=True)
+    output=root/f"{row['asin']}.mp4"
     try:
         urls,image_source=_resolve_product_images(row,materialize_dir=root/"verified_inputs")
-        if len(urls)<1:raise RuntimeError("VIDEO_IMAGE_HANDOFF_MISSING: no verified product images")
-    try:
-        prior=json.loads(row.get("publication_json") or "{}") if row.get("publication_json") else {};prior_statuses=prior.get("platforms") or {};kaggle_status=(pair_product_statuses(day,pair_start,kaggle_run_id).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {};composio_status=((external or {}).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {}
-        combined_statuses=dict(kaggle_status.get("platforms") or {});combined_statuses.update(composio_status.get("platforms") or {});combined_statuses.update(prior_statuses);failed=[p for p in PLATFORMS if p in combined_statuses and str(combined_statuses[p].get("status","")).upper() not in ("PUBLISHED","SUCCESS","SUBMITTED")];targets=failed or [p for p in PLATFORMS if p not in combined_statuses]
-        if not targets and combined_statuses:daily_ledger.mark_video_job(day,batch,row["slot"],"completed",owner=owner,publication_json=json.dumps({"platforms":combined_statuses,"source":"kaggle+composio"},separators=(",",":"))[:12000]);return
-        track_state=daily_ledger.next_video_music([f"track{i:02d}" for i in range(1,17)]);music=make_music(track_state["track_id"],root/"music");log.info("Video render asin=%s batch=%s slot=%s source=%s images=%s",row["asin"],batch,row["slot"],image_source,len(urls));render_video(urls,output,row.get("title") or "",music);aff=affiliate_url(row["asin"]);marker=f"[video-run:{kaggle_run_id or 'railway'}][asin:{str(row['asin']).upper()}][batch:{batch}]";caption=f"{(row.get('title') or row['asin'])[:150]}\nShop now: {aff}\n{marker}\n\nAs an Amazon Associate I earn from qualifying purchases.";result=publish_video(str(output),row.get("title") or row["asin"],caption,targets);merged=dict(combined_statuses);merged.update(result.get("platforms") or {});ok=bool(merged) and all(str(v.get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for v in merged.values());combined=dict(result);combined["platforms"]=merged;combined["run_id"]=kaggle_run_id or "railway";combined["source"]="railway_fallback";daily_ledger.mark_video_job(day,batch,row["slot"],"completed" if ok else "failed",owner=owner,publication_json=json.dumps(combined,separators=(",",":"))[:12000])
-    finally:shutil.rmtree(root,ignore_errors=True)
+        if len(urls)<1:
+            raise RuntimeError("VIDEO_IMAGE_HANDOFF_MISSING: no verified product images")
+        prior=json.loads(row.get("publication_json") or "{}") if row.get("publication_json") else {}
+        prior_statuses=prior.get("platforms") or {}
+        kaggle_status=(pair_product_statuses(day,pair_start,kaggle_run_id).get("products") or {}).get(str(row["asin"]).upper(),{}) if kaggle_run_id else {}
+        composio_status=((external or {}).get("products") or {}).get(str(row["asin"]).upper(),{}) if external else {}
+        combined_statuses=dict(kaggle_status.get("platforms") or {})
+        combined_statuses.update(composio_status.get("platforms") or {})
+        combined_statuses.update(prior_statuses)
+        failed=[p for p in PLATFORMS if p in combined_statuses and str(combined_statuses[p].get("status","")).upper() not in ("PUBLISHED","SUCCESS","SUBMITTED")]
+        targets=failed or [p for p in PLATFORMS if p not in combined_statuses]
+        if not targets and combined_statuses:
+            daily_ledger.mark_video_job(day,batch,row["slot"],"completed",owner=owner,
+                publication_json=json.dumps({"platforms":combined_statuses,"source":"kaggle+composio"},separators=(",",":"))[:12000])
+            return True
+        track_state=daily_ledger.next_video_music([f"track{i:02d}" for i in range(1,17)])
+        music=make_music(track_state["track_id"],root/"music")
+        log.info("Video render asin=%s batch=%s slot=%s source=%s images=%s",row["asin"],batch,row["slot"],image_source,len(urls))
+        render_video(urls,output,row.get("title") or "",music)
+        aff=affiliate_url(row["asin"])
+        marker=f"[video-run:{kaggle_run_id or 'railway'}][asin:{str(row['asin']).upper()}][batch:{batch}]"
+        caption=f"{(row.get('title') or row['asin'])[:150]}\\nShop now: {aff}\\n{marker}\\n\\nAs an Amazon Associate I earn from qualifying purchases."
+        result=publish_video(str(output),row.get("title") or row["asin"],caption,targets)
+        merged=dict(combined_statuses)
+        merged.update(result.get("platforms") or {})
+        ok=bool(merged) and all(str(v.get("status","")).upper() in ("PUBLISHED","SUCCESS","SUBMITTED") for v in merged.values())
+        combined=dict(result)
+        combined["platforms"]=merged
+        combined["run_id"]=kaggle_run_id or "railway"
+        combined["source"]="railway_fallback"
+        daily_ledger.mark_video_job(day,batch,row["slot"],"completed" if ok else "failed",owner=owner,
+            publication_json=json.dumps(combined,separators=(",",":"))[:12000])
+        return ok
+    finally:
+        shutil.rmtree(root,ignore_errors=True)
 
 def pair_status(day=None):
     day=day or daily_ledger.today_str();state=daily_ledger.get_video_pair_state();start=int(state.get("next_pair_start") or 1);return {"day":day,"next_pair_start":start,"pair":_pair_for(start),"status":state.get("status")}
