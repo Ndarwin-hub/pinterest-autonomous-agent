@@ -31,8 +31,20 @@ def publish_video(path,title,text,platforms=None):
     if "youtube" in allowed and by.get("YOUTUBE"): targets.append({"social_account_id":by["YOUTUBE"]["id"],"platform":"YOUTUBE","title":title,"privacy":"public","tags":["amazon","productfinds","shopping","deals"]})
     if "tiktok" in allowed and by.get("TIKTOK"): targets.append({"social_account_id":by["TIKTOK"]["id"],"platform":"TIKTOK","post_mode":"DIRECT_POST","privacy_level":"PUBLIC_TO_EVERYONE","post_type":"VIDEO","allow_duet":False,"allow_stitch":False,"allow_comment":True,"is_your_brand":False,"is_branded_content":False,"auto_add_music":False,"privacy_level":"PUBLIC_TO_EVERYONE","is_ai_generated_content":False})
     if not targets: raise RuntimeError("No connected WoopSocial target accounts found")
-    result=_execute("WOOP_SOCIAL_PUBLISH_POST_NOW",user,api_key,{"content":[{"text":text,"media":[{"type":"MEDIA_LIBRARY","media_id":media_id}]}],"social_accounts":targets,"auto_delete_media_after_publish":False})
     statuses={}
-    for d in (result.get("social_account_posts") if isinstance(result,dict) else None) or []:
-        statuses[str(d.get("platform") or "").lower()]={"status":d.get("delivery_status"),"external_post_id":d.get("external_post_id"),"url":d.get("external_post_url"),"error":d.get("error_message")}
+    raw=[]
+    for target in targets:
+        platform=str(target.get("platform") or "").lower()
+        try:
+            result=_execute("WOOP_SOCIAL_PUBLISH_POST_NOW",user,api_key,{"content":[{"text":text,"media":[{"type":"MEDIA_LIBRARY","media_id":media_id}]}],"social_accounts":[target],"auto_delete_media_after_publish":False})
+            raw.append(result)
+            for d in (result.get("social_account_posts") if isinstance(result,dict) else None) or []:
+                statuses[str(d.get("platform") or platform).lower()]={"status":d.get("delivery_status"),"external_post_id":d.get("external_post_id"),"url":d.get("external_post_url"),"error":d.get("error_message")}
+            if platform not in statuses:
+                statuses[platform]={"status":"SUBMITTED","external_post_id":None,"url":None,"error":None}
+        except Exception as exc:
+            statuses[platform]={"status":"FAILED","external_post_id":None,"url":None,"error":str(exc)[:500]}
+    published=sum(1 for d in statuses.values() if str(d.get("status") or "").upper() in {"PUBLISHED","SUCCESS","SUBMITTED"})
+    if not published:
+        raise RuntimeError("All connected WoopSocial targets rejected the video: "+json.dumps(statuses,default=str)[:1500])
     return {"status":"submitted","media_id":media_id,"platforms":statuses,"raw":result}
