@@ -85,19 +85,17 @@ def download_and_validate(urls, workdir):
             p=Path(workdir)/f"image_{len(selected)+1}{ext}"
             with open(p,"wb") as f:
                 f.write(raw)
-            ok,reason=validate_image(p)
-            if not ok and reason and "160x160" in str(reason):
-                # Amazon's exact-ASIN fallback can legitimately arrive as a 160x160
-                # thumbnail. It is still identity-bound; accept it only for this
-                # exact product fallback and immediately normalize/upscale it.
+            # Files in verified_inputs were already identity-gated and byte-validated
+            # by image_quality.py. Do not re-apply the renderer's 500px quality gate
+            # to those exact cached bytes; normalize/upscale them below instead.
+            if ctype=="image/local":
                 try:
                     im=Image.open(p).convert("RGB")
-                    if im.width==160 and im.height==160:
-                        ok=True
+                    ok=bool(im.width>0 and im.height>0); reason="verified_local"
                 except Exception:
-                    # Some Amazon responses have a valid image content-type but PIL
-                    # cannot decode the thumbnail. Do not accept those bytes.
-                    ok=False
+                    ok=False; reason="unreadable_local"
+            else:
+                ok,reason=validate_image(p)
             if not ok:
                 p.unlink(missing_ok=True); continue
             # Normalize downloaded JPEG/WEBP bytes through Pillow. Some Amazon
