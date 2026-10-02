@@ -123,6 +123,18 @@ def _resolve_product_images(row, materialize_dir=None):
         "name":str(row.get("title") or ""),
         "url":str(row.get("product_url") or ""),
     }
+    # When the upstream title is truncated to a brand/category, recover the
+    # Amazon URL slug as additional exact-product search evidence.
+    if len(product["name"].split()) < 3:
+        try:
+            from urllib.parse import urlparse, unquote
+            path=unquote(urlparse(product["url"]).path).strip("/")
+            slug=path.split("/dp/")[0].split("/gp/product/")[0].split("/")[-1]
+            slug=re.sub(r"[-_]+"," ",slug)
+            if len(slug.split()) >= 3:
+                product["name"]=slug
+        except Exception:
+            pass
 
     async def recover():
         out=[]
