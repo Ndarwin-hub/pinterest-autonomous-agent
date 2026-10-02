@@ -107,61 +107,98 @@ async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None
     return failures==0 and processed==len(rows[:BATCH_SIZE])
 
 def _resolve_product_images(row):
-    """Recover exact-product images when the Pinterest->video handoff is absent.
-    Recovery is identity-first: Amazon gallery/API, verified retailer/manufacturer
-    pages, then tightly-scoped ASIN CDN candidates. Generic image search is never
-    accepted as a product-video source.
-    """
-    urls=[]
+    """Recover and validate exact-product images; never pass unverified candidates to the renderer."""
+    from image_quality import validate_many, filter_obvious_non_product, _alternative_identity_ok
+
+    raw=[]
     try:
-        raw=json.loads(row.get("image_urls_json") or "[]")
-        urls=[str(u) for u in raw if isinstance(u,str) and u.startswith(("http://","https://"))]
-    except Exception:
-        urls=[]
-    urls=list(dict.fromkeys(urls))
-    if len(urls)>=4:
-        return urls[:5], "pinterest_handoff"
-    product={"asin":str(row.get("asin") or "").upper(),"name":str(row.get("title") or ""), "url":str(row.get("product_url") or "")}
-    recovered=[]
-
-    # Recovery 1: exact Amazon product-gallery extraction.
-    try:
-        from image_quality import search_amazon_product_images
-        recovered.extend([x.get("url") for x in asyncio.run(search_amazon_product_images(product)) if x.get("url")])
-    except Exception as exc:
-        log.warning("Video image recovery Amazon gallery failed asin=%s: %s",product["asin"],str(exc)[:300])
-
-    # Recovery 2: verified retailer/manufacturer product pages with exact identity evidence.
-    merged=list(dict.fromkeys(urls+recovered))
-    if len(merged)<4:
-        try:
-            from image_quality import search_verified_web_product_page_images
-            recovered.extend([x.get("url") for x in asyncio.run(search_verified_web_product_page_images(product, num=20)) if x.get("url")])
-        except Exception as exc:
-            log.warning("Video image recovery verified product pages failed asin=%s: %s",product["asin"],str(exc)[:300])
-
-    # Recovery 3: Amazon ASIN CDN only after the identity-safe sources above.
-    # These URLs are candidates, not evidence of distinct gallery views; the
-    # renderer's byte-level duplicate gate remains authoritative.
-    merged=list(dict.fromkeys(urls+recovered))
-    if len(merged)<4:
-        try:
-            from image_quality import search_amazon_asin_cdn_images
-            recovered.extend([x.get("url") for x in asyncio.run(search_amazon_asin_cdn_images(product)) if x.get("url")])
-        except Exception as exc:
-            log.warning("Video image recovery ASIN CDN failed asin=%s: %s",product["asin"],str(exc)[:300])
-
-    merged=list(dict.fromkeys(urls+recovered))
-    if len(merged)<4:
-        raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: only {len(merged)} exact-product candidates available for {product['asin']}")
-
-    # Persist the recovered handoff so retries reuse discovery rather than
-    # repeatedly scraping external pages.
-    try:
-        daily_ledger.attach_video_images(day=row.get("day"), asin=row["asin"], images=[{"url":u,"provider":"video_exact_product_recovery"} for u in merged[:5]])
+        handoff=json.loads(row.get("image_urls_json") or "[]")
+        raw.extend({"url":str(u),"provider":"product_page","source":"Pinterest exact-product handoff","original":True}
+                   for u in handoff if isinstance(u,str) and u.startswith(("http://","https://")))
     except Exception:
         pass
-    return merged[:5], "exact_product_recovery"
+
+    product={
+        "asin":str(row.get("asin") or "").upper(),
+        "name":str(row.get("title") or ""),
+        "url":str(row.get("product_url") or ""),
+    }
+
+    async def recover():
+        out=[]
+        try:
+            from image_quality import search_amazon_product_images
+            out.extend(await search_amazon_product_images(product))
+        except Exception as exc:
+            log.warning("Video image recovery Amazon gallery failed asin=%s: %s",product["asin"],str(exc)[:240])
+        try:
+            from image_quality import search_verified_web_product_page_images
+            out.extend(await search_verified_web_product_page_images(product,num=20))
+        except Exception as exc:
+            log.warning("Video image recovery verified product pages failed asin=%s: %s",product["asin"],str(exc)[:240])
+        # Independent Bing image search is only an evidence source. The candidate
+        # is accepted only when its result/source page proves the exact product.
+        try:
+            from image_quality import search_independent_bing_images
+            q=f'"{product["name"]}" product photo'
+            if product["asin"]: q+=f' "{product["asin"]}"'
+            out.extend(await search_independent_bing_images(q,num=20))
+        except Exception as exc:
+            log.warning("Video image recovery independent image search failed asin=%s: %s",product["asin"],str(exc)[:240])
+        try:
+            from image_quality import search_amazon_asin_cdn_images
+            out.extend(await search_amazon_asin_cdn_images(product))
+        except Exception as exc:
+            log.warning("Video image recovery ASIN CDN failed asin=%s: %s",product["asin"],str(exc)[:240])
+        return out
+
+    recovered=asyncio.run(recover())
+    candidates=[]
+    seen=set()
+    for item in raw+recovered:
+        u=str(item.get("url") or "")
+        if u and u not in seen:
+            seen.add(u)
+            candidates.append(item)
+
+    try:
+        validated=asyncio.run(validate_many(candidates))
+    except Exception as exc:
+        log.warning("Video image validation failed asin=%s: %s",product["asin"],str(exc)[:240])
+        validated=[]
+
+    validated=filter_obvious_non_product(validated,product)
+    trusted=[]
+    for item in validated:
+        provider=str(item.get("provider") or "")
+        if provider in {"product_page","amazon_direct","amazon_asin_cdn","amazon_creators_api"}:
+            trusted.append(item)
+        else:
+            try:
+                if asyncio.run(_alternative_identity_ok(item,product)):
+                    item["identity_gate"]="passed"
+                    trusted.append(item)
+            except Exception:
+                pass
+
+    # Prefer Amazon/exact handoff, then verified evidence sources, then other
+    # identity-gated candidates. Do not require four original files here:
+    # video_renderer.py creates additional views only from a verified source.
+    rank={"product_page":0,"amazon_creators_api":1,"amazon_direct":2,"amazon_asin_cdn":3,
+          "verified_web_product_page":4,"independent_bing_image":5}
+    trusted.sort(key=lambda x:(rank.get(str(x.get("provider") or ""),9),
+                               -max(int(x.get("width") or 0),int(x.get("height") or 0))))
+    selected=trusted[:5]
+    if not selected:
+        raise RuntimeError(f"VIDEO_IMAGE_RECOVERY_FAILED: no verified exact-product image survived validation for {product['asin']}")
+    try:
+        daily_ledger.attach_video_images(day=row.get("day"),asin=row["asin"],
+            images=[{"url":x["url"],"provider":"video_verified_exact_product"} for x in selected])
+    except Exception:
+        pass
+    log.info("Video verified image recovery asin=%s candidates=%s selected=%s providers=%s",
+             product["asin"],len(trusted),len(selected),sorted(set(str(x.get("provider") or "") for x in selected)))
+    return [x["url"] for x in selected], "verified_exact_product_recovery"
 
 def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=None):
     urls,image_source=_resolve_product_images(row)
