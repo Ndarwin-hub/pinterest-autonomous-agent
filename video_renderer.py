@@ -90,7 +90,7 @@ def render_video(image_urls, output_path, title="", music_path=None):
     with tempfile.TemporaryDirectory(prefix="video-render-") as td:
         images=download_and_validate(image_urls,td)
         scenes=[]
-        modes=["right","left","right","static","left"]
+        modes=["right","left","right","left","static"]
         for i,img in enumerate(images):
             scene=Path(td)/f"scene_{i}.mp4"
             _scene(img,scene,modes[i])
