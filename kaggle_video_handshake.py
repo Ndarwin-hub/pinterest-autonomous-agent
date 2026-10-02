@@ -20,7 +20,12 @@ def complete_run(run_id,status="COMPLETED",error=None):
 def get_run(run_id): init(); c=_conn(); r=_row(c,run_id); c.close(); return r
 
 def _derived_pair_run(day,pair_start):
-    c=_conn(); first=(int(pair_start)-1)*5+1; last=first+9; rows=c.execute("SELECT batch_index,slot,asin,status,claim_owner,claimed_at,updated_at,publication_json,last_error FROM video_jobs WHERE day=? AND slot BETWEEN ? AND ? AND claim_owner LIKE 'kaggle-%' ORDER BY updated_at DESC",(day,first,last)).fetchall(); c.close()
+    c=_conn()
+    # The video ledger is additive and may not have been touched yet.
+    c.execute("""CREATE TABLE IF NOT EXISTS video_jobs(day TEXT NOT NULL,batch_index INTEGER NOT NULL,slot INTEGER NOT NULL,asin TEXT NOT NULL,product_url TEXT NOT NULL,affiliate_url TEXT,title TEXT,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,claim_owner TEXT,claimed_at TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,publication_json TEXT,image_urls_json TEXT,image_meta_json TEXT,PRIMARY KEY(day,batch_index,slot))""")
+    first=(int(pair_start)-1)*5+1; last=first+9
+    rows=c.execute("SELECT batch_index,slot,asin,status,claim_owner,claimed_at,updated_at,publication_json,last_error FROM video_jobs WHERE day=? AND slot BETWEEN ? AND ? AND claim_owner LIKE 'kaggle-%' ORDER BY updated_at DESC",(day,first,last)).fetchall()
+    c.close()
     if not rows:return None
     owners=[str(r[4]).split("kaggle-",1)[1] for r in rows if str(r[4]).startswith("kaggle-")]; run_id=owners[0] if owners else None
     relevant=[r for r in rows if str(r[4])==f"kaggle-{run_id}"]
