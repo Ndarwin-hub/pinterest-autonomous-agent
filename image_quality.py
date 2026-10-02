@@ -466,19 +466,29 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                             except Exception: pass
                     if u.startswith("http") and "bing.com" not in u.lower() and u not in links:
                         links.append(u)
-            if not links:
-                for q in queries:
-                    try:
-                        dr=await client.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"Referer":"https://duckduckgo.com/"})
-                        if dr.status_code>=400: continue
-                        for u in re.findall(r"<a[^>]+class=[\"'][^\"']*result__a[^\"']*[\"'][^>]+href=[\"']([^\"']+)",dr.text,re.I):
-                            u=unquote(u)
-                            if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
+            # Keep both search engines: Bing result markup is volatile and
+            # a successful Bing response can still yield no usable product pages.
+            for q in queries:
+                try:
+                    dr=await client.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"Referer":"https://duckduckgo.com/"})
+                    if dr.status_code>=400: continue
+                    for u in re.findall(r"<a[^>]+class=[\"'][^\"']*result__a[^\"']*[\"'][^>]+href=[\"']([^\"']+)",dr.text,re.I):
+                        u=unquote(u)
+                        if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
+                    for u in re.findall(r"nuddg=([^&\"']+)",dr.text,re.I):
+                        u=unquote(u)
+                        if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
+                except Exception: pass
+            # Add a second ASIN-only query so retailer/device catalog pages that
+            # identify the exact product by ASIN are not missed by title queries.
+            if asin:
+                try:
+                    dr=await client.get("https://html.duckduckgo.com/html/",params={"q":f'"{asin}"'},headers={"Referer":"https://duckduckgo.com/"})
+                    if dr.status_code<400:
                         for u in re.findall(r"nuddg=([^&\"']+)",dr.text,re.I):
                             u=unquote(u)
-                            if u.startswith("http") and u not in links: links.append(u)
-                    except Exception: pass
-                    if links: break
+                            if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
+                except Exception: pass
             out=[]
             tokens=[t for t in re.findall(r"[a-z0-9][a-z0-9\\-]{3,}",name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
             for src in links[:12]:
