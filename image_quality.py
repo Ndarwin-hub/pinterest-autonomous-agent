@@ -408,17 +408,14 @@ async def _alternative_identity_ok(c:Dict[str,Any],product:Dict[str,Any])->bool:
 
 
 async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=12)->List[Dict[str,Any]]:
-    """Find exact-product retailer/manufacturer pages and extract their product images.
-
-    This is additive fallback evidence; legacy identity/quality gates still decide acceptance.
-    """
+    """Find exact-product retailer/manufacturer pages and extract product images."""
     name=str(product.get("name") or "").strip()
     asin=str(product.get("asin") or "").strip()
     brand=str(product.get("brand") or "").strip()
     if not name and not asin: return []
     queries=[]
-    if name: queries.append(' '.join(x for x in [f'"{name}"',brand,"official product"] if x))
-    if asin: queries.append(' '.join(x for x in [f'"{asin}"',f'"{name}"'] if x))
+    if name: queries.append(" ".join(x for x in [f'"{name}"',brand,"official product"] if x))
+    if asin: queries.append(" ".join(x for x in [f'"{asin}"',f'"{name}"'] if x))
     try:
         async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"}) as client:
             links=[]
@@ -426,53 +423,52 @@ async def search_verified_web_product_page_images(product:Dict[str,Any],num:int=
                 r=await client.get("https://www.bing.com/search",params={"q":q,"form":"QBLH"})
                 if r.status_code>=400: continue
                 html=r.text
-                for u in re.findall(r'<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)',html,re.I):
-                u=unquote(u)
-                # Bing now commonly wraps organic links in /ck/a redirect URLs.
-                # Decode the embedded a1<base64url> target before identity checks.
-                if "bing.com/ck/a" in u.lower():
-                    mm=re.search(r'[?&]u=a1([^&]+)',u,re.I)
-                    if mm:
-                        try:
-                            decoded=base64.urlsafe_b64decode(mm.group(1)+"===" ).decode("utf-8","ignore")
-                            if decoded.startswith("http"): u=decoded
-                        except Exception: pass
-                if u.startswith("http") and "bing.com" not in u.lower() and u not in links: links.append(u)
-            # Bing can return a shell with no parsed result links. Add DuckDuckGo HTML
-            # search as a second web-page discovery path; it remains only a candidate source.
+                for u in re.findall(r'<h2[^>]*>\\s*<a[^>]+href=["\\']([^"\\']+)',html,re.I):
+                    u=unquote(u)
+                    if "bing.com/ck/a" in u.lower():
+                        mm=re.search(r'[?&]u=a1([^&]+)',u,re.I)
+                        if mm:
+                            try:
+                                decoded=base64.urlsafe_b64decode(mm.group(1)+"===" ).decode("utf-8","ignore")
+                                if decoded.startswith("http"): u=decoded
+                            except Exception: pass
+                    if u.startswith("http") and "bing.com" not in u.lower() and u not in links:
+                        links.append(u)
             if not links:
-                try:
-                    dr=await client.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"Referer":"https://duckduckgo.com/"})
-                    if dr.status_code<400:
-                        for u in re.findall(r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)',dr.text,re.I):
+                for q in queries:
+                    try:
+                        dr=await client.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"Referer":"https://duckduckgo.com/"})
+                        if dr.status_code>=400: continue
+                        for u in re.findall(r'<a[^>]+class=["\\'][^"\\']*result__a[^"\\']*["\\'][^>]+href=["\\']([^"\\']+)',dr.text,re.I):
                             u=unquote(u)
                             if u.startswith("http") and "duckduckgo.com" not in u.lower() and u not in links: links.append(u)
-                        for u in re.findall(r'nuddg=([^&"\']+)',dr.text,re.I):
+                        for u in re.findall(r'nuddg=([^&"\\']+)',dr.text,re.I):
                             u=unquote(u)
                             if u.startswith("http") and u not in links: links.append(u)
-                except Exception: pass
+                    except Exception: pass
+                    if links: break
             out=[]
-            for src in links[:8]:
+            tokens=[t for t in re.findall(r'[a-z0-9][a-z0-9\\-]{3,}',name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
+            for src in links[:12]:
                 if any(x in src.lower() for x in ("pinterest.com","shutterstock.com","istockphoto.com","gettyimages.com")): continue
                 try:
                     page=await client.get(src)
                     if page.status_code>=400 or not page.text: continue
-                    page_html=page.text.replace('\\\\/','/').replace('\\\\u002F','/')
-                    evidence=re.sub(r'<[^>]+>',' ',page_html).lower()+" "+src.lower()
-                    if asin and asin.lower() not in evidence:
-                        tokens=[t for t in re.findall(r'[a-z0-9][a-z0-9\-]{3,}',name.lower()) if t not in {"with","from","this","that","product","official","amazon","new","pack","size","color","the","for","and"}]
-                        if sum(1 for t in tokens[:10] if t in evidence)<2: continue
+                    page_html=page.text.replace("\\\\/","/").replace("\\\\u002F","/")
+                    evidence=re.sub(r"<[^>]+>"," ",page_html).lower()+" "+src.lower()
+                    identity=(asin and asin.lower() in evidence) or (brand and brand.lower() in evidence and sum(1 for t in tokens[:10] if t in evidence)>=1) or sum(1 for t in tokens[:10] if t in evidence)>=2
+                    if not identity: continue
                     imgs=[]
-                    for u in re.findall(r'<meta[^>]+(?:property|name)=["\\\'](?:og:image|twitter:image)["\\\'][^>]+content=["\\\']([^"\\\']+)',page_html,re.I): imgs.append(u)
-                    for u in re.findall(r'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\'](?:og:image|twitter:image)["\\\']',page_html,re.I): imgs.append(u)
-                    for u in re.findall(r'"image"\s*:\s*"(https?://[^"\\]+)',page_html,re.I): imgs.append(u)
+                    imgs += re.findall(r'<meta[^>]+(?:property|name)=["\\'](?:og:image|twitter:image)["\\'][^>]+content=["\\']([^"\\']+)',page_html,re.I)
+                    imgs += re.findall(r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+(?:property|name)=["\\'](?:og:image|twitter:image)["\\']',page_html,re.I)
+                    imgs += re.findall(r'"image"\\s*:\\s*"(https?://[^"\\]+)',page_html,re.I)
                     for u in imgs:
-                        u=unquote(u).replace('\\\\/','/')
-                        if not u.startswith('http') or u in [x["url"] for x in out]: continue
+                        u=unquote(u).replace("\\\\/","/")
+                        if not u.startswith("http") or any(x.get("url")==u for x in out): continue
                         out.append({"url":u,"provider":"verified_web_product_page","source":src,"identity_evidence":re.sub(r"<[^>]+>"," ",page_html)[:200000],"license":"verified product page","original":True})
                         if len(out)>=num: return out
                 except Exception: continue
-            logger.info("Verified web product-page image search asin=%s pages=%s images=%s",asin[:20],len(links[:8]),len(out))
+            logger.info("Verified web product-page image search asin=%s pages=%s images=%s",asin[:20],len(links[:12]),len(out))
             return out
     except Exception as exc:
         logger.warning("Verified web product-page image search unavailable: %s",str(exc)[:220])
