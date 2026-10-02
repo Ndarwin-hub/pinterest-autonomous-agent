@@ -19,6 +19,7 @@ BLANK_UNIQUE_COLOR_THRESHOLD=24
 VISUAL_DUPLICATE_THRESHOLD=0.01
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
+_VALIDATED_URL_CACHE={}
 
 def inspect_image_bytes(raw: bytes, debug_url: str = "") -> Optional[Dict[str,Any]]:
     """Hard technical image-integrity validation; aesthetic quality remains separate."""
@@ -118,9 +119,23 @@ async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not content:
         logger.info("IMAGE_REJECT provider=%s reason=content_validation_failed url=%s",c.get("provider"),url[:220])
         return None
+    _VALIDATED_URL_CACHE[url]=raw
     x=dict(c); x.update(content)
     x.update(quality_gate="hard_integrity_passed",content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"])
     return x
+
+async def materialize_validated_url(url:str,path:str)->bool:
+    """Write the exact bytes already accepted by validation, avoiding a second CDN fetch."""
+    raw=_VALIDATED_URL_CACHE.get(url)
+    if raw is None:
+        raw=await _fetch_image_bytes(url)
+    if not raw or not inspect_image_bytes(raw,url):
+        return False
+    try:
+        with open(path,"wb") as f: f.write(raw)
+        return True
+    except Exception:
+        return False
 
 
 async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
