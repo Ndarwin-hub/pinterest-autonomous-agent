@@ -85,8 +85,18 @@ jobs:
             response=$(curl --fail --silent --show-error https://web-production-dae68.up.railway.app/video/fallback/status)
             echo "$response"
             if printf '%s' "$response" | grep -q '"status":"idle"'; then
-              echo "Fallback worker is idle; checking durable pair state."
-              exit 0
+              echo "Fallback worker is idle; explicitly starting the durable pair now."
+              body=$(python3 - <<'PY'
+              import json, os
+              print(json.dumps({"pair_start": int(os.environ["PAIR_START"])}))
+              PY
+              )
+              start_response=$(curl --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors \
+                -H "Authorization: Bearer $ID_TOKEN" \
+                -H 'Content-Type: application/json' \
+                -X POST 'https://web-production-dae68.up.railway.app/video/pair-recovery' \
+                -d "$body")
+              echo "$start_response"
             fi
             sleep 30
           done
