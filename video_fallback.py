@@ -89,6 +89,15 @@ async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None
     if not rows:log.warning("Video pair %s: batch %s has no durable Pinterest video handoff; pair will not advance",pair_start,batch);return False
     processed=0; failures=0
     for row in rows[:BATCH_SIZE]:
+        # A prior Kaggle claim can leave the durable row in "running" while
+        # the actual output was never handed off. Railway owns the recovery
+        # after the explicit pair reset, so reclaim stale running rows here.
+        if str(row.get("status") or "").lower()=="running":
+            try:
+                daily_ledger.mark_video_job(day,batch,row["slot"],"queued",owner=owner,error="railway_recovery_reclaim")
+                row["status"]="queued"
+            except Exception:
+                pass
         if _terminal(row):
             if str(row.get("status") or "").lower()=="completed": processed+=1
             else: failures+=1
