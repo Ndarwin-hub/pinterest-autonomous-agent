@@ -5,6 +5,14 @@ from urllib.parse import quote
 import requests
 import httpx
 
+REAL_MUSIC_TRACKS = [
+    ("pianoflage", "Roy Bargy - Pianoflage (1922)", "https://commons.wikimedia.org/wiki/Special:Redirect/file/Roy_Bargy_-_Pianoflage_(1922).ogg"),
+    ("wishbone_rag", "Charlotte Blake - The Wish Bone Rag (1909)", "https://commons.wikimedia.org/wiki/Special:Redirect/file/Charlotte_Blake_-_The_Wish_Bone_Rag_(1909).ogg"),
+    ("kinklets", "Arthur A. Marshall - Kinklets Ragtime Two Step (1906)", "https://commons.wikimedia.org/wiki/Special:Redirect/file/Arthur_A._Marshall_-_Kinklets_Ragtime_Two_Step_(1906).ogg"),
+    ("hula_hula", "Irving Berlin - That Hula Hula (1915)", "https://commons.wikimedia.org/wiki/Special:Redirect/file/Irving_Berlin_-_That_Hula_Hula_(1915).ogg"),
+    ("jazz_band_ball", "U.S. Coast Guard Band - At the Jazz Band Ball", "https://commons.wikimedia.org/wiki/Special:Redirect/file/At_the_Jazz_Band_Ball_-_U.S._Coast_Guard_Band.ogg"),
+]
+
 WIDTH, HEIGHT, FPS = 1080, 1920, 30
 SCENE_SECONDS = 5
 MIN_IMAGE_SIDE = 500
@@ -69,6 +77,20 @@ def download_and_validate(urls, workdir):
         except Exception as exc:
             log.warning("Video local image fast-path failed path=%s: %s",str(url),str(exc)[:240])
     if len(selected)>=4:
+        if len(selected)==4:
+            # Keep the fifth scene product-only: derive it from the fourth exact
+            # product image rather than introducing a brand/search substitute.
+            try:
+                src=selected[3]
+                im=Image.open(src).convert("RGB")
+                w,h=im.size
+                side=min(w,h)
+                crop=im.crop(((w-side)//2,(h-side)//2,(w+side)//2,(h+side)//2))
+                p=Path(workdir)/"image_5_static.jpg"
+                crop.save(p,format="JPEG",quality=95,optimize=True)
+                selected.append(p)
+            except Exception:
+                pass
         return selected[:5]
     for url in urls:
         if not url:
@@ -210,7 +232,8 @@ def _scene(image, out, mode):
         vf=(f"scale={render_w}:{render_h}:force_original_aspect_ratio=increase,"
             f"crop={render_w}:{render_h},"
             f"zoompan=z='min(zoom+0.0008,1.12)':x='{x}':y='(ih-ih/zoom)/2':"
-            f"d={SCENE_SECONDS*FPS}:s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1")
+            f"d={SCENE_SECONDS*FPS}:s={WIDTH}x{HEIGHT}:fps={FPS},"
+            f"rotate='{0.022 if mode=="right" else -0.022}*sin(2*PI*t/{SCENE_SECONDS})':fillcolor=black,setsar=1")
         frames=SCENE_SECONDS*FPS
     _run(["ffmpeg","-y","-threads","1","-loop","1","-i",str(image),
           "-vf",vf,"-frames:v",str(frames),"-c:v","libx264","-preset","ultrafast","-crf","28","-threads","1",
@@ -261,14 +284,37 @@ def affiliate_url(asin, tag=AMAZON_TAG):
     return f"https://www.amazon.com/dp/{quote(str(asin).upper(), safe='')}?tag={quote(tag, safe='')}"
 
 def make_music(track_id, directory):
+    """Download a real instrumental recording and return a local audio path.
+    Track choice rotates deterministically across the 5-track public-domain set.
+    We never synthesize beeps/tones as the background soundtrack.
+    """
     directory=Path(directory); directory.mkdir(parents=True,exist_ok=True)
-    out=directory/f"{track_id}.wav"
-    if out.exists() and out.stat().st_size>10000:
-        return str(out)
-    idx=int(''.join(ch for ch in str(track_id) if ch.isdigit()) or 1)
-    base=160+idx*17
-    expr=f"0.12*sin(2*PI*{base}*t)+0.08*sin(2*PI*{base*1.25:.2f}*t)+0.06*sin(2*PI*{base*1.5:.2f}*t)"
-    _run(["ffmpeg","-y","-f","lavfi","-i",f"aevalsrc={expr}:s=44100:d=30",
-          "-af","lowpass=f=6500,afade=t=in:st=0:d=1,afade=t=out:st=27:d=3",
-          "-c:a","pcm_s16le",str(out)])
-    return str(out)
+    try:
+        idx=int(''.join(ch for ch in str(track_id) if ch.isdigit()) or 1) % len(REAL_MUSIC_TRACKS)
+    except Exception:
+        idx=0
+    for offset in range(len(REAL_MUSIC_TRACKS)):
+        key,title,url=REAL_MUSIC_TRACKS[(idx+offset)%len(REAL_MUSIC_TRACKS)]
+        source=directory/f"{key}.ogg"
+        if not source.exists() or source.stat().st_size<50000:
+            try:
+                r=requests.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/VideoMusic"},timeout=90,allow_redirects=True)
+                r.raise_for_status()
+                if len(r.content)<50000: raise RuntimeError("music file too small")
+                source.write_bytes(r.content)
+            except Exception:
+                source.unlink(missing_ok=True)
+                continue
+        # Validate that this is actual decodable audio and long enough for a
+        # 15-25s product video. ffprobe also prevents HTML/error pages from
+        # being accepted as a music asset.
+        try:
+            probe=json.loads(_run(["ffprobe","-v","error","-show_entries","format=duration",
+                                   "-of","json",str(source)]))
+            duration=float((probe.get("format") or {}).get("duration") or 0)
+            if duration<20: raise RuntimeError("music duration too short")
+            log.info("Using real instrumental track: %s",title)
+            return str(source)
+        except Exception:
+            source.unlink(missing_ok=True)
+    raise RuntimeError("REAL_MUSIC_DOWNLOAD_FAILED:no verified instrumental track available")
