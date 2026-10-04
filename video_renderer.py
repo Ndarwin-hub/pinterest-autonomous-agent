@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import hashlib, json, os, shutil, subprocess, tempfile
 from pathlib import Path
 from urllib.parse import quote
@@ -12,6 +13,8 @@ REAL_MUSIC_TRACKS = [
     ("hula_hula", "Irving Berlin - That Hula Hula (1915)", "https://commons.wikimedia.org/wiki/Special:Redirect/file/Irving_Berlin_-_That_Hula_Hula_(1915).ogg"),
     ("jazz_band_ball", "U.S. Coast Guard Band - At the Jazz Band Ball", "https://commons.wikimedia.org/wiki/Special:Redirect/file/At_the_Jazz_Band_Ball_-_U.S._Coast_Guard_Band.ogg"),
 ]
+
+log=logging.getLogger(__name__)
 
 WIDTH, HEIGHT, FPS = 1080, 1920, 30
 SCENE_SECONDS = 5
@@ -229,11 +232,12 @@ def _scene(image, out, mode):
             x="(iw-iw/zoom)*0.30"
         else:
             x="(iw-iw/zoom)/2"
+        rotation = 0.022 if mode=="right" else -0.022
         vf=(f"scale={render_w}:{render_h}:force_original_aspect_ratio=increase,"
             f"crop={render_w}:{render_h},"
             f"zoompan=z='min(zoom+0.0008,1.12)':x='{x}':y='(ih-ih/zoom)/2':"
             f"d={SCENE_SECONDS*FPS}:s={WIDTH}x{HEIGHT}:fps={FPS},"
-            f"rotate='{0.022 if mode=="right" else -0.022}*sin(2*PI*t/{SCENE_SECONDS})':fillcolor=black,setsar=1")
+            f"rotate='{rotation}*sin(2*PI*t/{SCENE_SECONDS})':fillcolor=black,setsar=1")
         frames=SCENE_SECONDS*FPS
     _run(["ffmpeg","-y","-threads","1","-loop","1","-i",str(image),
           "-vf",vf,"-frames:v",str(frames),"-c:v","libx264","-preset","ultrafast","-crf","28","-threads","1",
