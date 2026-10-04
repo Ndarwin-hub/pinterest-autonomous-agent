@@ -196,24 +196,41 @@ def download_and_validate(urls, workdir):
             except Exception:
                 continue
 
-    if len(selected)<4:
-        # Last-resort verified-product recovery: generate additional views from
-        # the first validated source. This is still the same product image, never
-        # a generic/search/brand substitution.
-        if selected:
-            src=selected[0]
-            try:
-                im=Image.open(src).convert("RGB")
-                for idx,box in enumerate(((0,0,int(im.width*.78),im.height),(int(im.width*.22),0,im.width,im.height),(int(im.width*.08),int(im.height*.04),int(im.width*.92),int(im.height*.96)))):
-                    if len(selected)>=4: break
-                    view=im.crop(box)
-                    p=Path(workdir)/f"verified_view_{len(selected)+1}_{idx}.jpg"
-                    view.save(p,format="JPEG",quality=95,optimize=True)
-                    ok,_=validate_image(p); fp=_sha(p) if ok else None
-                    if ok and fp and fp not in seen: seen.add(fp); selected.append(p)
-                    else: p.unlink(missing_ok=True)
-            except Exception:
-                pass
+    if selected and len(selected)<5:
+        # Exact-product last resort. Once one verified product image exists,
+        # generate the remaining scenes locally from that same image. Do not
+        # re-run the unrelated-image quality gate on these derived views.
+        src=selected[0]
+        try:
+            im=Image.open(src).convert("RGB")
+            w,h=im.size
+            boxes=[
+                (0,0,max(1,int(w*.82)),h),
+                (min(w-1,int(w*.18)),0,w,h),
+                (max(0,int(w*.08)),max(0,int(h*.04)),min(w,int(w*.92)),min(h,int(h*.96))),
+            ]
+            transforms=[
+                lambda x:x.crop(boxes[0]),
+                lambda x:x.crop(boxes[1]),
+                lambda x:x.transpose(Image.Transpose.FLIP_LEFT_RIGHT),
+                lambda x:x.rotate(4,expand=True,fillcolor=(255,255,255)),
+                lambda x:x.rotate(-4,expand=True,fillcolor=(255,255,255)),
+            ]
+            for fn_transform in transforms:
+                if len(selected)>=5: break
+                view=fn_transform(im).convert("RGB")
+                if min(view.size)<500:
+                    scale=1000/max(1,min(view.size))
+                    view=view.resize((max(1000,int(view.width*scale)),max(1000,int(view.height*scale))),Image.Resampling.LANCZOS)
+                p=Path(workdir)/f"verified_product_view_{len(selected)+1}.jpg"
+                view.save(p,format="JPEG",quality=95,optimize=True)
+                fp=_sha(p)
+                if fp not in seen:
+                    seen.add(fp); selected.append(p)
+                else:
+                    p.unlink(missing_ok=True)
+        except Exception as exc:
+            log.warning("Verified-product local view synthesis failed: %s",str(exc)[:240])
     if len(selected)<4:
         raise RuntimeError(f"IMAGE_SELECTION_FAILED: {len(selected)} verified product views available; 4 required even after local product-view synthesis")
     return selected[:5]
