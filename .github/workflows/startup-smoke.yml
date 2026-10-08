@@ -1,0 +1,39 @@
+name: Railway startup smoke
+on:
+  push:
+    branches: [main]
+    paths:
+      - "main.py"
+      - "start.sh"
+      - "requirements.txt"
+      - "*.py"
+      - ".github/workflows/startup-smoke.yml"
+jobs:
+  startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile main.py
+      - name: Start service
+        env:
+          PORT: "8080"
+          DATA_DIR: "/tmp/pinterest-data"
+          AMAZON_SCHEDULER_ENABLED: "false"
+          AMAZON_DISCOVERY_DISABLED: "true"
+        run: |
+          mkdir -p /tmp/pinterest-data
+          (python -m uvicorn main:app --host 127.0.0.1 --port 8080 > /tmp/pinterest-startup.log 2>&1 & echo $! > /tmp/pid)
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/health >/tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/pinterest-startup.log
+          exit 1
