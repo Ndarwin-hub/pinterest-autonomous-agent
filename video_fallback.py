@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, logging, os, shutil, uuid
+import asyncio, json, logging, os, re, shutil, uuid
 from pathlib import Path
 from daily_ledger import ledger as daily_ledger, BATCH_SIZE
 from video_renderer import render_video, affiliate_url, make_music
@@ -243,6 +243,7 @@ def _resolve_product_images(row, materialize_dir=None):
         if item not in selected: selected.append(item)
         if len(selected)>=20: break
     if not selected:
+        output_urls=[]
         # Last exact-product fallback: use Bing's own thumbnail only when the
         # search result metadata passes the same ASIN/title identity gate.
         # This is intentionally lower-resolution and is normalized locally; it
