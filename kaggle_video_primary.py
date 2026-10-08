@@ -2,11 +2,23 @@ import os, json, time, hashlib, mimetypes, subprocess, shutil, requests
 from pathlib import Path
 
 RAILWAY = os.getenv("RAILWAY_VIDEO_BASE_URL","https://web-production-dae68.up.railway.app").rstrip("/")
-VIDEO_SECRET = os.getenv("VIDEO_BRIDGE_SECRET","").strip()
-COMPOSIO_KEY = os.getenv("COMPOSIO_API_KEY","").strip()
-COMPOSIO_ENTITY = os.getenv("COMPOSIO_ENTITY_ID","").strip()
-WOOP_PROJECT = os.getenv("WOOP_SOCIAL_PROJECT_ID","pr_2gj5wkt0wr9E")
+def secret(name, default=""):
+    value=os.getenv(name,"").strip()
+    if value:
+        return value
+    try:
+        from kaggle_secrets import UserSecretsClient
+        value=UserSecretsClient().get_secret(name)
+        return (value or "").strip()
+    except Exception:
+        return default
+
+VIDEO_SECRET = secret("VIDEO_BRIDGE_SECRET")
+COMPOSIO_KEY = secret("COMPOSIO_API_KEY")
+COMPOSIO_ENTITY = secret("COMPOSIO_ENTITY_ID")
+WOOP_PROJECT = secret("WOOP_SOCIAL_PROJECT_ID","pr_2gj5wkt0wr9E")
 PAIR_START = int(os.getenv("KAGGLE_VIDEO_PAIR_START","1"))
+RUN_ID = os.getenv("KAGGLE_VIDEO_RUN_ID","").strip() or f"kaggle-unknown-{int(time.time())}"
 WORK = Path("/kaggle/working/video_primary")
 WORK.mkdir(parents=True,exist_ok=True)
 
@@ -88,43 +100,11 @@ def normalize_images(row,folder):
     if not selected:
         raise RuntimeError("VIDEO_IMAGE_HANDOFF_MISSING:no_verified_exact_product_image")
 
-    # Generate enough distinct scene sources from the exact verified product
-    # image(s). These are local derivatives, not substitute web images.
-    originals=list(selected)
-    variants=[
-        ("crop_left",lambda im: im.crop((0,0,max(1,int(im.width*0.90)),im.height))),
-        ("crop_right",lambda im: im.crop((min(im.width-1,int(im.width*0.10)),0,im.width,im.height))),
-        ("flip",lambda im: im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)),
-        ("rotate_left",lambda im: im.rotate(-3,expand=True,fillcolor=(0,0,0))),
-        ("rotate_right",lambda im: im.rotate(3,expand=True,fillcolor=(0,0,0))),
-        ("contrast",lambda im: ImageEnhance.Contrast(im).enhance(1.06)),
-    ]
-    v=0
+    # Five scenes do not require five source images. Reuse verified exact-product
+    # bytes when Amazon exposes fewer views; each scene has independent motion.
+    # Never mirror/crop/rotate the source here because that can alter logos/text.
     while len(selected)<5:
-        name,transform=variants[v % len(variants)]
-        src=originals[v % len(originals)]
-        v+=1
-        try:
-            with Image.open(src) as im:
-                out_im=transform(im.convert("RGB"))
-                p=folder/f"derived_{len(selected)+1}_{name}.jpg"
-                out_im.save(p,"JPEG",quality=95,optimize=True)
-            fp=_unique_hash(p)
-            if fp not in seen:
-                seen.add(fp); selected.append(p)
-            else:
-                p.unlink(missing_ok=True)
-            if v>20: break
-        except Exception:
-            if v>20: break
-
-    if len(selected)<5:
-        # Deterministic final fallback: duplicate exact product source as a
-        # different scene source. Motion is created by the renderer, so this
-        # remains product-faithful and does not import unrelated imagery.
-        while len(selected)<5:
-            selected.append(selected[0])
-
+        selected.append(selected[0])
     return selected[:5]
 
 def _scene_filter(index):
@@ -289,7 +269,7 @@ def publish(video,row):
     asin=str(row.get("asin") or "").upper()
     caption=(
         f"{str(row.get('title') or asin)[:150]}\\n"
-        f"Shop now: https://www.amazon.com/dp/{asin}?tag=desiredplus-20\\n\\n"
+        f"Shop now: https://www.amazon.com/dp/{asin}?tag=desiredplus-20\\n[video-run:{RUN_ID}][asin:{asin}][batch:{batch}]\\n\\n"
         "As an Amazon Associate I earn from qualifying purchases."
     )
     result=composio(
@@ -314,7 +294,9 @@ def publish(video,row):
     return {"media_id":media_id,"platforms":statuses}
 
 def main():
-    if not VIDEO_SECRET: raise RuntimeError("VIDEO_BRIDGE_SECRET_MISSING")
+    if not VIDEO_SECRET or not COMPOSIO_KEY or not COMPOSIO_ENTITY:
+        missing=[name for name,value in {"VIDEO_BRIDGE_SECRET":VIDEO_SECRET,"COMPOSIO_API_KEY":COMPOSIO_KEY,"COMPOSIO_ENTITY_ID":COMPOSIO_ENTITY}.items() if not value]
+        raise RuntimeError("KAGGLE_SECRETS_MISSING:"+",".join(missing))
 
     jobs=[]
     for batch in (PAIR_START,PAIR_START+1):
@@ -330,7 +312,7 @@ def main():
         c=api("POST",f"/video/job/{batch}/{slot}/claim")
         if not c.get("claimed"):
             continue
-        owner=c.get("owner") or f"kaggle-primary-{batch}-{slot}"
+        owner=c.get("owner") or f"kaggle-{RUN_ID}"
         root=WORK/f"b{batch}_s{slot}"
         root.mkdir(parents=True,exist_ok=True)
 
