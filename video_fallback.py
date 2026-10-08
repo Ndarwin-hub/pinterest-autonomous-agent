@@ -35,6 +35,10 @@ daily_ledger.claim_video_job=_claim_video_job_with_run;daily_ledger.mark_video_j
 def _pair_for(start):return (start,start+1)
 def _next_pointer():return int(daily_ledger.get_video_pair_state().get("next_pair_start") or 1)
 def _kaggle_decision(day,start):
+    # Hermit mode also blocks the Kaggle handshake/auto-launch from Railway.
+    # No video-generation orchestration occurs at all while disabled.
+    if not _railway_video_rendering_enabled():
+        return "disabled",None
     run=get_pair_run(day,start)
     if not run:return "missing",None
     status=str(run.get("status") or "").upper()
@@ -44,6 +48,8 @@ def _kaggle_decision(day,start):
     return "unknown",run
 
 async def on_pinterest_batch_start(day,batch):
+    if not _railway_video_rendering_enabled():
+        return {"status":"railway_video_hermit_mode"}
     start=_next_pointer()
     if start not in PAIR_STARTS or int(batch)!=start+1:return {"status":"ignored","reason":"not_current_video_pair","next_pair_start":start}
     key=f"{day}:{start}"
@@ -51,8 +57,6 @@ async def on_pinterest_batch_start(day,batch):
     decision,run=_kaggle_decision(day,start)
     # Hermit mode: Kaggle may remain the primary external renderer, but Railway
     # must not execute, resume, claim, or publish any video-generation fallback.
-    if not _railway_video_rendering_enabled() and decision not in {"completed","running","unknown"}:
-        return {"status":"railway_video_hermit_mode","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
     if decision=="completed":
         internal=pair_product_statuses(day,start,run.get("run_id"));external=verify_run(run.get("run_id"))
         if internal.get("complete") and external.get("available") and external.get("complete"):
@@ -63,6 +67,7 @@ async def on_pinterest_batch_start(day,batch):
         task=asyncio.create_task(_run_pair(day,start,run.get("run_id")));ACTIVE[key]=task;return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id"),"verification":{"internal":internal,"composio":external}}
     if decision=="running":return {"status":"kaggle_running","pair":_pair_for(start),"run_id":run.get("run_id")}
     if decision=="unknown":return {"status":"kaggle_status_unknown","pair":_pair_for(start)}
+    if decision=="disabled":return {"status":"railway_video_hermit_mode"}
     if not _railway_video_rendering_enabled():
         return {"status":"railway_video_hermit_mode","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
     task=asyncio.create_task(_run_pair(day,start,run.get("run_id") if run else None));ACTIVE[key]=task;return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
@@ -458,6 +463,8 @@ def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=
         shutil.rmtree(root,ignore_errors=True)
 
 def pair_status(day=None):
+    if not _railway_video_rendering_enabled():
+        return {"status":"railway_video_hermit_mode"}
     # The pair state is durable, but ACTIVE is intentionally in-memory. Railway
     # restarts therefore used to leave GitHub monitoring a pair whose asyncio task
     # had vanished. Re-arm a persisted running/incomplete pair from the status
