@@ -101,7 +101,7 @@ jobs:
           import os
           pair_start=int(os.environ["PAIR_START"])
           run_id=os.environ["RUN_ID"]
-          config=f"import os\\nos.environ['KAGGLE_VIDEO_PAIR_START']='{pair_start}'\\nos.environ['KAGGLE_VIDEO_RUN_ID']={run_id!r}\\n"
+          config=f"import os\nos.environ['KAGGLE_VIDEO_PAIR_START']='{pair_start}'\nos.environ['KAGGLE_VIDEO_RUN_ID']={run_id!r}\n"
           nb=nbformat.v4.new_notebook()
           nb.cells=[
               nbformat.v4.new_code_cell(config),
