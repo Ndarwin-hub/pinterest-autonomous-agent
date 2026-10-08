@@ -306,7 +306,7 @@ def main():
     for row in jobs[:10]:
         batch=int(row.get("batch") or 0)
         slot=int(row.get("slot") or 0)
-        if not batch or not slot or str(row.get("status") or "").lower() in ("completed","failed"):
+        if not batch or not slot or str(row.get("status") or "").lower() == "completed":
             continue
 
         c=api("POST",f"/video/job/{batch}/{slot}/claim")
@@ -344,6 +344,16 @@ def main():
         finally:
             shutil.rmtree(root,ignore_errors=True)
 
-    print(json.dumps({"pair_start":PAIR_START,"videos_completed":completed,"target":10}))
+    # Do not report a partially processed pair as successful.
+    final_jobs=[]
+    for batch in (PAIR_START,PAIR_START+1):
+        final_jobs.extend(api("POST","/video/batch",json={"batch":batch,"fallback":False}).get("jobs") or [])
+    if len(final_jobs) != 10:
+        raise RuntimeError(f"VIDEO_PAIR_INCOMPLETE:expected_10_jobs_got_{len(final_jobs)}")
+    bad=[(j.get("batch"),j.get("slot"),j.get("asin"),j.get("status")) for j in final_jobs
+         if str(j.get("status") or "").lower() != "completed"]
+    if bad:
+        raise RuntimeError("VIDEO_PAIR_INCOMPLETE:"+json.dumps(bad)[:1800])
+    print(json.dumps({"pair_start":PAIR_START,"videos_completed":completed,"target":10,"terminal_jobs":10}))
 
 main()
