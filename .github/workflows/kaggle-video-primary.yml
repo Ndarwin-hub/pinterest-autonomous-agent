@@ -95,12 +95,21 @@ jobs:
           root=Path("/tmp/kaggle-video")
           nbs=list(root.glob("*.ipynb"))
           if not nbs: raise SystemExit("No Kaggle notebook found")
-          nb=nbformat.v4.new_notebook()
-          nb.cells=[nbformat.v4.new_code_cell(src)]
           meta=json.loads((root/"kernel-metadata.json").read_text())
+          # Inject only non-secret run parameters into the Kaggle notebook. Kaggle
+          # does not inherit GitHub Actions runner environment variables.
+          import os
+          pair_start=int(os.environ["PAIR_START"])
+          run_id=os.environ["RUN_ID"]
+          config=f"import os\\nos.environ['KAGGLE_VIDEO_PAIR_START']='{pair_start}'\\nos.environ['KAGGLE_VIDEO_RUN_ID']={run_id!r}\\n"
+          nb=nbformat.v4.new_notebook()
+          nb.cells=[
+              nbformat.v4.new_code_cell(config),
+              nbformat.v4.new_code_cell(src)
+          ]
           nb.metadata=meta.get("metadata",{}) if isinstance(meta,dict) else {}
           nbformat.write(nb,nbs[0])
-          print("Installed deterministic real-product video engine")
+          print(f"Installed deterministic real-product video engine pair={pair_start} run_id={run_id}")
           PY
 
       - name: Push and execute Kaggle kernel
