@@ -8,6 +8,15 @@ from kaggle_video_handshake import get_pair_run, run_is_stale, pair_product_stat
 from composio_video_verify import verify_run
 
 log=logging.getLogger(__name__)
+
+# Railway video generation is intentionally in hermit mode by default.
+# The code remains installed for a future paid-plan activation, but NO Railway
+# video task may be scheduled, resumed, claimed, rendered, or published while
+# this flag is false. Read the environment at call time so activation later is
+# configuration-only; no source rebuild is required.
+def _railway_video_rendering_enabled():
+    return str(os.getenv("RAILWAY_VIDEO_RENDERING_ENABLED", "false")).strip().lower() in {"1","true","yes","on"}
+
 PAIR_STARTS=(1,3,5,7,9);PLATFORMS=("facebook","instagram","youtube","x","tiktok");ACTIVE={};SINGLE_ACTIVE=set()
 _ORIGINAL_CLAIM=daily_ledger.claim_video_job;_ORIGINAL_MARK=daily_ledger.mark_video_job
 
@@ -40,19 +49,29 @@ async def on_pinterest_batch_start(day,batch):
     key=f"{day}:{start}"
     if ACTIVE.get(key):return {"status":"already_active","pair":_pair_for(start)}
     decision,run=_kaggle_decision(day,start)
+    # Hermit mode: Kaggle may remain the primary external renderer, but Railway
+    # must not execute, resume, claim, or publish any video-generation fallback.
+    if not _railway_video_rendering_enabled() and decision not in {"completed","running","unknown"}:
+        return {"status":"railway_video_hermit_mode","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
     if decision=="completed":
         internal=pair_product_statuses(day,start,run.get("run_id"));external=verify_run(run.get("run_id"))
         if internal.get("complete") and external.get("available") and external.get("complete"):
             daily_ledger.advance_video_pair(start,day,reason="kaggle_completed_composio_verified");return {"status":"kaggle_completed_verified","pair":_pair_for(start),"verification":{"internal":internal,"composio":external}}
         if not external.get("available"):return {"status":"kaggle_completed_unverified","pair":_pair_for(start),"verification":{"internal":internal,"composio":external}}
+        if not _railway_video_rendering_enabled():
+            return {"status":"railway_video_hermit_mode","pair":_pair_for(start),"kaggle_run_id":run.get("run_id"),"verification":{"internal":internal,"composio":external}}
         task=asyncio.create_task(_run_pair(day,start,run.get("run_id")));ACTIVE[key]=task;return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id"),"verification":{"internal":internal,"composio":external}}
     if decision=="running":return {"status":"kaggle_running","pair":_pair_for(start),"run_id":run.get("run_id")}
     if decision=="unknown":return {"status":"kaggle_status_unknown","pair":_pair_for(start)}
+    if not _railway_video_rendering_enabled():
+        return {"status":"railway_video_hermit_mode","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
     task=asyncio.create_task(_run_pair(day,start,run.get("run_id") if run else None));ACTIVE[key]=task;return {"status":"railway_fallback_started","pair":_pair_for(start),"kaggle_run_id":run.get("run_id") if run else None}
 
 async def on_kaggle_job_failure(day,batch,slot,error=None):
     """Take over exactly one failed Kaggle video job; never re-run successful Kaggle jobs."""
     key=f"{day}:{int(batch)}:{int(slot)}"
+    if not _railway_video_rendering_enabled():
+        return {"status":"railway_video_hermit_mode","batch":int(batch),"slot":int(slot)}
     if key in SINGLE_ACTIVE:return {"status":"already_active","batch":int(batch),"slot":int(slot)}
     rows=daily_ledger.video_batch(day,int(batch))
     row=next((r for r in rows if int(r.get("slot") or 0)==int(slot)),None)
@@ -75,6 +94,9 @@ async def on_kaggle_job_failure(day,batch,slot,error=None):
         SINGLE_ACTIVE.discard(key)
 
 async def _run_pair(day,start,kaggle_run_id=None):
+    if not _railway_video_rendering_enabled():
+        log.info("Railway video hermit mode: refusing to run pair day=%s pair=%s",day,start)
+        return
     key=f"{day}:{start}";owner=f"railway-video-{start}-{uuid.uuid4().hex[:8]}"
     try:
         daily_ledger.start_video_pair(day,start,owner);external=verify_run(kaggle_run_id) if kaggle_run_id else {"available":False,"products":{}};results=[await _run_batch(day,start,batch,owner,kaggle_run_id,external) for batch in _pair_for(start)]
@@ -85,6 +107,9 @@ async def _run_pair(day,start,kaggle_run_id=None):
 
 def _terminal(row):return str(row.get("status") or "").lower() == "completed"
 async def _run_batch(day,pair_start,batch,owner,kaggle_run_id=None,external=None):
+    if not _railway_video_rendering_enabled():
+        log.info("Railway video hermit mode: refusing batch day=%s pair=%s batch=%s",day,pair_start,batch)
+        return False
     rows=daily_ledger.video_batch(day,batch)
     if not rows:log.warning("Video pair %s: batch %s has no durable Pinterest video handoff; pair will not advance",pair_start,batch);return False
     processed=0; failures=0
@@ -387,6 +412,10 @@ def _resolve_product_images(row, materialize_dir=None):
     return output_urls, "verified_exact_product_recovery"
 
 def _process_product(day,pair_start,batch,row,owner,kaggle_run_id=None,external=None):
+    # Final hard-stop: even an accidental/internal caller cannot consume Railway
+    # CPU/RAM for rendering or publishing while hermit mode is active.
+    if not _railway_video_rendering_enabled():
+        raise RuntimeError("RAILWAY_VIDEO_RENDERING_DISABLED_HERMIT_MODE")
     root=Path(os.getenv("VIDEO_WORK_DIR","/data/video-runs"))/day/f"batch_{batch}"/f"slot_{row['slot']}"
     root.mkdir(parents=True,exist_ok=True)
     output=root/f"{row['asin']}.mp4"
@@ -438,7 +467,7 @@ def pair_status(day=None):
     start=int(state.get("next_pair_start") or 1)
     key=f"{day}:{start}"
     status=str(state.get("status") or "").lower()
-    if start in PAIR_STARTS and status in {"running","incomplete"}:
+    if start in PAIR_STARTS and status in {"running","incomplete"} and _railway_video_rendering_enabled():
         task=ACTIVE.get(key)
         if task is not None and task.done():
             ACTIVE.pop(key,None)
