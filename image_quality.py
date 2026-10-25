@@ -1,6 +1,7 @@
 """Fail-closed visual image validation and selection shared by every publication path."""
 from __future__ import annotations
 import asyncio, io, logging, os, re, math, hashlib, json, base64
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from PIL import Image, ImageFile
@@ -14,12 +15,49 @@ MIN_SCORE=85
 MAX_CANDIDATES_PER_PIN=12
 MAX_IMAGE_BYTES_TO_INSPECT=12*1024*1024
 MIN_IMAGE_BYTES_TO_INSPECT=512
+# Guard decoded pixel buffers as well as compressed download size.
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: Optional[int] = None) -> int:
+    """Parse tunables defensively so a bad optional env value cannot crash startup."""
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s; using safe default %s", name, default)
+        value = default
+    value = max(minimum, value)
+    return min(maximum, value) if maximum is not None else value
+
+MAX_IMAGE_PIXELS_TO_INSPECT=_bounded_int_env("IMAGE_QUALITY_MAX_PIXELS", 24000000, 1)
+# Keep validated source bytes only in a small process-local LRU cache.
+VALIDATED_CACHE_MAX_BYTES=_bounded_int_env("VALIDATED_IMAGE_CACHE_MAX_BYTES", 32*1024*1024, 0)
+VALIDATION_CONCURRENCY=_bounded_int_env("IMAGE_VALIDATION_CONCURRENCY", 3, 1, 6)
 BLANK_STDDEV_THRESHOLD=4.0
 BLANK_UNIQUE_COLOR_THRESHOLD=24
 VISUAL_DUPLICATE_THRESHOLD=0.01
 PEXELS_API_KEY=os.getenv("PEXELS_API_KEY","").strip()
 COMPOSIO_API_KEY=os.getenv("COMPOSIO_API_KEY","").strip()
-_VALIDATED_URL_CACHE={}
+_VALIDATED_URL_CACHE=OrderedDict()
+_VALIDATED_URL_CACHE_BYTES=0
+
+def _cache_validated_bytes(url: str, raw: bytes) -> None:
+    """Retain validated image bytes under a strict process-wide byte budget."""
+    global _VALIDATED_URL_CACHE_BYTES
+    previous = _VALIDATED_URL_CACHE.pop(url, None)
+    if previous is not None:
+        _VALIDATED_URL_CACHE_BYTES -= len(previous)
+    if VALIDATED_CACHE_MAX_BYTES <= 0 or len(raw) > VALIDATED_CACHE_MAX_BYTES:
+        return
+    _VALIDATED_URL_CACHE[url] = raw
+    _VALIDATED_URL_CACHE_BYTES += len(raw)
+    while _VALIDATED_URL_CACHE and _VALIDATED_URL_CACHE_BYTES > VALIDATED_CACHE_MAX_BYTES:
+        _, evicted = _VALIDATED_URL_CACHE.popitem(last=False)
+        _VALIDATED_URL_CACHE_BYTES -= len(evicted)
+
+def _get_cached_validated_bytes(url: str) -> Optional[bytes]:
+    raw = _VALIDATED_URL_CACHE.pop(url, None)
+    if raw is not None:
+        _VALIDATED_URL_CACHE[url] = raw
+    return raw
+
 
 def inspect_image_bytes(raw: bytes, debug_url: str = "") -> Optional[Dict[str,Any]]:
     """Hard technical image-integrity validation; aesthetic quality remains separate."""
@@ -27,11 +65,23 @@ def inspect_image_bytes(raw: bytes, debug_url: str = "") -> Optional[Dict[str,An
         if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=empty_too_small_or_too_large bytes=%s", debug_url, len(raw or b""))
         return None
     try:
-        im=Image.open(io.BytesIO(raw)); im.verify()
-        im=Image.open(io.BytesIO(raw)); im.load()
-        if im.width < MIN_DIMENSION or im.height < MIN_DIMENSION:
+        im=Image.open(io.BytesIO(raw))
+        width, height = int(im.width), int(im.height)
+        if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS_TO_INSPECT:
+            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=pixel_limit:%sx%s max_pixels=%s", debug_url, width, height, MAX_IMAGE_PIXELS_TO_INSPECT)
+            im.close()
+            return None
+        im.verify()
+        im=Image.open(io.BytesIO(raw))
+        width, height = int(im.width), int(im.height)
+        if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS_TO_INSPECT:
+            if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=pixel_limit:%sx%s max_pixels=%s", debug_url, width, height, MAX_IMAGE_PIXELS_TO_INSPECT)
+            im.close()
+            return None
+        if width < MIN_DIMENSION or height < MIN_DIMENSION:
             if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=too_small:%sx%s", debug_url, im.width, im.height)
             return None
+        im.load()
         ratio=max(im.width,im.height)/max(1,min(im.width,im.height))
         if ratio > MAX_ASPECT:
             if debug_url: logger.info("IMAGE_REJECT provider_url=%s reason=bad_aspect:%sx%s", debug_url, im.width, im.height)
@@ -71,19 +121,34 @@ def inspect_image_bytes(raw: bytes, debug_url: str = "") -> Optional[Dict[str,An
 async def _fetch_image_bytes(url:str)->Optional[bytes]:
     if not url or not str(url).startswith(("http://","https://")): return None
     try:
+        chunks=[]; total=0
         async with httpx.AsyncClient(timeout=25,follow_redirects=True) as client:
-            r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"})
-            ct=(r.headers.get("content-type") or "").lower()
-            if r.status_code>=400 or not r.content:
-                logger.debug("image fetch rejected url=%s status=%s", url, r.status_code)
-                return None
-            if len(r.content)>MAX_IMAGE_BYTES_TO_INSPECT:
-                logger.debug("image fetch rejected url=%s bytes=%s max=%s", url, len(r.content), MAX_IMAGE_BYTES_TO_INSPECT)
-                return None
-            if ct and not ct.startswith("image/"):
-                logger.debug("image fetch rejected url=%s content_type=%s", url, ct)
-                return None
-            return r.content
+            async with client.stream("GET",url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/quality"}) as r:
+                ct=(r.headers.get("content-type") or "").lower()
+                declared_size=r.headers.get("content-length")
+                if r.status_code>=400:
+                    logger.debug("image fetch rejected url=%s status=%s", url, r.status_code)
+                    return None
+                if ct and not ct.startswith("image/"):
+                    logger.debug("image fetch rejected url=%s content_type=%s", url, ct)
+                    return None
+                if declared_size:
+                    try:
+                        if int(declared_size) > MAX_IMAGE_BYTES_TO_INSPECT:
+                            logger.debug("image fetch rejected url=%s declared_bytes=%s max=%s", url, declared_size, MAX_IMAGE_BYTES_TO_INSPECT)
+                            return None
+                    except ValueError:
+                        pass
+                async for chunk in r.aiter_bytes(64*1024):
+                    total += len(chunk)
+                    if total > MAX_IMAGE_BYTES_TO_INSPECT:
+                        logger.debug("image fetch rejected url=%s bytes_over_limit max=%s", url, MAX_IMAGE_BYTES_TO_INSPECT)
+                        return None
+                    chunks.append(chunk)
+        if total < MIN_IMAGE_BYTES_TO_INSPECT:
+            logger.debug("image fetch rejected url=%s bytes=%s min=%s", url, total, MIN_IMAGE_BYTES_TO_INSPECT)
+            return None
+        return b"".join(chunks)
     except Exception as exc:
         logger.debug("image fetch exception url=%s error=%s", url, str(exc)[:180])
         return None
@@ -105,6 +170,7 @@ async def inspect_image_url(url:str)->Optional[Tuple[int,int]]:
     except Exception:pass
     return None
 def hard_gate(w:int,h:int)->Tuple[bool,str]:
+    if w <= 0 or h <= 0 or w*h > MAX_IMAGE_PIXELS_TO_INSPECT:return False,f"pixel_limit:{w}x{h}"
     if min(w,h)<MIN_DIMENSION:return False,f"too_small:{w}x{h}"
     ratio=max(w,h)/max(1,min(w,h))
     if ratio>MAX_ASPECT:return False,f"bad_aspect:{w}x{h}"
@@ -120,14 +186,14 @@ async def validate(c:Dict[str,Any])->Optional[Dict[str,Any]]:
     if not content:
         logger.info("IMAGE_REJECT provider=%s reason=content_validation_failed url=%s",c.get("provider"),url[:220])
         return None
-    _VALIDATED_URL_CACHE[url]=raw
+    _cache_validated_bytes(url, raw)
     x=dict(c); x.update(content)
     x.update(quality_gate="hard_integrity_passed",content_gate="passed",content_sha256=content["sha256"],content_entropy=content["entropy"])
     return x
 
 async def materialize_validated_url(url:str,path:str)->bool:
     """Write the exact bytes already accepted by validation, avoiding a second CDN fetch."""
-    raw=_VALIDATED_URL_CACHE.get(url)
+    raw=_get_cached_validated_bytes(url)
     if raw is None:
         raw=await _fetch_image_bytes(url)
     if not raw or not inspect_image_bytes(raw,url):
@@ -145,8 +211,22 @@ async def validate_many(raw:List[Dict[str,Any]])->List[Dict[str,Any]]:
         u=c.get("url")
         if u and u not in seen:
             seen.add(u);unique.append(c)
-    checked=await asyncio.gather(*(validate(c) for c in unique[:60]))
-    return [c for c in checked if c]
+    # Bound both network transfers and Pillow decoding. A semaphore prevents a
+    # large candidate list from creating dozens of simultaneous image buffers.
+    semaphore=asyncio.Semaphore(VALIDATION_CONCURRENCY)
+    async def bounded_validate(candidate):
+        async with semaphore:
+            try:
+                return await validate(candidate)
+            except Exception as exc:
+                logger.warning("IMAGE_REJECT provider=%s reason=validation_exception:%s", candidate.get("provider"), type(exc).__name__)
+                return None
+    checked=await asyncio.gather(*(bounded_validate(c) for c in unique[:60]))
+    accepted=[c for c in checked if c]
+    logger.info("image validation batch candidates=%d unique=%d accepted=%d concurrency=%d cache_bytes=%d cache_entries=%d",
+                len(raw), len(unique), len(accepted), VALIDATION_CONCURRENCY,
+                _VALIDATED_URL_CACHE_BYTES, len(_VALIDATED_URL_CACHE))
+    return accepted
 def score(c:Dict[str,Any],product:Dict[str,Any],strategy:str)->int:
     p=(c.get("provider") or "").lower();src=(c.get("source") or "").lower();name=(product.get("name") or "").lower();brand=(product.get("brand") or "").lower();w,h=int(c.get("width") or 0),int(c.get("height") or 0);ratio=w/max(1,h);s=45
     if p=="product_page":s+=30
@@ -175,7 +255,12 @@ async def _visual_signature(url:str)->Optional[Tuple[Tuple[int,...],Tuple[int,..
         async with httpx.AsyncClient(timeout=12,follow_redirects=True) as client:
             r=await client.get(url,headers={"User-Agent":"Mozilla/5.0 PinterestAgent/visual"})
             if r.status_code>=400 or len(r.content)>1024*1024:return None
-        im=Image.open(io.BytesIO(r.content)).convert("RGB").resize((32,32))
+        im=Image.open(io.BytesIO(r.content))
+        if im.width <= 0 or im.height <= 0 or im.width*im.height > MAX_IMAGE_PIXELS_TO_INSPECT:
+            im.close()
+            return None
+        im.load()
+        im=im.convert("RGB").resize((32,32))
         px=list(im.getdata())
         gray=[(299*r+587*g+114*b)//1000 for r,g,b in px]
         avg=sum(gray)/len(gray)
