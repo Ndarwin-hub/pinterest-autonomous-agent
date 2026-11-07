@@ -37,8 +37,8 @@ def test_validate_many_caps_concurrent_validations(monkeypatch):
         return dict(candidate)
 
     monkeypatch.setattr(iq, "validate", fake_validate)
-    monkeypatch.setattr(iq, "VALIDATION_CONCURRENCY", 3)
+    monkeypatch.setattr(iq, "VALIDATION_CONCURRENCY", 2)
     candidates = [{"url": f"https://example.test/{i}"} for i in range(12)]
     result = asyncio.run(iq.validate_many(candidates))
     assert len(result) == 12
-    assert peak <= 3
+    assert peak <= 2

@@ -26,10 +26,10 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: Optional[in
     value = max(minimum, value)
     return min(maximum, value) if maximum is not None else value
 
-MAX_IMAGE_PIXELS_TO_INSPECT=_bounded_int_env("IMAGE_QUALITY_MAX_PIXELS", 24000000, 1)
+MAX_IMAGE_PIXELS_TO_INSPECT=_bounded_int_env("IMAGE_QUALITY_MAX_PIXELS", 12000000, 1, 12000000)
 # Keep validated source bytes only in a small process-local LRU cache.
-VALIDATED_CACHE_MAX_BYTES=_bounded_int_env("VALIDATED_IMAGE_CACHE_MAX_BYTES", 32*1024*1024, 0)
-VALIDATION_CONCURRENCY=_bounded_int_env("IMAGE_VALIDATION_CONCURRENCY", 3, 1, 6)
+VALIDATED_CACHE_MAX_BYTES=_bounded_int_env("VALIDATED_IMAGE_CACHE_MAX_BYTES", 16*1024*1024, 0, 16*1024*1024)
+VALIDATION_CONCURRENCY=_bounded_int_env("IMAGE_VALIDATION_CONCURRENCY", 2, 1, 2)
 BLANK_STDDEV_THRESHOLD=4.0
 BLANK_UNIQUE_COLOR_THRESHOLD=24
 VISUAL_DUPLICATE_THRESHOLD=0.01
