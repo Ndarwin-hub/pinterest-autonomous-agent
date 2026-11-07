@@ -11,6 +11,9 @@ import os
 import uuid
 import httpx
 
+# Fail closed: this process is for Pinterest Pins only; video work belongs on Kaggle.
+os.environ["RAILWAY_VIDEO_RENDERING_ENABLED"] = "false"
+
 import agent as agent_module
 import quality_patch
 QUALITY_PATCH_VERSION = quality_patch.install_identity(agent_module)
@@ -86,7 +89,7 @@ async def enqueue(url:str,target_board_id:str|None=None,target_board_name:str|No
     if not ledger.quota_reserve_job():
         return {"status":"failed","error":"monthly_safe_pinterest_capacity_reached"}
     job_id=str(uuid.uuid4())
-    job=Job(job_id=job_id,url=url,status=JobStatus.QUEUED,progress=f"Pin A worker queued — {PINS_PER_PRODUCT} Pins",target_board_id=target_board_id,target_board_name=target_board_name)
+    job=Job(job_id=job_id,url=url,status=JobStatus.QUEUED,progress=f"Pin A job queued — {PINS_PER_PRODUCT} Pins",target_board_id=target_board_id,target_board_name=target_board_name)
     job_store.save(job)
     _tasks[job_id]=asyncio.create_task(_run_job(job_id,url),name=f"pin-a-job-{job_id}")
     return {"job_id":job_id,"status":JobStatus.QUEUED.value,"message":"Pin A job executing on dedicated worker"}
@@ -132,7 +135,7 @@ async def request_loop():
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("Dedicated Pin A worker loop error request_id=%s: %s",(req or {}).get("request_id"),exc)
+            logger.exception("Pin A worker loop error request_id=%s: %s",(req or {}).get("request_id"),exc)
             if req:
                 ledger.finish_pin_a_request(req["request_id"],"pending",str(exc)[:1000])
             await asyncio.sleep(5)
