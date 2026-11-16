@@ -19,6 +19,11 @@ on:
         required: true
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10']
+      dry_run:
+        description: 'Run credential, board, discovery and durable-state checks without publishing'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -61,7 +66,9 @@ jobs:
               *) echo "Unknown scheduled batch" >&2; exit 1 ;;
             esac
           fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then dry_run=true; else dry_run=false; fi
           echo "batch=$batch" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
           echo "Nepal date: $(TZ=Asia/Kathmandu date +%F); executing batch $batch"
 
       - name: Validate Kaggle API credential
@@ -94,6 +101,7 @@ jobs:
       - name: Install independent production runner into Kaggle notebook
         env:
           PIN_BATCH: ${{ steps.batch.outputs.batch }}
+          PIN_DRY_RUN: ${{ steps.batch.outputs.dry_run }}
           SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: |
@@ -117,10 +125,12 @@ jobs:
           metadata["enable_internet"] = True
 
           batch = int(os.environ["PIN_BATCH"])
+          dry_run = os.environ["PIN_DRY_RUN"].lower() == "true"
           drive_id = os.environ["DRIVE_STATE_FILE_ID"]
           sha = os.environ["SOURCE_SHA"]
           bootstrap = textwrap.dedent(f'''import os, subprocess, sys
           os.environ["KAGGLE_PIN_BATCH"] = "{batch}"
+          os.environ["KAGGLE_PIN_DRY_RUN"] = "{str(dry_run).lower()}"
           os.environ["DRIVE_STATE_FILE_ID"] = "{drive_id}"
           REPO = "/kaggle/working/pinterest-autonomous-agent"
           if not os.path.isdir(REPO):
