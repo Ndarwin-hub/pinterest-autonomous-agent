@@ -107,12 +107,12 @@ jobs:
           dry_run=os.environ["VIDEO_DRY_RUN"].lower()=="true"
           drive_id=os.environ["DRIVE_STATE_FILE_ID"]
           sha=os.environ["SOURCE_SHA"]
-          config=f'''import os
+          config=textwrap.dedent(f'''\n          import os
           os.environ["KAGGLE_VIDEO_PAIR_START"]="{pair}"
           os.environ["KAGGLE_VIDEO_RUN_ID"]={run_id!r}
           os.environ["KAGGLE_VIDEO_DRY_RUN"]="{str(dry_run).lower()}"
           os.environ["DRIVE_STATE_FILE_ID"]="{drive_id}"
-          '''
+          ''').lstrip()
           bootstrap=textwrap.dedent(f'''
           import os, subprocess, sys
           REPO="/kaggle/working/pinterest-autonomous-agent"
