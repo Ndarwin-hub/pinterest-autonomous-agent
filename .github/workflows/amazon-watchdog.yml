@@ -1,4 +1,5 @@
-name: Amazon schedule watchdog
+name: Kaggle Pinterest Primary
+
 on:
   schedule:
     - cron: '23 0 * * *'
@@ -14,73 +15,214 @@ on:
   workflow_dispatch:
     inputs:
       batch:
-        description: 'Batch to verify/recover'
+        description: 'Pinterest batch to execute (five products)'
         required: true
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10']
+      dry_run:
+        description: 'Run credential, board, discovery and durable-state checks without publishing'
+        required: false
+        default: true
+        type: boolean
+
 permissions:
   contents: read
-  id-token: write
+
 concurrency:
-  group: amazon-schedule-watchdog
+  group: desiredplus-kaggle-state
   cancel-in-progress: false
+
 jobs:
-  watchdog:
+  pinterest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN || secrets.KAGGEL_API_TOKEN }}
+      KAGGLE_PIN_KERNEL_ID: ndarwin1414/pinterest-autonomous-agent-kaggle-production
+      DRIVE_STATE_FILE_ID: 1Qf-Ccn5aiyRo-tdgJxj5x0UhmYCVrEQb
     steps:
-      - name: Select expected batch
-        id: select
+      - name: Checkout automation source
+        uses: actions/checkout@v4
+      - name: Compile Pinterest production runner
+        run: python -m py_compile kaggle_pin_primary.py
+      - name: Run migration contract tests
+        run: python -m unittest discover -s tests -p "test_kaggle_migration_contract.py"
+
+      - name: Resolve batch
+        id: batch
         shell: bash
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "batch=${{ inputs.batch }}" >> "$GITHUB_OUTPUT"
+            batch="${{ inputs.batch }}"
           else
             case "${{ github.event.schedule }}" in
-              '23 0 * * *') echo "batch=1" >> "$GITHUB_OUTPUT" ;;
-              '11 1 * * *') echo "batch=2" >> "$GITHUB_OUTPUT" ;;
-              '59 1 * * *') echo "batch=3" >> "$GITHUB_OUTPUT" ;;
-              '47 2 * * *') echo "batch=4" >> "$GITHUB_OUTPUT" ;;
-              '35 3 * * *') echo "batch=5" >> "$GITHUB_OUTPUT" ;;
-              '23 4 * * *') echo "batch=6" >> "$GITHUB_OUTPUT" ;;
-              '11 5 * * *') echo "batch=7" >> "$GITHUB_OUTPUT" ;;
-              '59 5 * * *') echo "batch=8" >> "$GITHUB_OUTPUT" ;;
-              '47 6 * * *') echo "batch=9" >> "$GITHUB_OUTPUT" ;;
-              '35 7 * * *') echo "batch=10" >> "$GITHUB_OUTPUT" ;;
-              *) echo 'Unknown schedule' >&2; exit 1 ;;
+              '23 0 * * *') batch=1 ;;
+              '11 1 * * *') batch=2 ;;
+              '59 1 * * *') batch=3 ;;
+              '47 2 * * *') batch=4 ;;
+              '35 3 * * *') batch=5 ;;
+              '23 4 * * *') batch=6 ;;
+              '11 5 * * *') batch=7 ;;
+              '59 5 * * *') batch=8 ;;
+              '47 6 * * *') batch=9 ;;
+              '35 7 * * *') batch=10 ;;
+              *) echo "Unknown scheduled batch" >&2; exit 1 ;;
             esac
           fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then dry_run=true; else dry_run=false; fi
+          echo "batch=$batch" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          echo "Nepal date: $(TZ=Asia/Kathmandu date +%F); executing batch $batch"
 
-      - name: Request GitHub OIDC token
-        id: oidc
+      - name: Validate Kaggle API credential
         shell: bash
         run: |
           set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 3 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
-          token=$(printf '%s' "$response" | jq -r '.value')
-          test -n "$token" && test "$token" != "null"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
+          test -n "${KAGGLE_API_TOKEN:-}" || { echo "KAGGLE_API_TOKEN/KAGGEL_API_TOKEN repository secret is missing"; exit 1; }
+          echo "::add-mask::$KAGGLE_API_TOKEN"
 
-      - name: Wake/check Railway scheduler
+      - name: Install Kaggle CLI and notebook tooling
+        run: |
+          python -m pip install --upgrade kaggle nbformat
+          kaggle --version
+
+      - name: Create new production Kaggle kernel scaffold
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/kaggle-pin
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import nbformat
+
+          root=Path("/tmp/kaggle-pin")
+          metadata={
+              "id":"ndarwin1414/pinterest-autonomous-agent-kaggle-production",
+              "title":"pinterest-autonomous-agent-kaggle-production",
+              "code_file":"pinterest_autonomous_agent.ipynb",
+              "language":"python",
+              "kernel_type":"notebook",
+              "is_private":True,
+              "enable_gpu":False,
+              "enable_internet":True,
+              "dataset_sources":[],
+              "competition_sources":[],
+              "kernel_sources":[]
+          }
+          nb=nbformat.v4.new_notebook()
+          nb.metadata={"kernelspec":{"display_name":"Python 3","language":"python","name":"python3"}}
+          nbformat.write(nb,root/metadata["code_file"])
+          (root/"kernel-metadata.json").write_text(json.dumps(metadata,indent=2))
+          print("Created fresh Kaggle production kernel scaffold.")
+          PY
+
+      - name: Install independent production runner into Kaggle notebook
         env:
-          ID_TOKEN: ${{ steps.oidc.outputs.token }}
-          BATCH: ${{ steps.select.outputs.batch }}
+          PIN_BATCH: ${{ steps.batch.outputs.batch }}
+          PIN_DRY_RUN: ${{ steps.batch.outputs.dry_run }}
+          SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          response_file=$(mktemp)
-          trap 'rm -f "$response_file"' EXIT
-          payload=$(jq -cn --arg batch "$BATCH" '{batch: ($batch|tonumber)}')
-          echo "Watchdog payload: $payload"
-          curl --fail --silent --show-error --no-buffer             --connect-timeout 20 --max-time 600             --retry 6 --retry-delay 10 --retry-max-time 180 --retry-all-errors             -H "Authorization: Bearer $ID_TOKEN"             -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/amazon/run-batch'             --data "$payload" | tee "$response_file"
-          final_status=$(awk 'NF { last=$0 } END { if (last != "") print last }' "$response_file" | jq -r '.status // empty')
-          case "$final_status" in
-            session_started|already_running|completed|already_completed|running)
-              echo "Watchdog trigger accepted: $final_status"
-              ;;
-            *)
-              echo "Watchdog trigger failed or returned unknown status: ${final_status:-<empty>}" >&2
+          python - <<'PY'
+          import json, os, textwrap
+          from pathlib import Path
+          import nbformat
+
+          root = Path("/tmp/kaggle-pin")
+          metadata_path = root / "kernel-metadata.json"
+          metadata = json.loads(metadata_path.read_text())
+          notebooks = list(root.glob("*.ipynb"))
+          if not notebooks:
+              raise SystemExit("Kaggle template did not contain an .ipynb notebook")
+          notebook_path = notebooks[0]
+          metadata["id"] = os.environ["KAGGLE_PIN_KERNEL_ID"]
+          metadata["title"] = "pinterest-autonomous-agent-kaggle-production"
+          metadata["code_file"] = notebook_path.name
+          metadata["is_private"] = True
+          metadata["enable_internet"] = True
+
+          batch = int(os.environ["PIN_BATCH"])
+          dry_run = os.environ["PIN_DRY_RUN"].lower() == "true"
+          drive_id = os.environ["DRIVE_STATE_FILE_ID"]
+          sha = os.environ["SOURCE_SHA"]
+          bootstrap = textwrap.dedent(f'''
+          import os, subprocess, sys
+          os.environ["KAGGLE_PIN_BATCH"] = "{batch}"
+          os.environ["KAGGLE_PIN_DRY_RUN"] = "{str(dry_run).lower()}"
+          os.environ["DRIVE_STATE_FILE_ID"] = "{drive_id}"
+          REPO = "/kaggle/working/pinterest-autonomous-agent"
+          if not os.path.isdir(REPO):
+              subprocess.run(["git", "clone", "https://github.com/Ndarwin-hub/pinterest-autonomous-agent.git", REPO], check=True)
+          subprocess.run(["git", "-C", REPO, "fetch", "origin", "{sha}"], check=True)
+          subprocess.run(["git", "-C", REPO, "checkout", "--force", "{sha}"], check=True)
+          os.chdir(REPO)
+          subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
+          subprocess.run([sys.executable, "-m", "py_compile", "kaggle_pin_primary.py"], check=True)
+          exec(compile(open("kaggle_pin_primary.py", encoding="utf-8").read(), "kaggle_pin_primary.py", "exec"), {{"__name__": "__main__"}})
+          ''').lstrip()
+          nb = nbformat.v4.new_notebook()
+          nb.cells = [nbformat.v4.new_code_cell(bootstrap)]
+          nb.metadata = metadata.get("metadata", {})
+          nb.metadata["kernelspec"] = {"display_name":"Python 3","language":"python","name":"python3"}
+          nb.metadata["language_info"] = {"name":"python"}
+          nbformat.write(nb, notebook_path)
+          metadata_path.write_text(json.dumps(metadata, indent=2))
+          print(f"Prepared {metadata['id']} batch={batch} source={sha}")
+          PY
+
+      - name: Push and execute Kaggle production kernel
+        run: kaggle kernels push -p /tmp/kaggle-pin
+
+      - name: Wait for Kaggle completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS+4800))
+          while (( SECONDS < deadline )); do
+            status="$(kaggle kernels status "$KAGGLE_PIN_KERNEL_ID" 2>&1 || true)"
+            echo "$status"
+            upper="$(printf '%s' "$status" | tr '[:lower:]' '[:upper:]')"
+            if grep -Eq '(^|[^A-Z])(COMPLETE|COMPLETED)([^A-Z]|$)' <<<"$upper"; then
+              exit 0
+            fi
+            if grep -Eq '(^|[^A-Z])(ERROR|FAILED|FAILURE)([^A-Z]|$)' <<<"$upper"; then
+              echo "Kaggle kernel execution failed." >&2
               exit 1
-              ;;
-          esac
+            fi
+            sleep 30
+          done
+          echo "Kaggle kernel did not reach a terminal state within 80 minutes." >&2
+          exit 1
+
+      - name: Collect Kaggle notebook diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/kaggle-pin-output
+          kaggle kernels output "$KAGGLE_PIN_KERNEL_ID" -p /tmp/kaggle-pin-output || true
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          for path in Path("/tmp/kaggle-pin-output").glob("**/*"):
+              if path.suffix.lower() == ".ipynb":
+                  try:
+                      nb=json.loads(path.read_text())
+                      for idx,cell in enumerate(nb.get("cells",[]),1):
+                          for out in cell.get("outputs",[]):
+                              text=out.get("text") or out.get("data",{}).get("text/plain")
+                              if text: print(f"NOTEBOOK_CELL_{idx}: {text}")
+                              if out.get("ename"): print(f"NOTEBOOK_ERROR_{idx}: {out.get('ename')}: {out.get('evalue')}")
+                  except Exception as exc:
+                      print("DIAGNOSTIC_PARSE_ERROR",path,str(exc))
+              elif path.is_file():
+                  print("KAGGLE_OUTPUT_FILE",path.name,path.stat().st_size)
+                  if path.suffix.lower() in (".json",".txt",".log"):
+                      print(path.read_text(errors="replace")[:12000])
+          PY
+
+      - name: Record completion without Railway
+        if: success()
+        run: |
+          echo "Kaggle completed batch ${{ steps.batch.outputs.batch }}. The notebook itself has already committed the durable Drive ledger and product handoff."

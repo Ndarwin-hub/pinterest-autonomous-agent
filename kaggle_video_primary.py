@@ -1,7 +1,8 @@
 import os, json, time, hashlib, mimetypes, subprocess, shutil, requests
+import base64, gzip, io, sqlite3, tarfile
 from pathlib import Path
+from datetime import datetime, timezone
 
-RAILWAY = os.getenv("RAILWAY_VIDEO_BASE_URL","https://web-production-dae68.up.railway.app").rstrip("/")
 def secret(name, default=""):
     value=os.getenv(name,"").strip()
     if value:
@@ -13,14 +14,24 @@ def secret(name, default=""):
     except Exception:
         return default
 
-VIDEO_SECRET = secret("VIDEO_BRIDGE_SECRET")
 COMPOSIO_KEY = secret("COMPOSIO_API_KEY")
 COMPOSIO_ENTITY = secret("COMPOSIO_ENTITY_ID")
+DRIVE_ACCOUNT_ID = secret("COMPOSIO_GOOGLEDRIVE_ACCOUNT_ID","googledrive_keck-oer")
+WOOP_ACCOUNT_ID = secret("COMPOSIO_WOOP_SOCIAL_ACCOUNT_ID","woop_social_sturt-nonact")
 WOOP_PROJECT = secret("WOOP_SOCIAL_PROJECT_ID","pr_2gj5wkt0wr9E")
+STATE_FILE_ID = os.getenv("DRIVE_STATE_FILE_ID","1Qf-Ccn5aiyRo-tdgJxj5x0UhmYCVrEQb")
 PAIR_START = int(os.getenv("KAGGLE_VIDEO_PAIR_START","1"))
 RUN_ID = os.getenv("KAGGLE_VIDEO_RUN_ID","").strip() or f"kaggle-unknown-{int(time.time())}"
+DATA_DIR = Path("/kaggle/working/desiredplus-state")
+DATA_DIR.mkdir(parents=True,exist_ok=True)
+os.environ["DATA_DIR"] = str(DATA_DIR)
+os.environ["DAILY_LEDGER_DB_PATH"] = str(DATA_DIR/"amazon_daily_ledger.db")
+os.environ["PUBLISHED_DB_PATH"] = str(DATA_DIR/"published_products.db")
+os.environ["JOB_DB_PATH"] = str(DATA_DIR/"pinterest_agent_jobs.db")
+os.environ["RAILWAY_VIDEO_RENDERING_ENABLED"] = "false"
 WORK = Path("/kaggle/working/video_primary")
 WORK.mkdir(parents=True,exist_ok=True)
+DB_NAMES=("amazon_daily_ledger.db","published_products.db","pinterest_agent_jobs.db")
 
 TRACKS = [
  ("Pianoflage - Roy Bargy","https://commons.wikimedia.org/wiki/Special:Redirect/file/Roy_Bargy_-_Pianoflage_(1922).ogg"),
@@ -36,24 +47,98 @@ FPS = 25
 SCENE_SECONDS = 3
 MIN_IMAGE_SIDE = 160
 
-def api(method,path,**kwargs):
-    headers=kwargs.pop("headers",{})
-    headers["X-Video-Secret"]=VIDEO_SECRET
-    r=requests.request(method,RAILWAY+path,headers=headers,timeout=60,**kwargs)
-    if r.status_code>=400: raise RuntimeError(f"RAILWAY_{r.status_code}:{r.text[:800]}")
-    return r.json()
-
 def composio(slug,args):
+    if not COMPOSIO_KEY:
+        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING:COMPOSIO_API_KEY")
+    slug_upper=slug.upper()
+    if slug_upper.startswith("GOOGLEDRIVE_"):
+        connected_id=DRIVE_ACCOUNT_ID
+    elif slug_upper.startswith("WOOP_SOCIAL_"):
+        connected_id=WOOP_ACCOUNT_ID
+    else:
+        connected_id=COMPOSIO_ENTITY
+    if not connected_id:
+        raise RuntimeError("COMPOSIO_CONNECTED_ACCOUNT_ID_MISSING:"+slug)
+    payload={"connected_account_id":connected_id,"version":"latest",
+             "dangerously_skip_version_check":True,"arguments":args or {}}
     r=requests.post(
         f"https://backend.composio.dev/api/v3.1/tools/execute/{slug}",
         headers={"x-api-key":COMPOSIO_KEY,"Content-Type":"application/json"},
-        json={"user_id":COMPOSIO_ENTITY,"version":"latest","arguments":args},
+        json=payload,
         timeout=180,
     )
     r.raise_for_status()
     j=r.json()
     if j.get("successful") is False: raise RuntimeError(j.get("error") or str(j))
     return j.get("data") or j
+
+def load_drive_state():
+    if not COMPOSIO_KEY:
+        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING:COMPOSIO_API_KEY")
+    result=composio("GOOGLEDRIVE_DOWNLOAD_FILE",{"fileId":STATE_FILE_ID})
+    item=result.get("downloaded_file_content") or {}
+    url=item.get("s3url")
+    if not url: raise RuntimeError("DRIVE_STATE_DOWNLOAD_URL_MISSING")
+    response=requests.get(url,timeout=120); response.raise_for_status()
+    state=json.loads(response.content.decode("utf-8"))
+    packed=(state.get("databases") or {}).get("sqlite_gzip_b64")
+    if packed:
+        raw=gzip.decompress(base64.b64decode(packed))
+        with tarfile.open(fileobj=io.BytesIO(raw),mode="r:") as archive:
+            for member in archive.getmembers():
+                if member.name not in DB_NAMES or not member.isfile(): continue
+                stream=archive.extractfile(member)
+                if stream: (DATA_DIR/member.name).write_bytes(stream.read())
+    return state
+
+def save_drive_state(state):
+    for name in DB_NAMES:
+        path=DATA_DIR/name
+        if path.exists():
+            try:
+                con=sqlite3.connect(str(path)); con.execute("PRAGMA wal_checkpoint(TRUNCATE)"); con.close()
+            except Exception: pass
+    packed=io.BytesIO()
+    with tarfile.open(fileobj=packed,mode="w:") as archive:
+        for name in DB_NAMES:
+            path=DATA_DIR/name
+            if path.exists(): archive.add(path,arcname=name)
+    state["schema_version"]=2
+    state["project"]="desiredplus-kaggle-automation"
+    state["databases"]={"sqlite_gzip_b64":base64.b64encode(gzip.compress(packed.getvalue(),compresslevel=6)).decode("ascii")}
+    state["video_last_run"]={"at":datetime.now(timezone.utc).isoformat(),"pair_start":PAIR_START,"run_id":RUN_ID}
+    ledger_path=DATA_DIR/"amazon_daily_ledger.db"
+    if ledger_path.exists():
+        con=sqlite3.connect(str(ledger_path)); con.row_factory=sqlite3.Row
+        try:
+            rows=con.execute("""SELECT day,batch_index AS batch,slot,asin,product_url,affiliate_url,title,source,status,attempts,last_error,created_at,updated_at,completed_at,publication_json,image_urls_json,image_meta_json FROM video_jobs ORDER BY day,batch_index,slot""").fetchall()
+            state["video_queue"]=[dict(row) for row in rows]
+            state["video_publications"]=[dict(row) for row in rows if row["status"]=="completed"]
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+    result=composio("GOOGLEDRIVE_EDIT_FILE",{"file_id":STATE_FILE_ID,"content":json.dumps(state,separators=(",",":"),ensure_ascii=False),"mime_type":"application/json"})
+    if not result.get("id"): raise RuntimeError("DRIVE_STATE_SAVE_UNCONFIRMED")
+
+def verified_video_rows(ledger,day):
+    con=sqlite3.connect(str(DATA_DIR/"amazon_daily_ledger.db"))
+    con.row_factory=sqlite3.Row
+    try:
+        rows=con.execute(
+            """SELECT v.day,v.batch_index AS batch,v.slot,v.asin,v.product_url,v.affiliate_url,
+                      v.title,v.source,v.status,v.attempts,v.last_error,v.created_at,v.updated_at,
+                      v.completed_at,v.publication_json,v.image_urls_json,v.image_meta_json
+               FROM video_jobs v JOIN daily_slots s
+                 ON s.day=v.day AND s.slot=v.slot
+               WHERE v.day=? AND v.batch_index IN (?,?)
+                 AND v.source='pinterest' AND s.status='success' AND s.pinterest_verified=1
+               ORDER BY v.batch_index,v.slot""",
+            (day,PAIR_START,PAIR_START+1)
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
 
 def download(url,path):
     r=requests.get(url,headers={"User-Agent":"Mozilla/5.0"},timeout=60)
@@ -78,13 +163,16 @@ def normalize_images(row,folder):
     from PIL import Image, ImageEnhance
 
     raw=json.loads(row.get("image_urls_json") or "[]")
-    urls=[u for u in raw if isinstance(u,str) and u.startswith(("http://","https://"))][:8]
+    urls=[u for u in raw if isinstance(u,str) and (u.startswith(("http://","https://")) or Path(u).exists())][:8]
     selected=[]; seen=set()
 
     for i,u in enumerate(urls):
         try:
             p=folder/f"source_{i+1}.bin"
-            download(u,p)
+            if Path(u).exists():
+                shutil.copyfile(u,p)
+            else:
+                download(u,p)
             clean=folder/f"product_{len(selected)+1}.jpg"
             _save_clean(p,clean)
             fp=_unique_hash(clean)
@@ -214,9 +302,9 @@ def render(row,out):
     print("MUSIC_TRACK",track_name,track_url)
     return final,track_name,track_url
 
-def publish(video,row):
-    if not COMPOSIO_KEY or not COMPOSIO_ENTITY:
-        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING")
+def publish(video,row,batch):
+    if not COMPOSIO_KEY:
+        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING:COMPOSIO_API_KEY")
 
     data=video.read_bytes()
     md5=hashlib.md5(data).hexdigest()
@@ -294,66 +382,76 @@ def publish(video,row):
     return {"media_id":media_id,"platforms":statuses}
 
 def main():
-    if not VIDEO_SECRET or not COMPOSIO_KEY or not COMPOSIO_ENTITY:
-        missing=[name for name,value in {"VIDEO_BRIDGE_SECRET":VIDEO_SECRET,"COMPOSIO_API_KEY":COMPOSIO_KEY,"COMPOSIO_ENTITY_ID":COMPOSIO_ENTITY}.items() if not value]
-        raise RuntimeError("KAGGLE_SECRETS_MISSING:"+",".join(missing))
-
-    jobs=[]
-    for batch in (PAIR_START,PAIR_START+1):
-        jobs.extend(api("POST","/video/batch",json={"batch":batch,"fallback":False}).get("jobs") or [])
-
+    if PAIR_START not in (1,3,5,7,9):
+        raise RuntimeError("VIDEO_PAIR_START_MUST_BE_1_3_5_7_9")
+    if not COMPOSIO_KEY or not COMPOSIO_ENTITY:
+        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING")
+    state=load_drive_state()
+    from daily_ledger import ledger
+    day=ledger.today_str()
+    jobs=verified_video_rows(ledger,day)
+    if os.getenv("KAGGLE_VIDEO_DRY_RUN","false").strip().lower() in ("1","true","yes"):
+        accounts=composio("WOOP_SOCIAL_LIST_SOCIAL_ACCOUNTS",{})
+        connected=[str(x.get("platform") or "").upper() for x in (accounts.get("social_accounts") or [])
+                   if str(x.get("status") or "").upper()=="CONNECTED"]
+        save_drive_state(state)
+        print(json.dumps({"status":"preflight_passed","day":day,"pair_start":PAIR_START,
+                          "verified_pinterest_products":len(jobs),"connected_video_platforms":connected,
+                          "drive_state_saved":True}))
+        return
     completed=0
-    for row in jobs[:10]:
+    if not jobs:
+        save_drive_state(state)
+        print(json.dumps({"pair_start":PAIR_START,"day":day,"videos_completed":0,
+                          "status":"no_verified_pinterest_products","drive_state_saved":True}))
+        return
+    for row in jobs:
         batch=int(row.get("batch") or 0)
         slot=int(row.get("slot") or 0)
-        if not batch or not slot or str(row.get("status") or "").lower() == "completed":
+        if not batch or not slot or str(row.get("status") or "").lower()=="completed":
             continue
-
-        c=api("POST",f"/video/job/{batch}/{slot}/claim")
-        if not c.get("claimed"):
+        owner=f"kaggle-{day}-pair-{PAIR_START}-{RUN_ID}"
+        claim=ledger.claim_video_job(day,batch,slot,owner)
+        if not claim or not claim.get("claimed"):
+            print("VIDEO_JOB_NOT_CLAIMED",batch,slot,claim)
             continue
-        owner=c.get("owner") or f"kaggle-{RUN_ID}"
         root=WORK/f"b{batch}_s{slot}"
         root.mkdir(parents=True,exist_ok=True)
-
+        publication_started=False
         try:
+            from video_fallback import _resolve_product_images
+            verified_inputs=root/"verified_inputs"
+            image_urls,image_source=_resolve_product_images(row,materialize_dir=verified_inputs)
+            row["image_urls_json"]=json.dumps(image_urls)
             final,track,url=render(row,root/"video_no_audio.mp4")
-            pub=publish(final,row)
-            api(
-                "POST",f"/video/job/{batch}/{slot}/status",
-                params={"status":"completed","owner":owner,
-                        "publication_json":json.dumps({
-                            **pub,
-                            "music_track":track,
-                            "music_source":url,
-                            "route":"product-1-zoom-right;product-2-zoom-left;product-3-pan-right;product-4-pan-left;product-5-static",
-                            "aspect":"9:16",
-                            "content_coverage":"85pct_max_box",
-                            "black_border":"15pct_outer_frame"
-                        })[:12000]}
-            )
+            ledger.mark_video_job(day,batch,slot,"publishing",owner=owner)
+            save_drive_state(state)
+            publication_started=True
+            pub=publish(final,row,batch)
+            pub.update({"music_track":track,"music_source":url,"image_source":image_source,
+                        "route":"product-1-zoom-right;product-2-zoom-left;product-3-pan-right;product-4-pan-left;product-5-static",
+                        "aspect":"9:16","content_coverage":"85pct_max_box","black_border":"15pct_outer_frame",
+                        "run_id":RUN_ID})
+            ledger.mark_video_job(day,batch,slot,"completed",owner=owner,
+                                  publication_json=json.dumps(pub,separators=(",",":"))[:12000])
             completed+=1
             print("KAGGLE_REAL_PRODUCT_VIDEO_SUCCESS",batch,slot,row.get("asin"))
+            save_drive_state(state)
         except Exception as exc:
-            try:
-                api("POST",f"/video/job/{batch}/{slot}/status",
-                    params={"status":"failed","owner":owner,"error":str(exc)[:1000]})
-            except Exception as e:
-                print("STATUS_UPDATE_FAILED",str(e)[:300])
-            print("KAGGLE_REAL_PRODUCT_VIDEO_FAILED",batch,slot,row.get("asin"),str(exc)[:1000])
+            status="needs_review" if publication_started else "failed"
+            ledger.mark_video_job(day,batch,slot,status,owner=owner,error=str(exc)[:1000])
+            print("KAGGLE_REAL_PRODUCT_VIDEO_FAILED",batch,slot,row.get("asin"),status,str(exc)[:1000])
+            save_drive_state(state)
         finally:
             shutil.rmtree(root,ignore_errors=True)
-
-    # Do not report a partially processed pair as successful.
-    final_jobs=[]
-    for batch in (PAIR_START,PAIR_START+1):
-        final_jobs.extend(api("POST","/video/batch",json={"batch":batch,"fallback":False}).get("jobs") or [])
-    if len(final_jobs) != 10:
-        raise RuntimeError(f"VIDEO_PAIR_INCOMPLETE:expected_10_jobs_got_{len(final_jobs)}")
-    bad=[(j.get("batch"),j.get("slot"),j.get("asin"),j.get("status")) for j in final_jobs
-         if str(j.get("status") or "").lower() != "completed"]
+    remaining=verified_video_rows(ledger,day)
+    bad=[{"batch":r.get("batch"),"slot":r.get("slot"),"asin":r.get("asin"),"status":r.get("status")}
+         for r in remaining if str(r.get("status") or "").lower() not in ("completed","needs_review")]
+    save_drive_state(state)
+    print(json.dumps({"pair_start":PAIR_START,"day":day,"videos_completed":completed,
+                      "verified_pinterest_products":len(jobs),"remaining_retryable":len(bad),
+                      "drive_state_saved":True}))
     if bad:
-        raise RuntimeError("VIDEO_PAIR_INCOMPLETE:"+json.dumps(bad)[:1800])
-    print(json.dumps({"pair_start":PAIR_START,"videos_completed":completed,"target":10,"terminal_jobs":10}))
+        raise RuntimeError("VIDEO_PAIR_HAS_RETRYABLE_JOBS:"+json.dumps(bad)[:1800])
 
 main()

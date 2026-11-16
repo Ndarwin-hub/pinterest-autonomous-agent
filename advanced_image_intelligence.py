@@ -9,7 +9,7 @@ import re
 from typing import Any, Dict, List, Tuple
 
 NON_PRODUCT_TERMS = (
-    "brand logo","brand-logo","logo image","wordmark","favicon","icon",
+    "brand logo","brand-logo","logo","logos","logo image","wordmark","favicon","icon",
     "banner","advertisement","advertising","wallpaper","vector","stock photo",
     "stock-photo","shutterstock","istock","getty","placeholder",
     "social share","prime logo","amazon logo","brand graphic","brand-only",
