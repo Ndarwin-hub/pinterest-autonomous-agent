@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      KAGGLE_API_TOKEN: \${{ secrets.KAGGLE_API_TOKEN || secrets.KAGGEL_API_TOKEN }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN || secrets.KAGGEL_API_TOKEN }}
       KAGGLE_PIN_KERNEL_ID: ndarwin1414/pinterest-autonomous-agent-kaggle-production
       DRIVE_STATE_FILE_ID: 1Qf-Ccn5aiyRo-tdgJxj5x0UhmYCVrEQb
     steps:
@@ -44,10 +44,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "\${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            batch="\${{ inputs.batch }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            batch="${{ inputs.batch }}"
           else
-            case "\${{ github.event.schedule }}" in
+            case "${{ github.event.schedule }}" in
               '23 0 * * *') batch=1 ;;
               '11 1 * * *') batch=2 ;;
               '59 1 * * *') batch=3 ;;
@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "\${KAGGLE_API_TOKEN:-}" || { echo "KAGGLE_API_TOKEN/KAGGEL_API_TOKEN repository secret is missing"; exit 1; }
+          test -n "${KAGGLE_API_TOKEN:-}" || { echo "KAGGLE_API_TOKEN/KAGGEL_API_TOKEN repository secret is missing"; exit 1; }
           echo "::add-mask::$KAGGLE_API_TOKEN"
 
       - name: Install Kaggle CLI and notebook tooling
@@ -93,8 +93,8 @@ jobs:
 
       - name: Install independent production runner into Kaggle notebook
         env:
-          PIN_BATCH: \${{ steps.batch.outputs.batch }}
-          SOURCE_SHA: \${{ github.sha }}
+          PIN_BATCH: ${{ steps.batch.outputs.batch }}
+          SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -167,4 +167,4 @@ jobs:
       - name: Record completion without Railway
         if: success()
         run: |
-          echo "Kaggle completed batch \${{ steps.batch.outputs.batch }}. The notebook itself has already committed the durable Drive ledger and product handoff."
+          echo "Kaggle completed batch ${{ steps.batch.outputs.batch }}. The notebook itself has already committed the durable Drive ledger and product handoff."
