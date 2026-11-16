@@ -128,7 +128,7 @@ jobs:
           dry_run = os.environ["PIN_DRY_RUN"].lower() == "true"
           drive_id = os.environ["DRIVE_STATE_FILE_ID"]
           sha = os.environ["SOURCE_SHA"]
-          bootstrap = textwrap.dedent(f'''import os, subprocess, sys
+          bootstrap = textwrap.dedent(f'''\n          import os, subprocess, sys
           os.environ["KAGGLE_PIN_BATCH"] = "{batch}"
           os.environ["KAGGLE_PIN_DRY_RUN"] = "{str(dry_run).lower()}"
           os.environ["DRIVE_STATE_FILE_ID"] = "{drive_id}"
@@ -141,7 +141,7 @@ jobs:
           subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
           subprocess.run([sys.executable, "-m", "py_compile", "kaggle_pin_primary.py"], check=True)
           exec(compile(open("kaggle_pin_primary.py", encoding="utf-8").read(), "kaggle_pin_primary.py", "exec"), {{"__name__": "__main__"}})
-          ''')
+          ''').lstrip()
           nb = nbformat.v4.new_notebook()
           nb.cells = [nbformat.v4.new_code_cell(bootstrap)]
           nb.metadata = metadata.get("metadata", {})
