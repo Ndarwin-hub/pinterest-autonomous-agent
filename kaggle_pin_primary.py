@@ -306,7 +306,7 @@ async def _bootstrap_existing_pins(agent_module, state: dict) -> dict:
     return {"history_bootstrapped": True, "history_pins_scanned": seen_pins,
             "history_asins_seeded": len(seeded_asins)}
 
-async def _preflight():
+async def _preflight(state: dict):
     agent_module = _install_existing_pin_pipeline()
     boards_data = await _tool_outside_product_job(agent_module, "PINTEREST_LIST_BOARDS", {})
     boards = boards_data.get("items") or boards_data.get("boards") or []
@@ -326,7 +326,7 @@ def main():
     state = _drive_download_state()
     started = datetime.now(timezone.utc).isoformat()
     if os.getenv("KAGGLE_PIN_DRY_RUN", "false").strip().lower() in ("1", "true", "yes"):
-        result = asyncio.run(_preflight())
+        result = asyncio.run(_preflight(state))
         _save_drive_state(state, {"batch": batch, **result})
         print(json.dumps({"event": "KAGGLE_PIN_PREFLIGHT_FINISHED",
                           "started_at": started, "batch": batch, **result,
