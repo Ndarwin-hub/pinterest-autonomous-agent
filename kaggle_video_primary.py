@@ -137,7 +137,7 @@ def normalize_images(row,folder):
     from PIL import Image, ImageEnhance
 
     raw=json.loads(row.get("image_urls_json") or "[]")
-    urls=[u for u in raw if isinstance(u,str) and u.startswith(("http://","https://"))][:8]
+    urls=[u for u in raw if isinstance(u,str) and (u.startswith(("http://","https://")) or Path(u).exists())][:8]
     selected=[]; seen=set()
 
     for i,u in enumerate(urls):
