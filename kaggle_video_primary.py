@@ -364,6 +364,15 @@ def main():
     from daily_ledger import ledger
     day=ledger.today_str()
     jobs=verified_video_rows(ledger,day)
+    if os.getenv("KAGGLE_VIDEO_DRY_RUN","false").strip().lower() in ("1","true","yes"):
+        accounts=composio("WOOP_SOCIAL_LIST_SOCIAL_ACCOUNTS",{})
+        connected=[str(x.get("platform") or "").upper() for x in (accounts.get("social_accounts") or [])
+                   if str(x.get("status") or "").upper()=="CONNECTED"]
+        save_drive_state(state)
+        print(json.dumps({"status":"preflight_passed","day":day,"pair_start":PAIR_START,
+                          "verified_pinterest_products":len(jobs),"connected_video_platforms":connected,
+                          "drive_state_saved":True}))
+        return
     completed=0
     if not jobs:
         save_drive_state(state)
