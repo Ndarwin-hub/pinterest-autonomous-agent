@@ -194,6 +194,32 @@ jobs:
           echo "Kaggle kernel did not reach a terminal state within 80 minutes." >&2
           exit 1
 
+      - name: Collect Kaggle notebook diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/kaggle-pin-output
+          kaggle kernels output "$KAGGLE_PIN_KERNEL_ID" -p /tmp/kaggle-pin-output || true
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          for path in Path("/tmp/kaggle-pin-output").glob("**/*"):
+              if path.suffix.lower() == ".ipynb":
+                  try:
+                      nb=json.loads(path.read_text())
+                      for idx,cell in enumerate(nb.get("cells",[]),1):
+                          for out in cell.get("outputs",[]):
+                              text=out.get("text") or out.get("data",{}).get("text/plain")
+                              if text: print(f"NOTEBOOK_CELL_{idx}: {text}")
+                              if out.get("ename"): print(f"NOTEBOOK_ERROR_{idx}: {out.get('ename')}: {out.get('evalue')}")
+                  except Exception as exc:
+                      print("DIAGNOSTIC_PARSE_ERROR",path,str(exc))
+              elif path.is_file():
+                  print("KAGGLE_OUTPUT_FILE",path.name,path.stat().st_size)
+                  if path.suffix.lower() in (".json",".txt",".log"):
+                      print(path.read_text(errors="replace")[:12000])
+          PY
+
       - name: Record completion without Railway
         if: success()
         run: |
