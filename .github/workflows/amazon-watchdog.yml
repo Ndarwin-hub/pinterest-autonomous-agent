@@ -128,7 +128,8 @@ jobs:
           dry_run = os.environ["PIN_DRY_RUN"].lower() == "true"
           drive_id = os.environ["DRIVE_STATE_FILE_ID"]
           sha = os.environ["SOURCE_SHA"]
-          bootstrap = textwrap.dedent(f'''\n          import os, subprocess, sys
+          bootstrap = textwrap.dedent(f'''
+          import os, subprocess, sys
           os.environ["KAGGLE_PIN_BATCH"] = "{batch}"
           os.environ["KAGGLE_PIN_DRY_RUN"] = "{str(dry_run).lower()}"
           os.environ["DRIVE_STATE_FILE_ID"] = "{drive_id}"
