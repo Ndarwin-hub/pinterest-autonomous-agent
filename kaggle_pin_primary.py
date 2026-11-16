@@ -332,7 +332,13 @@ def main():
                           "started_at": started, "batch": batch, **result,
                           "drive_state_saved": True}, ensure_ascii=False))
         return
-    result = asyncio.run(_run(batch, state))
+    async def _run_with_history():
+        agent_module = _install_existing_pin_pipeline()
+        history = await _bootstrap_existing_pins(agent_module, state)
+        result = await _run(batch, state)
+        result["history_bootstrap"] = history
+        return result
+    result = asyncio.run(_run_with_history())
     _save_drive_state(state, result)
     print(json.dumps({
         "event": "KAGGLE_PIN_BATCH_FINISHED",
