@@ -48,6 +48,19 @@ SCENE_SECONDS = 3
 MIN_IMAGE_SIDE = 160
 
 def composio(slug,args):
+    if not COMPOSIO_KEY:
+        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING:COMPOSIO_API_KEY")
+    slug_upper=slug.upper()
+    if slug_upper.startswith("GOOGLEDRIVE_"):
+        connected_id=DRIVE_ACCOUNT_ID
+    elif slug_upper.startswith("WOOP_SOCIAL_"):
+        connected_id=WOOP_ACCOUNT_ID
+    else:
+        connected_id=COMPOSIO_ENTITY
+    if not connected_id:
+        raise RuntimeError("COMPOSIO_CONNECTED_ACCOUNT_ID_MISSING:"+slug)
+    payload={"connected_account_id":connected_id,"version":"latest",
+             "dangerously_skip_version_check":True,"arguments":args or {}}
     r=requests.post(
         f"https://backend.composio.dev/api/v3.1/tools/execute/{slug}",
         headers={"x-api-key":COMPOSIO_KEY,"Content-Type":"application/json"},
@@ -290,8 +303,8 @@ def render(row,out):
     return final,track_name,track_url
 
 def publish(video,row,batch):
-    if not COMPOSIO_KEY or not COMPOSIO_ENTITY:
-        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING")
+    if not COMPOSIO_KEY:
+        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING:COMPOSIO_API_KEY")
 
     data=video.read_bytes()
     md5=hashlib.md5(data).hexdigest()
