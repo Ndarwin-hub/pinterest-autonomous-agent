@@ -247,12 +247,31 @@ async def _run(batch: int, state: dict) -> dict:
     scheduler = AmazonScheduler()
     return await scheduler.run_batch(batch, enqueue, list_boards, wait_job)
 
+async def _preflight():
+    agent_module = _install_existing_pin_pipeline()
+    boards_data = await agent_module.run_composio_tool("PINTEREST_LIST_BOARDS", {})
+    boards = boards_data.get("items") or boards_data.get("boards") or []
+    if not boards:
+        raise RuntimeError("PINTEREST_PREFLIGHT_NO_BOARDS")
+    from amazon_discovery import discover_for_board
+    candidate = await discover_for_board("Electronics & Gadgets", exclude_asins=set())
+    return {"status": "preflight_passed", "boards": len(boards),
+            "sample_candidate": (candidate or {}).get("asin"),
+            "candidate_found": bool(candidate)}
+
 def main():
     batch = int(os.getenv("KAGGLE_PIN_BATCH", "1"))
     if batch < 1 or batch > 10:
         raise RuntimeError("KAGGLE_PIN_BATCH_MUST_BE_1_TO_10")
     state = _drive_download_state()
     started = datetime.now(timezone.utc).isoformat()
+    if os.getenv("KAGGLE_PIN_DRY_RUN", "false").strip().lower() in ("1", "true", "yes"):
+        result = asyncio.run(_preflight())
+        _save_drive_state(state, {"batch": batch, **result})
+        print(json.dumps({"event": "KAGGLE_PIN_PREFLIGHT_FINISHED",
+                          "started_at": started, "batch": batch, **result,
+                          "drive_state_saved": True}, ensure_ascii=False))
+        return
     result = asyncio.run(_run(batch, state))
     _save_drive_state(state, result)
     print(json.dumps({
