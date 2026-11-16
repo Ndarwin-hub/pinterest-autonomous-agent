@@ -43,6 +43,8 @@ jobs:
     steps:
       - name: Checkout automation source
         uses: actions/checkout@v4
+      - name: Compile Pinterest production runner
+        run: python -m py_compile kaggle_pin_primary.py
 
       - name: Resolve batch
         id: batch
