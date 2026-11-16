@@ -16,6 +16,8 @@ def secret(name, default=""):
 
 COMPOSIO_KEY = secret("COMPOSIO_API_KEY")
 COMPOSIO_ENTITY = secret("COMPOSIO_ENTITY_ID")
+DRIVE_ACCOUNT_ID = secret("COMPOSIO_GOOGLEDRIVE_ACCOUNT_ID","googledrive_keck-oer")
+WOOP_ACCOUNT_ID = secret("COMPOSIO_WOOP_SOCIAL_ACCOUNT_ID","woop_social_sturt-nonact")
 WOOP_PROJECT = secret("WOOP_SOCIAL_PROJECT_ID","pr_2gj5wkt0wr9E")
 STATE_FILE_ID = os.getenv("DRIVE_STATE_FILE_ID","1Qf-Ccn5aiyRo-tdgJxj5x0UhmYCVrEQb")
 PAIR_START = int(os.getenv("KAGGLE_VIDEO_PAIR_START","1"))
@@ -49,7 +51,7 @@ def composio(slug,args):
     r=requests.post(
         f"https://backend.composio.dev/api/v3.1/tools/execute/{slug}",
         headers={"x-api-key":COMPOSIO_KEY,"Content-Type":"application/json"},
-        json={"user_id":COMPOSIO_ENTITY,"version":"latest","dangerously_skip_version_check":True,"arguments":args},
+        json=payload,
         timeout=180,
     )
     r.raise_for_status()
@@ -58,8 +60,8 @@ def composio(slug,args):
     return j.get("data") or j
 
 def load_drive_state():
-    if not COMPOSIO_KEY or not COMPOSIO_ENTITY:
-        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING")
+    if not COMPOSIO_KEY:
+        raise RuntimeError("KAGGLE_COMPOSIO_SECRET_MISSING:COMPOSIO_API_KEY")
     result=composio("GOOGLEDRIVE_DOWNLOAD_FILE",{"fileId":STATE_FILE_ID})
     item=result.get("downloaded_file_content") or {}
     url=item.get("s3url")
