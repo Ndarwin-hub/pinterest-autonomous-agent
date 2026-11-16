@@ -177,6 +177,13 @@ def _save_drive_state(state: dict, run_result: dict) -> None:
     if not result.get("id"):
         raise RuntimeError("DRIVE_STATE_SAVE_UNCONFIRMED")
 
+async def _tool_outside_product_job(agent_module, slug: str, arguments: dict) -> dict:
+    # Board inventory/preflight calls happen outside a product's 40-call budget.
+    transport = getattr(agent_module, "_composio_transport_executor", None)
+    if transport is None:
+        raise RuntimeError("COMPOSIO_CONNECTED_ACCOUNT_TRANSPORT_NOT_INSTALLED")
+    return await transport(slug, arguments or {}, retries=0)
+
 def _install_existing_pin_pipeline():
     import agent as agent_module
     import quality_patch
@@ -206,7 +213,7 @@ async def _run(batch: int, state: dict) -> dict:
     agent_module = _install_existing_pin_pipeline()
     job_store = JobStore()
     async def list_boards():
-        data = await agent_module.run_composio_tool("PINTEREST_LIST_BOARDS", {})
+        data = await _tool_outside_product_job(agent_module, "PINTEREST_LIST_BOARDS", {})
         return data.get("items") or data.get("boards") or []
     async def enqueue(url, target_board_id=None, target_board_name=None, force_new=False):
         existing = job_store.find_by_url(url)
@@ -249,7 +256,7 @@ async def _run(batch: int, state: dict) -> dict:
 
 async def _preflight():
     agent_module = _install_existing_pin_pipeline()
-    boards_data = await agent_module.run_composio_tool("PINTEREST_LIST_BOARDS", {})
+    boards_data = await _tool_outside_product_job(agent_module, "PINTEREST_LIST_BOARDS", {})
     boards = boards_data.get("items") or boards_data.get("boards") or []
     if not boards:
         raise RuntimeError("PINTEREST_PREFLIGHT_NO_BOARDS")
