@@ -47,11 +47,12 @@ def get_secret(name: str, default: str = "") -> str:
 
 COMPOSIO_API_KEY = get_secret("COMPOSIO_API_KEY")
 COMPOSIO_ENTITY_ID = get_secret("COMPOSIO_ENTITY_ID")
+DRIVE_ACCOUNT_ID = get_secret("COMPOSIO_GOOGLEDRIVE_ACCOUNT_ID", "googledrive_keck-oer")
 PINTEREST_ACCOUNT_ID = get_secret(
     "COMPOSIO_PINTEREST_ACCOUNT_ID", "pinterest_naker-shoya"
 )
-if not COMPOSIO_API_KEY or not COMPOSIO_ENTITY_ID:
-    raise RuntimeError("KAGGLE_SECRET_MISSING:COMPOSIO_API_KEY_OR_COMPOSIO_ENTITY_ID")
+if not COMPOSIO_API_KEY:
+    raise RuntimeError("KAGGLE_SECRET_MISSING:COMPOSIO_API_KEY")
 os.environ["COMPOSIO_API_KEY"] = COMPOSIO_API_KEY
 os.environ["COMPOSIO_ENTITY_ID"] = COMPOSIO_ENTITY_ID
 os.environ["COMPOSIO_PINTEREST_ACCOUNT_ID"] = PINTEREST_ACCOUNT_ID
@@ -61,7 +62,7 @@ def composio(slug: str, arguments: dict) -> dict:
         "arguments": arguments or {},
         "version": "latest",
         "dangerously_skip_version_check": True,
-        "user_id": COMPOSIO_ENTITY_ID,
+        "connected_account_id": DRIVE_ACCOUNT_ID,
     }
     if slug.upper().startswith("PINTEREST_"):
         payload.pop("user_id", None)
