@@ -99,7 +99,7 @@ jobs:
           root=Path("/tmp/kaggle-pin")
           metadata={
               "id":"ndarwin1414/pinterest-autonomous-agent-kaggle-production",
-              "title":"Desired Plus Pinterest Autonomous Production",
+              "title":"pinterest-autonomous-agent-kaggle-production",
               "code_file":"pinterest_autonomous_agent.ipynb",
               "language":"python",
               "kernel_type":"notebook",
@@ -138,7 +138,7 @@ jobs:
               raise SystemExit("Kaggle template did not contain an .ipynb notebook")
           notebook_path = notebooks[0]
           metadata["id"] = os.environ["KAGGLE_PIN_KERNEL_ID"]
-          metadata["title"] = "Desired Plus Pinterest Autonomous Production"
+          metadata["title"] = "pinterest-autonomous-agent-kaggle-production"
           metadata["code_file"] = notebook_path.name
           metadata["is_private"] = True
           metadata["enable_internet"] = True
