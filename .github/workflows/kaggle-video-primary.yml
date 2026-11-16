@@ -133,6 +133,8 @@ jobs:
           nb=nbformat.v4.new_notebook()
           nb.cells=[nbformat.v4.new_code_cell(config),nbformat.v4.new_code_cell(bootstrap)]
           nb.metadata=metadata.get("metadata",{})
+          nb.metadata["kernelspec"]={"display_name":"Python 3","language":"python","name":"python3"}
+          nb.metadata["language_info"]={"name":"python"}
           nbformat.write(nb,notebook_path)
           print(f"Prepared video pair={pair}, dry_run={dry_run}, source={sha}")
           PY
