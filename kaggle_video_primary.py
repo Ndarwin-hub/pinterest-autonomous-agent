@@ -92,6 +92,17 @@ def save_drive_state(state):
     state["project"]="desiredplus-kaggle-automation"
     state["databases"]={"sqlite_gzip_b64":base64.b64encode(gzip.compress(packed.getvalue(),compresslevel=6)).decode("ascii")}
     state["video_last_run"]={"at":datetime.now(timezone.utc).isoformat(),"pair_start":PAIR_START,"run_id":RUN_ID}
+    ledger_path=DATA_DIR/"amazon_daily_ledger.db"
+    if ledger_path.exists():
+        con=sqlite3.connect(str(ledger_path)); con.row_factory=sqlite3.Row
+        try:
+            rows=con.execute("""SELECT day,batch_index AS batch,slot,asin,product_url,affiliate_url,title,source,status,attempts,last_error,created_at,updated_at,completed_at,publication_json,image_urls_json,image_meta_json FROM video_jobs ORDER BY day,batch_index,slot""").fetchall()
+            state["video_queue"]=[dict(row) for row in rows]
+            state["video_publications"]=[dict(row) for row in rows if row["status"]=="completed"]
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
     result=composio("GOOGLEDRIVE_EDIT_FILE",{"file_id":STATE_FILE_ID,"content":json.dumps(state,separators=(",",":"),ensure_ascii=False),"mime_type":"application/json"})
     if not result.get("id"): raise RuntimeError("DRIVE_STATE_SAVE_UNCONFIRMED")
 
