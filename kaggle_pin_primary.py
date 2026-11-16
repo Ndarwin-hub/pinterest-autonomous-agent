@@ -186,6 +186,8 @@ async def _tool_outside_product_job(agent_module, slug: str, arguments: dict) ->
 
 def _install_existing_pin_pipeline():
     import agent as agent_module
+    if getattr(agent_module, "_kaggle_pin_pipeline_installed", False):
+        return agent_module
     import quality_patch
     quality_patch.install_identity(agent_module)
     from wire_board_org import apply_agent_wiring
@@ -201,6 +203,7 @@ def _install_existing_pin_pipeline():
     image_priority.install(agent_module)
     image_diversity_guard.install(agent_module)
     quality_patch.install_process_gate(agent_module)
+    agent_module._kaggle_pin_pipeline_installed = True
     return agent_module
 
 async def _run(batch: int, state: dict) -> dict:
@@ -254,15 +257,65 @@ async def _run(batch: int, state: dict) -> dict:
     scheduler = AmazonScheduler()
     return await scheduler.run_batch(batch, enqueue, list_boards, wait_job)
 
+async def _bootstrap_existing_pins(agent_module, state: dict) -> dict:
+    if state.get("pinterest_history_bootstrapped"):
+        return {"history_bootstrapped": True, "history_scan": "already_done"}
+    from published_registry import registry, extract_asin
+    boards_data = await _tool_outside_product_job(agent_module, "PINTEREST_LIST_BOARDS", {})
+    boards = boards_data.get("items") or boards_data.get("boards") or []
+    if not boards:
+        raise RuntimeError("PINTEREST_HISTORY_BOOTSTRAP_NO_BOARDS")
+    seen_pins = 0
+    seeded_asins = set()
+    for board in boards:
+        board_id = str(board.get("id") or "")
+        board_name = str(board.get("name") or "")
+        if not board_id:
+            continue
+        cursor = None
+        pages = 0
+        while True:
+            args = {"board_id": board_id, "page_size": 250}
+            if cursor:
+                args["bookmark"] = cursor
+            page = await _tool_outside_product_job(agent_module, "PINTEREST_LIST_PINS", args)
+            pins = page.get("items") or page.get("pins") or []
+            for pin in pins:
+                seen_pins += 1
+                link = str(pin.get("link") or "")
+                asin = extract_asin(link)
+                if not asin or not link:
+                    continue
+                registry.record_success(
+                    asin=asin, product_url=link, affiliate_url=link,
+                    source="pinterest_history_bootstrap", board_id=board_id,
+                    board_name=board_name, pin_ids=[str(pin.get("id") or "")],
+                    pinterest_verified=True, notes="Seeded from existing live Pinterest board Pins."
+                )
+                seeded_asins.add(asin)
+            cursor = page.get("next_cursor") or page.get("bookmark")
+            pages += 1
+            if not cursor:
+                break
+            if pages >= 100:
+                raise RuntimeError("PINTEREST_HISTORY_BOOTSTRAP_PAGE_LIMIT:" + board_name)
+    state["pinterest_history_bootstrapped"] = True
+    state["pinterest_history_bootstrapped_at"] = datetime.now(timezone.utc).isoformat()
+    state["pinterest_history_pin_count"] = seen_pins
+    state["pinterest_history_asin_count"] = len(seeded_asins)
+    return {"history_bootstrapped": True, "history_pins_scanned": seen_pins,
+            "history_asins_seeded": len(seeded_asins)}
+
 async def _preflight():
     agent_module = _install_existing_pin_pipeline()
     boards_data = await _tool_outside_product_job(agent_module, "PINTEREST_LIST_BOARDS", {})
     boards = boards_data.get("items") or boards_data.get("boards") or []
     if not boards:
         raise RuntimeError("PINTEREST_PREFLIGHT_NO_BOARDS")
+    history = await _bootstrap_existing_pins(agent_module, state)
     from amazon_discovery import discover_for_board
     candidate = await discover_for_board("Electronics & Gadgets", exclude_asins=set())
-    return {"status": "preflight_passed", "boards": len(boards),
+    return {"status": "preflight_passed", "boards": len(boards), **history,
             "sample_candidate": (candidate or {}).get("asin"),
             "candidate_found": bool(candidate)}
 
