@@ -45,6 +45,8 @@ jobs:
         uses: actions/checkout@v4
       - name: Compile Pinterest production runner
         run: python -m py_compile kaggle_pin_primary.py
+      - name: Run migration contract tests
+        run: python -m unittest discover -s tests -p "test_kaggle_migration_contract.py"
 
       - name: Resolve batch
         id: batch
