@@ -87,20 +87,35 @@ jobs:
           python -m pip install --upgrade kaggle nbformat
           kaggle --version
 
-      - name: Pull an existing kernel template
-        shell: bash
+      - name: Create new production Kaggle kernel scaffold
         run: |
           set -euo pipefail
           mkdir -p /tmp/kaggle-pin
-          if kaggle kernels pull "$KAGGLE_PIN_KERNEL_ID" -p /tmp/kaggle-pin -m; then
-            echo "Using the existing production kernel metadata."
-          else
-            rm -rf /tmp/kaggle-pin/*
-            kaggle kernels pull ndarwin1414/pinterest-autonomous-agent-kaggle-migration -p /tmp/kaggle-pin -m
-            echo "Using the migration notebook only as a metadata template."
-          fi
-          test -f /tmp/kaggle-pin/kernel-metadata.json
-          find /tmp/kaggle-pin -maxdepth 1 -type f -printf '%f\n'
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import nbformat
+
+          root=Path("/tmp/kaggle-pin")
+          metadata={
+              "id":"ndarwin1414/pinterest-autonomous-agent-kaggle-production",
+              "title":"Desired Plus Pinterest Autonomous Production",
+              "code_file":"pinterest_autonomous_agent.ipynb",
+              "language":"python",
+              "kernel_type":"notebook",
+              "is_private":True,
+              "enable_gpu":False,
+              "enable_internet":True,
+              "dataset_sources":[],
+              "competition_sources":[],
+              "kernel_sources":[]
+          }
+          nb=nbformat.v4.new_notebook()
+          nb.metadata={"kernelspec":{"display_name":"Python 3","language":"python","name":"python3"}}
+          nbformat.write(nb,root/metadata["code_file"])
+          (root/"kernel-metadata.json").write_text(json.dumps(metadata,indent=2))
+          print("Created fresh Kaggle production kernel scaffold.")
+          PY
 
       - name: Install independent production runner into Kaggle notebook
         env:
