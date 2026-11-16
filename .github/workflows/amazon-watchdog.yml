@@ -99,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os
+          import json, os, textwrap
           from pathlib import Path
           import nbformat
 
@@ -119,7 +119,7 @@ jobs:
           batch = int(os.environ["PIN_BATCH"])
           drive_id = os.environ["DRIVE_STATE_FILE_ID"]
           sha = os.environ["SOURCE_SHA"]
-          bootstrap = f'''import os, subprocess, sys
+          bootstrap = textwrap.dedent(f'''import os, subprocess, sys
           os.environ["KAGGLE_PIN_BATCH"] = "{batch}"
           os.environ["DRIVE_STATE_FILE_ID"] = "{drive_id}"
           REPO = "/kaggle/working/pinterest-autonomous-agent"
@@ -131,7 +131,7 @@ jobs:
           subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
           subprocess.run([sys.executable, "-m", "py_compile", "kaggle_pin_primary.py"], check=True)
           exec(compile(open("kaggle_pin_primary.py", encoding="utf-8").read(), "kaggle_pin_primary.py", "exec"), {{"__name__": "__main__"}})
-          '''
+          ''')
           nb = nbformat.v4.new_notebook()
           nb.cells = [nbformat.v4.new_code_cell(bootstrap)]
           nb.metadata = metadata.get("metadata", {})
