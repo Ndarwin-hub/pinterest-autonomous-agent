@@ -38,6 +38,8 @@ jobs:
     steps:
       - name: Checkout video engine
         uses: actions/checkout@v4
+      - name: Compile video production runner
+        run: python -m py_compile kaggle_video_primary.py
 
       - name: Resolve pair
         id: pair
