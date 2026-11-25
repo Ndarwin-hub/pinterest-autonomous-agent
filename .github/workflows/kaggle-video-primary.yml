@@ -2,22 +2,11 @@ name: Kaggle Video Primary
 
 on:
   schedule:
-    - cron: '11 1 * * *'
-    - cron: '47 2 * * *'
-    - cron: '23 4 * * *'
-    - cron: '59 5 * * *'
-    - cron: '35 7 * * *'
+    - cron: '15 0 * * *' # 06:00 Asia/Kathmandu (UTC+05:45)
   workflow_dispatch:
-    inputs:
-      pair_start:
-        description: 'Pair start (1,3,5,7,9)'
-        required: true
-        type: choice
-        options: ['1','3','5','7','9']
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: kaggle-video-primary
@@ -26,129 +15,56 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
     env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGEL_API_TOKEN }}
       KAGGLE_VIDEO_KERNEL_ID: ndarwin1414/amazon-productvideo-renderer-test
-      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
     steps:
-      - name: Checkout video engine
+      - name: Checkout video automation
         uses: actions/checkout@v4
 
-      - name: Resolve pair
-        id: pair
-        shell: bash
+      - name: Validate Kaggle credential
         run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            start="${{ inputs.pair_start }}"
-          else
-            case "${{ github.event.schedule }}" in
-              '11 1 * * *') start=1 ;;
-              '47 2 * * *') start=3 ;;
-              '23 4 * * *') start=5 ;;
-              '59 5 * * *') start=7 ;;
-              '35 7 * * *') start=9 ;;
-              *) exit 1 ;;
-            esac
+          if [[ -z "${KAGGLE_API_TOKEN:-}" ]]; then
+            echo "Missing repository secret KAGGEL_API_TOKEN" >&2
+            exit 1
           fi
-          day="$(TZ=Asia/Kathmandu date +%F)"
-          echo "start=$start" >> "$GITHUB_OUTPUT"
-          echo "day=$day" >> "$GITHUB_OUTPUT"
-          echo "run_id=kaggle-$day-pair-$start-gh${{ github.run_id }}" >> "$GITHUB_OUTPUT"
-
-      - name: Check Kaggle credential
-        id: cred
-        run: |
-          if [[ -n "${KAGGLE_API_TOKEN:-}" ]]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "ok=false" >> "$GITHUB_OUTPUT"; fi
-
-      - name: Register Kaggle primary
-        if: steps.cred.outputs.ok == 'true'
-        env:
-          PAIR_START: ${{ steps.pair.outputs.start }}
-          RUN_ID: ${{ steps.pair.outputs.run_id }}
-        run: |
-          set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 5 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
-          token=$(printf '%s' "$response" | jq -r '.value')
-          curl --fail --silent --show-error --retry 5 --retry-all-errors             -H "Authorization: Bearer $token" -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/video/github-checkpoint'             -d "$(python3 -c 'import json,os; print(json.dumps({"pair_start":int(os.environ["PAIR_START"]),"run_id":os.environ["RUN_ID"],"status":"RUNNING"}))')"
+          echo "Kaggle credential is present (value not displayed)."
 
       - name: Install Kaggle CLI
-        if: steps.cred.outputs.ok == 'true'
         run: python3 -m pip install --upgrade kaggle nbformat
 
-      - name: Pull production kernel
-        if: steps.cred.outputs.ok == 'true'
+      - name: Pull current production notebook
         run: |
           set -euo pipefail
-          rm -rf /tmp/kaggle-video && mkdir -p /tmp/kaggle-video
+          rm -rf /tmp/kaggle-video
+          mkdir -p /tmp/kaggle-video
           kaggle kernels pull "$KAGGLE_VIDEO_KERNEL_ID" -p /tmp/kaggle-video -m
           test -f /tmp/kaggle-video/kernel-metadata.json
 
-      - name: Replace notebook with deterministic production video engine
-        if: steps.cred.outputs.ok == 'true'
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import json, nbformat
-          src=Path("kaggle_video_primary.py").read_text()
-          root=Path("/tmp/kaggle-video")
-          nbs=list(root.glob("*.ipynb"))
-          if not nbs: raise SystemExit("No Kaggle notebook found")
-          meta=json.loads((root/"kernel-metadata.json").read_text())
-          # Inject only non-secret run parameters into the Kaggle notebook. Kaggle
-          # does not inherit GitHub Actions runner environment variables.
-          import os
-          pair_start=int(os.environ["PAIR_START"])
-          run_id=os.environ["RUN_ID"]
-          config=f"import os\nos.environ['KAGGLE_VIDEO_PAIR_START']='{pair_start}'\nos.environ['KAGGLE_VIDEO_RUN_ID']={run_id!r}\n"
-          nb=nbformat.v4.new_notebook()
-          nb.cells=[
-              nbformat.v4.new_code_cell(config),
-              nbformat.v4.new_code_cell(src)
-          ]
-          nb.metadata=meta.get("metadata",{}) if isinstance(meta,dict) else {}
-          nbformat.write(nb,nbs[0])
-          print(f"Installed deterministic real-product video engine pair={pair_start} run_id={run_id}")
-          PY
+      - name: Patch temporary WoopSocial media lifecycle
+        run: python3 scripts/patch_kaggle_woop_temp_media.py --notebook-dir /tmp/kaggle-video
 
       - name: Push and execute Kaggle kernel
-        if: steps.cred.outputs.ok == 'true'
         run: kaggle kernels push -p /tmp/kaggle-video
 
-      - name: Wait for Kaggle completion
-        if: steps.cred.outputs.ok == 'true'
+      - name: Verify Kaggle execution started
+        shell: bash
         run: |
           set -euo pipefail
-          deadline=$((SECONDS+2400))
-          while (( SECONDS < deadline )); do
-            s="$(kaggle kernels status "$KAGGLE_VIDEO_KERNEL_ID" 2>&1 || true)"
-            echo "$s"
-            u="$(printf '%s' "$s" | tr '[:lower:]' '[:upper:]')"
-            if grep -Eq '(^|[^A-Z])(COMPLETE|COMPLETED)([^A-Z]|$)' <<<"$u"; then exit 0; fi
-            if grep -Eq '(^|[^A-Z])(ERROR|FAILED|FAILURE)([^A-Z]|$)' <<<"$u"; then exit 1; fi
-            sleep 30
+          for attempt in $(seq 1 30); do
+            status="$(kaggle kernels status "$KAGGLE_VIDEO_KERNEL_ID" 2>&1 || true)"
+            echo "$status"
+            upper="$(printf '%s' "$status" | tr '[:lower:]' '[:upper:]')"
+            if grep -Eq 'RUNNING|COMPLETE|COMPLETED' <<<"$upper"; then
+              echo "Kaggle accepted the new version and execution started."
+              exit 0
+            fi
+            if grep -Eq 'ERROR|FAILED|FAILURE' <<<"$upper"; then
+              echo "Kaggle reported an execution failure." >&2
+              exit 1
+            fi
+            sleep 20
           done
+          echo "Kaggle did not report a running or completed state within 10 minutes." >&2
           exit 1
-
-      - name: Mark Kaggle completion
-        if: success() && steps.cred.outputs.ok == 'true'
-        env:
-          PAIR_START: ${{ steps.pair.outputs.start }}
-          RUN_ID: ${{ steps.pair.outputs.run_id }}
-        run: |
-          set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 5 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
-          token=$(printf '%s' "$response" | jq -r '.value')
-          curl --fail --silent --show-error --retry 5 --retry-all-errors             -H "Authorization: Bearer $token" -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/video/github-checkpoint'             -d "$(python3 -c 'import json,os; print(json.dumps({"pair_start":int(os.environ["PAIR_START"]),"run_id":os.environ["RUN_ID"],"status":"COMPLETED"}))')"
-
-      - name: Hand pair to Railway recovery
-        if: failure() || steps.cred.outputs.ok == 'false'
-        env:
-          PAIR_START: ${{ steps.pair.outputs.start }}
-          RUN_ID: ${{ steps.pair.outputs.run_id }}
-        run: |
-          set -euo pipefail
-          response=$(curl --fail --silent --show-error --retry 5 --retry-all-errors             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             -H 'Accept: application/json; api-version=2.0'             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fgithub.com%2FNdarwin-hub%2Fpinterest-autonomous-agent")
-          token=$(printf '%s' "$response" | jq -r '.value')
-          curl --fail --silent --show-error --retry 5 --retry-all-errors             -H "Authorization: Bearer $token" -H 'Content-Type: application/json'             -X POST 'https://web-production-dae68.up.railway.app/video/github-checkpoint'             -d "$(python3 -c 'import json,os; print(json.dumps({"pair_start":int(os.environ["PAIR_START"]),"run_id":os.environ["RUN_ID"],"status":"FAILED","error":"Kaggle primary unavailable or failed"}))')"
