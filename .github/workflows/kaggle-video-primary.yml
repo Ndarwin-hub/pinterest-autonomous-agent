@@ -1,8 +1,9 @@
 name: Kaggle Video Primary
 
+# Manual deployment only. Kaggle API/CLI pushes do not carry Kaggle Secrets;
+# after any manual push, re-attach COMPOSIO_API_KEY in the Kaggle notebook UI.
+# Run the production schedule inside Kaggle so attached secrets remain available.
 on:
-  schedule:
-    - cron: '15 0 * * *' # 06:00 Asia/Kathmandu (UTC+05:45)
   workflow_dispatch:
 
 permissions:
